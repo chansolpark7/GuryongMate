@@ -1,7 +1,9 @@
-"""GuryongMate Planner API 클라이언트. CLI 가 쓰고, 나중에 LLM tool 구현에서도 그대로 재사용한다.
+"""GuryongMate API 클라이언트 (planner·places·agent). CLI 가 쓰고, 다른 Python 도구에서도 재사용할 수 있다.
 
 메서드는 API 응답 JSON(dict)을 그대로 돌려준다. 오류는 PlannerApiError.
 """
+import json
+from collections.abc import Iterator
 from typing import Any
 
 import httpx
@@ -86,3 +88,50 @@ class PlannerClient:
 
     def delete_constraint(self, plan_id: int, constraint_id: int) -> dict:
         return self._req("DELETE", f"/planner/plans/{plan_id}/constraints/{constraint_id}")
+
+    # ----- 제안 (planner) -----
+    def list_proposals(self, plan_id: int, status: str | None = None) -> list[dict]:
+        return self._req("GET", f"/planner/plans/{plan_id}/proposals", params={"status": status} if status else None)
+
+    def get_proposal(self, plan_id: int, proposal_id: int) -> dict:
+        return self._req("GET", f"/planner/plans/{plan_id}/proposals/{proposal_id}")
+
+    # ----- Agent -----
+    def agent_info(self) -> dict:
+        return self._req("GET", "/agent/info")
+
+    def create_session(self, plan_id: int) -> dict:
+        return self._req("POST", "/agent/sessions", json={"plan_id": plan_id})
+
+    def list_sessions(self, plan_id: int | None = None) -> list[dict]:
+        return self._req("GET", "/agent/sessions", params={"plan_id": plan_id} if plan_id is not None else None)
+
+    def get_session(self, session_id: str) -> dict:
+        return self._req("GET", f"/agent/sessions/{session_id}")
+
+    def chat_stream(self, session_id: str, message: str) -> Iterator[tuple[str, dict]]:
+        """SSE 이벤트를 (이름, 데이터) 로 오는 대로 내준다. 이벤트 종류는 backend/app/agent/schemas.py 참고."""
+        with self._http.stream("POST", f"/agent/sessions/{session_id}/chat", json={"message": message},
+                               timeout=httpx.Timeout(10, read=None)) as resp:
+            if resp.is_error:
+                resp.read()
+                try:
+                    detail = resp.json().get("detail", resp.text)
+                except ValueError:
+                    detail = resp.text
+                raise PlannerApiError(resp.status_code, detail)
+            event, data = "message", []
+            for line in resp.iter_lines():
+                if line.startswith("event:"):
+                    event = line[6:].strip()
+                elif line.startswith("data:"):
+                    data.append(line[5:].strip())
+                elif not line and data:
+                    yield event, json.loads("\n".join(data))
+                    event, data = "message", []
+
+    def accept_proposal(self, session_id: str, proposal_id: int) -> dict:
+        return self._req("POST", f"/agent/sessions/{session_id}/proposals/{proposal_id}/accept")
+
+    def reject_proposal(self, session_id: str, proposal_id: int) -> dict:
+        return self._req("POST", f"/agent/sessions/{session_id}/proposals/{proposal_id}/reject")

@@ -2,6 +2,7 @@
 
     python scripts/planner/cli.py --url http://127.0.0.1:8002 plans
     python scripts/planner/cli.py shell          # 대화형 (명령을 한 줄씩 입력)
+    python scripts/planner/cli.py chat 1         # Planner Agent 와 대화 (응답 실시간 스트리밍)
 
 환경변수 GURYONG_API_URL, GURYONG_USER 로 기본값을 바꿀 수 있다. 명령 목록은 -h 참고.
 """
@@ -176,6 +177,179 @@ def cmd_check(c, a):
     print_violations(r["violations"])
 
 
+# ---------- 제안 · Agent ----------
+
+DIM, BOLD, RESET = "\033[2m", "\033[1m", "\033[0m"
+TOOL_LABELS = {"search_places": "장소 검색", "get_place": "장소 확인", "view_plan": "일정 확인",
+               "add_item": "일정 추가", "update_item": "일정 수정", "remove_item": "일정 삭제",
+               "update_plan": "계획 설정", "add_rule": "규칙 추가", "remove_rule": "규칙 삭제",
+               "discard_changes": "변경 취소"}
+
+
+def print_proposal(p: dict) -> None:
+    print(f"\n{BOLD}[제안 #{p['id']}] ({p['status']}){RESET}")
+    for ch in p.get("changes", []):
+        print(f"  - {ch['message']}")
+    if p.get("error"):
+        print(f"  ! {p['error']}")
+    after = p.get("after")
+    if after:
+        errors = [v for v in after["violations"] if v["severity"] == "error"]
+        warns = [v for v in after["violations"] if v["severity"] == "warning"]
+        print(f"  검증: error {len(errors)} · warning {len(warns)}")
+        for v in errors + warns:
+            print(f"    [{'E' if v['severity'] == 'error' else 'W'}] {v['message']}")
+
+
+def cmd_proposals(c, a):
+    rows = c.list_proposals(a.plan, a.status)
+    if not rows:
+        print("제안이 없습니다.")
+    for p in rows:
+        print(f"#{p['id']} {p['status']:<10} {p['source']:<5} {p['created_at'][:16]}  {p['summary'][:60]!r}")
+
+
+def cmd_proposal(c, a):
+    p = c.get_proposal(a.plan, a.proposal)
+    print_proposal(p)
+    if a.full and p.get("after"):
+        print("\n--- 승인 시 일정 ---")
+        print_plan(p["after"])
+
+
+class ChatPrinter:
+    """SSE 이벤트를 터미널에 실시간으로 그린다."""
+
+    def __init__(self, show_thinking: bool):
+        self.show_thinking = show_thinking
+        self.line_start = True
+        self.thinking = False
+
+    def _out(self, s: str) -> None:
+        sys.stdout.write(s)
+        sys.stdout.flush()
+        if s:
+            self.line_start = s.endswith("\n")
+
+    def _newline(self) -> None:
+        if not self.line_start:
+            self._out("\n")
+
+    def handle(self, event: str, d: dict) -> None:
+        if event != "thinking" and self.thinking:
+            self.thinking = False
+            self._out(RESET)
+            self._newline()
+        if event == "thinking":
+            if self.show_thinking:
+                if not self.thinking:
+                    self._newline()
+                    self._out(DIM)
+                    self.thinking = True
+                self._out(d["delta"])
+            elif not self.thinking:
+                self._newline()
+                self._out(f"{DIM}(생각 중…){RESET}\n")
+                self.thinking = True
+        elif event == "text":
+            self._out(d["delta"])
+        elif event == "tool_call":
+            self._newline()
+            args = d["arguments"] if len(d["arguments"]) < 120 else d["arguments"][:117] + "..."
+            self._out(f"{DIM}  · {TOOL_LABELS.get(d['name'], d['name'])} {args}{RESET}")
+        elif event == "tool_result":
+            self._out(f"{DIM} → {'ok' if d['ok'] else '실패'}: {d['summary']}{RESET}\n")
+        elif event == "proposal":
+            self._newline()
+            print_proposal(d)
+            print(f"{DIM}  /accept 로 반영, /reject 로 거절, 말로 더 고칠 수도 있어요.{RESET}")
+            self.line_start = True
+        elif event == "error":
+            self._newline()
+            self._out(f"오류: {d['message']}\n")
+        elif event == "done":
+            self._newline()
+
+
+def _pending(c, sid: str) -> dict | None:
+    return c.get_session(sid).get("pending_proposal")
+
+
+def cmd_chat(c, a):
+    if a.session:
+        sid = a.session
+    else:
+        sessions = [] if a.new else c.list_sessions(a.plan)
+        sid = sessions[0]["id"] if sessions else c.create_session(a.plan)["id"]
+    detail = c.get_session(sid)
+    plan_id = detail["plan_id"]
+    print(f"{BOLD}Planner Agent{RESET} — 계획 #{plan_id}, 세션 {sid} ({c.agent_info()['provider']})")
+    print(f"{DIM}/plan 일정 보기 · /proposal 대기 제안 · /accept · /reject · /exit{RESET}")
+    for m in detail["messages"][-6:]:
+        who = "나" if m["role"] == "user" else "Agent"
+        print(f"{DIM}{who}> {m['content']}{RESET}")
+    if detail["pending_proposal"]:
+        print_proposal(detail["pending_proposal"])
+
+    def send(text: str) -> None:
+        printer = ChatPrinter(a.thinking)
+        print(f"{BOLD}Agent>{RESET} ", end="", flush=True)
+        try:
+            for event, data in c.chat_stream(sid, text):
+                printer.handle(event, data)
+        except KeyboardInterrupt:
+            print("\n(중단)")
+
+    def decide(accept: bool) -> None:
+        pending = _pending(c, sid)
+        if not pending:
+            print("대기 중인 제안이 없습니다.")
+            return
+        if accept:
+            r = c.accept_proposal(sid, pending["id"])
+            print(f"제안 #{pending['id']} 반영됨\n")
+            print_plan(r["plan"])
+        else:
+            c.reject_proposal(sid, pending["id"])
+            print(f"제안 #{pending['id']} 거절됨 (일정 그대로)")
+
+    queue = list(a.message or [])
+    while True:
+        if queue:
+            line = queue.pop(0)
+            print(f"{BOLD}나>{RESET} {line}")
+        elif a.message:  # -m 으로 준 메시지만 보내고 끝
+            return
+        else:
+            try:
+                line = input("나> ").strip()
+            except (EOFError, KeyboardInterrupt):
+                print()
+                return
+        if not line:
+            continue
+        try:
+            if line in ("/exit", "/quit"):
+                return
+            elif line == "/plan":
+                print_plan(c.get_plan(plan_id))
+            elif line == "/proposal":
+                p = _pending(c, sid)
+                if p:
+                    print_proposal(p)
+                else:
+                    print("대기 중인 제안이 없습니다.")
+            elif line == "/accept":
+                decide(True)
+            elif line == "/reject":
+                decide(False)
+            elif line.startswith("/"):
+                print("명령: /plan /proposal /accept /reject /exit")
+            else:
+                send(line)
+        except PlannerApiError as e:
+            print(f"오류 {e.status}: {e.detail}")
+
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(prog="planner", description="GuryongMate Planner CLI")
     ap.add_argument("--url", default=os.getenv("GURYONG_API_URL", "http://127.0.0.1:8000"), help="API 주소")
@@ -267,6 +441,23 @@ def build_parser() -> argparse.ArgumentParser:
     p = add("check", cmd_check, "검증만 실행")
     p.add_argument("plan", type=int)
 
+    p = add("proposals", cmd_proposals, "변경 제안 목록")
+    p.add_argument("plan", type=int)
+    p.add_argument("--status", choices=["pending", "accepted", "rejected", "superseded"])
+
+    p = add("proposal", cmd_proposal, "제안 상세 (변경 요약·검증)")
+    p.add_argument("plan", type=int)
+    p.add_argument("proposal", type=int)
+    p.add_argument("--full", action="store_true", help="승인 시 일정 전체 출력")
+
+    p = add("chat", cmd_chat, "Planner Agent 와 대화 (계획의 최근 세션을 이어서)")
+    p.add_argument("plan", type=int)
+    p.add_argument("--session", help="이어갈 세션 id")
+    p.add_argument("--new", action="store_true", help="새 세션 시작")
+    p.add_argument("--thinking", action="store_true", help="모델의 추론 과정도 표시")
+    p.add_argument("-m", "--message", action="append",
+                   help="이 메시지만 보내고 종료 (여러 번 지정 가능, /accept 같은 명령도 가능)")
+
     add("shell", None, "대화형 모드")
     return ap
 
@@ -307,4 +498,6 @@ def shell(ap, a, c) -> None:
 if __name__ == "__main__":
     for stream in (sys.stdout, sys.stderr):
         stream.reconfigure(encoding="utf-8")
+    if os.name == "nt":
+        os.system("")  # Windows 콘솔 ANSI 색 활성화
     run(build_parser(), sys.argv[1:])
