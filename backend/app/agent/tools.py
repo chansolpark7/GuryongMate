@@ -23,7 +23,8 @@ def _fn(name: str, description: str, properties: dict | None = None, required: l
 
 TOOL_SPECS = [
     _fn("search_places", "포항(구룡포 중심) 관광지·음식점 등을 검색한다. 일정에 넣을 장소의 place_id 를 얻을 때 쓴다.", {
-        "query": {"type": "string", "description": "키워드 (이름·설명·메뉴·태그). 예: 물회, 일본인가옥, 카페"},
+        "query": {"type": "string", "description": "키워드나 원하는 느낌을 설명하는 문장. "
+                                                   "예: 물회, 일본인가옥, 바다가 보이는 조용한 카페, 근대 역사를 느낄 수 있는 곳"},
         "content_type": {"type": "string", "enum": CONTENT_TYPES},
         "area": {"type": "string", "description": "읍면동. 예: 구룡포읍, 호미곶면"},
         "near_place_id": {"type": "string", "description": "이 장소 주변에서 가까운 순으로 검색"},
@@ -129,24 +130,6 @@ def compact_plan(plan: dict, changes: list[dict] | None = None, pending: int = 0
     return out
 
 
-_COMMON = {"구룡포", "포항", "맛집", "근처", "추천", "유명한", "관광지", "명소"}
-
-
-def _fallback_terms(query: str) -> list[list[str]]:
-    words = [w for w in query.split() if len(w) >= 2]
-    if len(words) > 1 and any(w not in _COMMON for w in words):
-        words = [w for w in words if w not in _COMMON]
-    if len(words) > 1:
-        return [words]
-    if not words:
-        return []
-    w = words[0]
-    terms = [[w]] if w != query.strip() else []  # 흔한 단어를 빼고 한 단어만 남은 경우
-    if len(w) >= 4:
-        terms += [[w[:i], w[i:]] for i in range(2, len(w) - 1)]
-    return terms
-
-
 def _blank(v) -> bool:
     return v is None or str(v).strip().lower() in ("", "none", "null")
 
@@ -190,29 +173,19 @@ class Toolbox:
     async def _t_search_places(self, query: str = "", content_type: str = "", area: str = "", near_place_id: str = "",
                                radius_m: int = 1500, limit: int = 8) -> ToolOutcome:
         params = {"q": query, "content_type": content_type, "area": area, "limit": max(1, min(int(limit), 15))}
+        if query.strip():
+            params["mode"] = "hybrid"  # 이름 일치(키워드) + 뜻(임베딩)을 함께 반영
         if near_place_id:
             center = await self.api.get_place(near_place_id)
             params |= {"lat": center["lat"], "lng": center["lng"], "radius_m": radius_m}
         r = await self.api.search_places(**params)
-        found, total, note = r["items"], r["total"], None
-        if total == 0 and query.strip():
-            # places 검색은 검색어 전체를 부분 문자열로 찾는다. "일본인가옥" 은 "일본인 가옥거리" 를 못 찾으므로
-            # 단어별(띄어쓰기) 또는 한 단어를 두 조각으로 나눠 다시 찾고, 조각이 많이 맞은 순으로 합친다.
-            hits: dict[str, tuple[int, dict]] = {}
-            for terms in _fallback_terms(query):
-                for t in terms:
-                    for p in (await self.api.search_places(**(params | {"q": t})))["items"]:
-                        n, _ = hits.get(p["id"], (0, p))
-                        hits[p["id"]] = (n + 1, p)
-            found = [p for _, p in sorted(hits.values(), key=lambda x: -x[0])][: params["limit"]]
-            total, note = len(hits), f"'{query}' 그대로는 결과가 없어 나눠서 검색했습니다."
         items = [{"place_id": p["id"], "title": p["title"], "type": p["content_type"], "area": p["area"],
                   **({"distance_m": round(p["distance_m"])} if p.get("distance_m") is not None else {})}
-                 for p in found]
-        out = {"total": total, "items": items, **({"note": note} if note else {})}
+                 for p in r["items"]]
+        out: dict = {"items": items}
         if not items:
-            out["hint"] = "결과가 없습니다. 더 짧은 한 단어 키워드나 content_type/area 만으로 다시 찾아보세요."
-        return ToolOutcome(True, _dump(out), f"{total}건 중 {len(items)}건")
+            out["hint"] = "결과가 없습니다. 다른 표현이나 content_type/area 만으로 다시 찾아보세요."
+        return ToolOutcome(True, _dump(out), f"{len(items)}건")
 
     async def _t_get_place(self, place_id: str) -> ToolOutcome:
         p = await self.api.get_place(place_id)
