@@ -200,7 +200,7 @@ def test_answer_only_turn_has_no_steps(client, session):
 
 def test_empty_answer_gets_fallback_text(client, session):
     sid, _ = session
-    events = chat(client, sid, "a", [[("add_item", {"place_id": "p-food"})], [""]])
+    events = chat(client, sid, "a", [[("add_item", {"place_id": "p-food"})], [""], [""]])  # 되묻기 후에도 빈 답
     assert last(events, "done")["text"].startswith("변경안을 만들었어요")
 
 
@@ -210,6 +210,8 @@ def test_max_steps_forces_final_answer(client, session, monkeypatch):
     sid, _ = session
     chat(client, sid, "a", [[("view_plan", {})], [("view_plan", {}), "끝"]])
     assert llm.tools_seen[0] and llm.tools_seen[1] == []  # 마지막 단계는 도구 없이 (도구 호출해도 무시)
+    assert "도구 호출 한도" in llm.calls[1][-1]["content"]      # 한도 도달을 알린다
+    assert "도구 호출 한도" not in llm.calls[0][-1]["content"]
 
 
 def test_non_stream_result(client, session):
@@ -507,7 +509,7 @@ def test_llm_failure_saves_user_message(client, session):
 
 def test_steps_kept_when_final_text_empty(client, session):
     sid, _ = session
-    events = chat(client, sid, "a", [["볼게요", ("view_plan", {})], [""]])
+    events = chat(client, sid, "a", [["볼게요", ("view_plan", {})], [""], [""]])
     assert last(events, "steps_done")["count"] == 1
     msg = ok(client.get(f"/agent/sessions/{sid}", headers=H))["messages"][-1]
     assert msg["content"] == "볼게요" and [s["kind"] for s in msg["steps"]] == ["plan"]
@@ -544,3 +546,26 @@ def test_card_actions_release_lock(client, session):
     err(client.post(f"/agent/sessions/{sid}/proposals/{p['id']}/reject", headers=H), 409, "proposal_not_pending")
     assert agent_router._active == {}  # 성공·실패 모두 잠금을 푼다
     assert last(chat(client, sid, "b", [["네"]]), "done")
+
+
+def test_empty_reply_is_nudged_once(client, session):
+    sid, pid = session
+    events = chat(client, sid, "일정 짜줘", [[""], [("add_item", {"place_id": "p-food"})], ["추가했어요"]])
+    assert "[시스템] 방금 응답이 비어" in llm.calls[1][-1]["content"]     # 되묻기
+    assert "[시스템]" not in llm.calls[2][-1]["content"]                  # 일회성
+    assert last(events, "proposal")["status"] == "pending"
+    with SessionLocal() as db:  # 되묻기 안내와 빈 응답은 기록에 남지 않는다
+        rows = db.scalars(select(AgentMessage).where(AgentMessage.session_id == sid)).all()
+    assert not any("[시스템]" in m.content for m in rows)
+    assert [m.role for m in rows] == ["user", "assistant", "tool", "assistant"]
+
+
+def test_tool_results_help_model_follow_up(client, session):
+    """추천 결과에 place_id 를 남기고, 같은 날 이미 있는 장소를 추가하면 중복이라고 알려준다."""
+    sid, _ = session
+    chat(client, sid, "추천", [[("recommend_places", {"title": "t", "candidates": [{"place_id": "p-cafe"}]})], ["골라요"]])
+    assert '"place_id": "p-cafe"' in llm.calls[-1][-1]["content"]
+    chat(client, sid, "가옥거리 또 넣어줘", [[("add_item", {"place_id": "p-house"})], ["넣었어요"]])
+    assert "중복" in llm.calls[-1][-1]["content"]
+    chat(client, sid, "카페 넣어줘", [[("add_item", {"place_id": "p-cafe"})], ["넣었어요"]])
+    assert "중복" not in llm.calls[-1][-1]["content"]

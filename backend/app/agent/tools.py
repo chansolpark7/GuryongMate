@@ -272,8 +272,11 @@ class Toolbox:
         op = {"op": "add_item", "place_id": place_id, "day": day, "order": order, "stay_minutes": stay_minutes,
               "memo": memo}
         notice = ""
+        if self.last_plan and 1 <= day <= len(self.last_plan["days"]) and any(
+                i["place_id"] == place_id for i in self.last_plan["days"][day - 1]["items"]):
+            notice = f". 주의: 이 장소는 이미 {day}일차 일정에 있어 중복으로 들어갔다 (의도가 아니면 remove_item)"
         if ignored:
-            notice = f". 무시된 인자: {sorted(ignored)}"
+            notice += f". 무시된 인자: {sorted(ignored)}"
             if "start_time" in ignored:
                 notice += " (시작 시각 고정은 update_item 으로만 할 수 있다)"
         outcome = await self._stage(op, "", notice)
@@ -340,8 +343,10 @@ class Toolbox:
             keep.setdefault("day", 1)
             cleaned.append(keep)
         rec = await self.api.create_recommendation(self.plan_id, str(title)[:100] or "추천", cleaned, self.session_id)
-        summary = [{"title": (c["place"] or {}).get("title", c["place_id"]), "day": c["day"], "state": c["state"]}
-                   for c in rec["candidates"]]
+        # place_id 까지 남겨야 다음 턴에 "이렇게 코스 짜줘"를 다시 검색하지 않고 바로 처리할 수 있다
+        summary = [{"place_id": c["place_id"], "title": (c["place"] or {}).get("title", c["place_id"]), "day": c["day"],
+                    **({"time_hint": c["time_hint"]} if c["time_hint"] else {}), "stay_minutes": c["stay_minutes"],
+                    "state": c["state"]} for c in rec["candidates"]]
         content = {"result": "추천 카드를 사용자에게 보여줬다. 사용자가 원하는 후보를 직접 추가한다 (승인 절차 없음).",
                    "candidates": summary}
         return ToolOutcome(True, _dump(content), f"{len(rec['candidates'])}곳",

@@ -26,6 +26,13 @@ from app.db import SessionLocal
 Event = dict  # {"event": 이름, "data": dict}
 LLM_RETRIES = 2
 
+# 이번 LLM 호출에만 덧붙이는 안내 (대화 기록에는 남기지 않는다)
+EMPTY_REPLY_NOTE = ("[시스템] 방금 응답이 비어 있었다. 필요한 도구를 호출해 요청을 끝까지 처리하거나, "
+                    "사용자에게 할 말을 답하라.")
+FINAL_STEP_NOTE = ("[시스템] 이번 턴의 도구 호출 한도에 도달해 더는 도구를 쓸 수 없다. 지금까지 도구로 실제로 한 변경만 "
+                   "짧게 정리해 답하라 (그 변경이 제안 카드로 전달된다). 하지 않은 변경을 했다고 말하지 말고, "
+                   "남은 일은 다음 요청에서 이어서 하겠다고만 말하라.")
+
 STEP_TITLE = {"search": "장소 찾기", "place": "장소 정보 확인", "plan": "일정 확인", "edit": "일정 조정",
               "rule": "조건 반영", "recommend": "추천 정리", "proposal": "변경안 만들기"}
 STATUS_TEXT = {"search": "장소를 찾고 있어요.", "place": "장소 정보를 확인하고 있어요.", "plan": "일정을 확인하고 있어요.",
@@ -179,14 +186,18 @@ async def run_turn(session_id: str, plan_id: int, user_text: str, llm: LLMProvid
         saved = True
         await to_thread.run_sync(_save, session_id, closing_rows(note))
 
+    nudged = False
+    extra: list[dict] = []  # 이번 호출에만 붙이는 안내 (기록에는 남기지 않음)
     try:
         for step_no in range(settings.max_steps):
             # 마지막 단계에서는 도구 없이 호출해 반드시 답변으로 끝나게 한다
             tools = TOOL_SPECS if step_no < settings.max_steps - 1 else []
+            if not tools and step_no > 0:
+                extra = [{"role": "user", "content": FINAL_STEP_NOTE}]
             for attempt in range(LLM_RETRIES + 1):
                 text, calls, finish, reasoning_len = "", [], "", 0
                 try:
-                    async for ev in llm.stream(messages, tools):
+                    async for ev in llm.stream(messages + extra, tools):
                         match ev:
                             case TextDelta(text=t):
                                 text += t
@@ -211,8 +222,14 @@ async def run_turn(session_id: str, plan_id: int, user_text: str, llm: LLMProvid
 
             log.info("session=%s step=%d finish=%s text=%d reasoning=%d tools=%s", sid, step_no, finish,
                      len(text), reasoning_len, [c.name for c in calls])
+            extra = []
             if not tools:  # 도구를 주지 않았는데도 도구 호출을 내는 모델이 있다 -> 무시하고 답변으로 끝낸다
                 calls = []
+            if not text.strip() and not calls and tools and not nudged:
+                # 생각만 하고 아무것도 내지 않고 끝나는 경우가 있다 -> 한 번만 되묻는다
+                nudged = True
+                extra = [{"role": "user", "content": EMPTY_REPLY_NOTE}]
+                continue
             if text.strip():
                 said.append(text.strip())
             tool_calls = [{"id": c.id, "type": "function", "function": {"name": c.name, "arguments": c.arguments}}

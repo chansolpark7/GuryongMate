@@ -26,7 +26,7 @@ class AgentSettings(BaseSettings):
 
     temperature: float | None = None
     request_timeout_sec: float = 300
-    max_steps: int = Field(8, description="한 턴에서 LLM 호출(도구 사용 반복) 최대 횟수")
+    max_steps: int = Field(12, description="한 턴에서 LLM 호출(도구 사용 반복) 최대 횟수")
     history_messages: int = Field(40, description="LLM 에 넘길 최근 대화 메시지 수")
 
     # 같은 컨테이너의 API (planner, places). 모듈 간 규칙상 HTTP 로만 호출한다.
