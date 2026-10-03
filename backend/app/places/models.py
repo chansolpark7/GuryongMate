@@ -1,10 +1,12 @@
 from datetime import datetime
 
+from pgvector.sqlalchemy import Vector
 from sqlalchemy import DateTime, Float, ForeignKey, Index, Integer, String, Text, func
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
+from app.places.embedding import DIM
 
 
 class Place(Base):
@@ -36,6 +38,8 @@ class Place(Base):
     category_codes: Mapped[list[str]] = mapped_column(ARRAY(String), default=list)
     category_names: Mapped[list[str]] = mapped_column(ARRAY(String), default=list)
     tags: Mapped[list[str]] = mapped_column(ARRAY(String), default=list)
+    # 키워드 검색용: 이름·분류·태그·주소·메뉴·개요·반복정보를 소문자+공백 제거해 이어붙인 문자열
+    search_compact: Mapped[str] = mapped_column(Text, default="")
 
     image_url: Mapped[str] = mapped_column(Text, default="")
     thumbnail_url: Mapped[str] = mapped_column(Text, default="")
@@ -82,3 +86,20 @@ class PlaceCategory(Base):
     name: Mapped[str] = mapped_column(String(60))
     depth: Mapped[int] = mapped_column(Integer)
     parent_code: Mapped[str] = mapped_column(String(12), default="")
+
+
+class PlaceChunk(Base):
+    """임베딩 검색 단위. 장소 소개 조각(kind=place) 또는 오디오 가이드 대본 조각(kind=story)."""
+
+    __tablename__ = "place_chunk"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    kind: Mapped[str] = mapped_column(String(10))
+    place_id: Mapped[str | None] = mapped_column(ForeignKey("place.id", ondelete="CASCADE"), index=True)
+    story_id: Mapped[str | None] = mapped_column(ForeignKey("place_story.id", ondelete="CASCADE"), index=True)
+    seq: Mapped[int] = mapped_column(Integer, default=0)
+    title: Mapped[str] = mapped_column(String(200))  # 출처 표시용 (장소명 또는 이야기 제목)
+    text: Mapped[str] = mapped_column(Text)
+    lat: Mapped[float] = mapped_column(Float)
+    lng: Mapped[float] = mapped_column(Float)
+    embedding: Mapped[list[float]] = mapped_column(Vector(DIM))

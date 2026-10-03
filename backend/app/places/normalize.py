@@ -65,6 +65,7 @@ def fill_missing_areas(places: list[dict[str, Any]], max_m: float = 1500) -> Non
         if nearest and haversine_m(p["lat"], p["lng"], nearest["lat"], nearest["lng"]) <= max_m:
             p["area"] = nearest["area"]
             p["tags"].append(nearest["area"])
+            p["search_compact"] = build_search_compact(p)
 
 
 def pick_intro(intro: dict[str, Any]) -> dict[str, str]:
@@ -106,7 +107,7 @@ def build_place(
     if "가능" in clean_text(intro.get("chkpet") or intro.get("chkpetculture") or ""):
         tags.append("반려동물동반")
 
-    return {
+    place = {
         "id": f"kto-{content_id}",
         "source": "kto",
         "content_id": content_id,
@@ -141,6 +142,8 @@ def build_place(
         ],
         "source_modified_at": str(src.get("modifiedtime") or ""),
     }
+    place["search_compact"] = build_search_compact(place)
+    return place
 
 
 def build_story(item: dict[str, Any], theme_titles: dict[str, str]) -> dict[str, Any]:
@@ -164,19 +167,96 @@ def _norm_name(name: str) -> str:
     return re.sub(r"[\s()\[\]·,.]", "", name)
 
 
-def match_story_place(story: dict[str, Any], places: list[dict[str, Any]], max_m: float = 400) -> str | None:
-    """이야기를 가장 그럴듯한 KTO 장소에 연결. 이름이 겹치면 우선, 아니면 아주 가까운(80m) 장소만."""
-    theme = _norm_name(story["odii_theme_title"] or story["title"])
+def _name_variants(name: str) -> set[str]:
+    """'포항 일본인가옥거리(근대문화역사거리)' -> 전체, 괄호 제거, '포항' 접두어 제거 버전."""
+    base = re.sub(r"\(.*?\)", "", name)
+    variants = {name, base, re.sub(r"^포항\s*", "", base)}
+    return {v for v in map(_norm_name, variants) if len(v) >= 2}
+
+
+def match_story_place(story: dict[str, Any], places: list[dict[str, Any]], max_m: float = 1500) -> str | None:
+    """이야기를 가장 그럴듯한 KTO 장소에 연결. 이름이 겹치면 max_m 이내에서 가장 가까운 곳, 아니면 아주 가까운(80m) 장소만."""
+    names = _name_variants(story["odii_theme_title"] or story["title"])
     best: tuple[float, str] | None = None
     for p in places:
         d = haversine_m(story["lat"], story["lng"], p["lat"], p["lng"])
         if d > max_m:
             continue
-        title = _norm_name(p["title"])
-        name_match = bool(theme) and (theme in title or title in theme)
+        titles = _name_variants(p["title"])
+        name_match = any(n in t or t in n for n in names for t in titles)
         if not name_match and d > 80:
             continue
         score = d - (1000 if name_match else 0)
         if best is None or score < best[0]:
             best = (score, p["id"])
     return best[1] if best else None
+
+
+# --- 키워드 검색 ---
+
+# 여행자가 자주 쓰는 말 -> 데이터에 실제로 쓰이는 말. 필요한 만큼만 추가한다.
+SYNONYMS = {
+    "맛집": ["맛집", "음식점", "식당"],
+    "밥집": ["음식점", "식당"],
+    "식당": ["식당", "음식점"],
+    "숙소": ["숙박", "숙소", "펜션", "호텔", "모텔"],
+    "해변": ["해변", "해수욕장"],
+    "바닷가": ["바닷가", "해변", "해수욕장", "해안"],
+    "박물관": ["박물관", "전시관", "역사관", "기념관"],
+    "커피": ["커피", "카페"],
+}
+_JOSA = ("에서", "으로", "에게", "까지", "부터", "에", "의", "을", "를", "은", "는", "이", "가", "와", "과", "도", "로", "랑")
+
+
+def compact(text: str) -> str:
+    return re.sub(r"\s+", "", text).lower()
+
+
+def build_search_compact(p: dict[str, Any]) -> str:
+    g = p.get
+    parts = [g("title", ""), g("content_type", ""), *g("category_names", []), *g("tags", []), g("area", ""), g("addr", ""),
+             g("menu", ""), g("overview", ""), *(f'{i["name"]} {i["text"]}' for i in g("extra_info", []))]
+    return compact(" ".join(x for x in parts if x))
+
+
+def query_terms(q: str) -> list[list[str]]:
+    """질의를 단어별 후보 목록으로. 모든 단어가 맞아야 하고(AND), 각 단어는 후보 중 하나만 맞으면 된다(OR).
+
+    '구룡포에서 맛집' -> [['구룡포에서', '구룡포'], ['맛집', '음식점', '식당']]
+    """
+    terms = []
+    for word in q.split():
+        word = compact(word)
+        variants = [word]
+        for j in _JOSA:
+            if word.endswith(j) and len(word) - len(j) >= 2:
+                variants.append(word[: -len(j)])
+                break
+        for v in list(variants):
+            variants += [compact(s) for s in SYNONYMS.get(v, [])]
+        terms.append(list(dict.fromkeys(variants)))
+    return [t for t in terms if t and t[0]]
+
+
+# --- 임베딩 조각 ---
+
+def place_chunks(p: dict[str, Any]) -> list[dict[str, Any]]:
+    """장소 1곳 -> 임베딩 조각들. 각 조각 앞에 장소 정보 머리말을 붙여 문맥을 유지한다."""
+    from app.places.embedding import split_text
+
+    labels = [p["content_type"], *p["category_names"], p["area"]]
+    head = f'{p["title"]} ({", ".join(x for x in labels if x)})'
+    body = p["overview"]
+    if p["menu"]:
+        body = f'메뉴: {p["menu"]}\n{body}'
+    pieces = split_text(body) or [""]
+    return [{"kind": "place", "place_id": p["id"], "story_id": None, "seq": i, "title": p["title"],
+             "text": f"{head}\n{piece}".strip(), "lat": p["lat"], "lng": p["lng"]} for i, piece in enumerate(pieces)]
+
+
+def story_chunks(s: dict[str, Any]) -> list[dict[str, Any]]:
+    from app.places.embedding import split_text
+
+    head = f'{s["odii_theme_title"]} - {s["title"]}'.strip(" -")
+    return [{"kind": "story", "place_id": s["place_id"], "story_id": s["id"], "seq": i, "title": head,
+             "text": f"{head}\n{piece}", "lat": s["lat"], "lng": s["lng"]} for i, piece in enumerate(split_text(s["script"]))]

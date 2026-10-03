@@ -1,9 +1,10 @@
 import pytest
 
+from app.places.embedding import split_text
 from app.places.client import DataGoKrError, extract_items, parse_response
 from app.places.ingest import parse_categories
 from app.places.normalize import (build_place, build_story, clean_text, extract_area, extract_homepage, fill_missing_areas,
-                                  match_story_place)
+                                  match_story_place, place_chunks, query_terms, story_chunks)
 
 LISTING = {
     "contentid": "126128",
@@ -85,6 +86,8 @@ def test_story_matching():
     assert story["script"] == "옛날\n이야기"
     assert match_story_place(story, [far, place]) == "kto-126128"  # 이름 일치 우선
     assert match_story_place({**story, "lat": 36.5}, [place]) is None  # 너무 멀면 연결 안 함
+    paren = {**story, "odii_theme_title": "일본인가옥거리(근대문화역사거리)", "lat": 35.9895, "lng": 129.5575}  # 약 170m
+    assert match_story_place(paren, [far, place]) == "kto-126128"  # 괄호·띄어쓰기 달라도 연결
 
 
 def test_parse_response_errors():
@@ -115,3 +118,34 @@ def test_parse_categories():
                               "lclsSystm3Cd": "HS010100", "lclsSystm3Nm": "근대유적"}])
     assert [c["code"] for c in cats] == ["HS", "HS01", "HS010100"]
     assert cats[2]["parent_code"] == "HS01"
+
+
+def test_query_terms():
+    assert query_terms("구룡포에서  맛집") == [["구룡포에서", "구룡포"], ["맛집", "음식점", "식당"]]
+    assert query_terms("일본인 가옥") == [["일본인"], ["가옥"]]
+    assert query_terms("   ") == []
+
+
+def test_search_compact():
+    p = build_place(LISTING, COMMON, INTRO, [], [{"infoname": "화장실", "infotext": "있음"}], NAMES)
+    assert "구룡포일본인가옥거리" in p["search_compact"]
+    assert "화장실있음" in p["search_compact"]
+
+
+def test_split_text():
+    assert split_text("짧은 글") == ["짧은 글"]
+    text = " ".join(f"문장{i}입니다." for i in range(200))
+    chunks = split_text(text, size=100, overlap=20)
+    assert all(len(c) <= 100 for c in chunks)
+    assert chunks[0].startswith("문장0") and "문장199" in chunks[-1]
+    assert all(len(c) <= 100 for c in split_text("가" * 350, size=100, overlap=20))
+
+
+def test_chunks():
+    p = build_place(LISTING, COMMON, INTRO, [], [], NAMES)
+    c = place_chunks(p)
+    assert c[0]["text"].startswith("구룡포 일본인가옥거리 (관광지, 역사관광, 역사유적지, 근대유적, 구룡포읍)")
+    story = {"id": "odii-1-2", "place_id": "kto-1", "odii_theme_title": "가옥거리", "title": "이야기", "script": "가" * 1200,
+             "lat": 1.0, "lng": 2.0}
+    sc = story_chunks(story)
+    assert len(sc) >= 3 and sc[0]["text"].startswith("가옥거리 - 이야기\n") and sc[0]["story_id"] == "odii-1-2"
