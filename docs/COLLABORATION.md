@@ -22,7 +22,7 @@ git -C C:/Users/chansol/Desktop/GuryongMate worktree add ../GuryongMate-wt/plann
 | 모듈 | 브랜치 | 소유 경로 | DB 테이블 접두사 |
 |---|---|---|---|
 | 관광지 정보 (places) | `feat/tour-data` | `backend/app/places/`, `backend/requirements/places.txt`, `backend/tests/places/`, `scripts/places/`, `docs/places/` | `place*` |
-| 플래너 (planner) | `feat/planner` | `backend/app/planner/`, `backend/requirements/planner.txt`, `backend/tests/planner/`, `docs/planner/` | `planner_*` |
+| 플래너 (planner) | `feat/planner` | `backend/app/planner/`, `backend/requirements/planner.txt`, `backend/tests/planner/`, `scripts/planner/`, `docs/planner/` | `planner_*` |
 
 ### 공용 파일 (수정 시 반드시 별도 커밋, 가능하면 `dev`에 먼저 반영)
 `backend/app/main.py`, `backend/app/db.py`, `backend/app/core/`, `backend/Dockerfile`,
