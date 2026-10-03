@@ -1,6 +1,6 @@
-"""planner·places 모듈을 HTTP API 로 호출하는 비동기 클라이언트 (모듈 간 규칙: 내부 코드 import 금지).
+"""planner·places 서비스를 HTTP API 로 호출하는 비동기 클라이언트 (서비스 간 규칙: 내부 코드 import 금지).
 
-Agent 는 앱·CLI 와 똑같은 공개 API 만 쓴다.
+Agent 는 앱·CLI 와 똑같은 공개 API 만 쓴다. 주소는 AGENT_API_BASE_URL (compose 에서는 게이트웨이).
 """
 from typing import Any
 
@@ -10,17 +10,32 @@ from app.agent.config import settings
 
 
 class ApiError(RuntimeError):
+    """다른 서비스가 오류를 돌려줌. planner 오류는 detail = {"code", "message", ...}."""
+
     def __init__(self, status: int, detail: Any):
         super().__init__(f"HTTP {status}: {detail}")
         self.status = status
         self.detail = detail
 
     @property
+    def code(self) -> str:
+        if isinstance(self.detail, dict) and "code" in self.detail:
+            return self.detail["code"]
+        return "upstream_unavailable" if self.status == 503 else "upstream_error"
+
+    @property
     def message(self) -> str:
-        """pydantic 검증 오류(list)도 한 줄로 읽히게."""
-        if isinstance(self.detail, list):
+        if isinstance(self.detail, dict):
+            return str(self.detail.get("message", self.detail))
+        if isinstance(self.detail, list):  # FastAPI 기본 검증 오류 (places 등)
             return "; ".join(f"{'.'.join(str(x) for x in d.get('loc', [])[1:])}: {d.get('msg')}" for d in self.detail)
         return str(self.detail)
+
+    def body(self) -> dict:
+        """앱에 그대로 전달할 오류 본문 (planner 코드·추가 필드 유지)."""
+        if isinstance(self.detail, dict) and "code" in self.detail:
+            return {"detail": self.detail}
+        return {"detail": {"code": self.code, "message": self.message}}
 
 
 class ServiceApi:
@@ -32,45 +47,58 @@ class ServiceApi:
         try:
             resp = await self._http.request(method, path, headers=self._headers, **kw)
         except httpx.HTTPError as e:
-            raise ApiError(503, f"API 연결 실패: {e!r}") from e
+            raise ApiError(503, {"code": "upstream_unavailable", "message": f"서비스에 연결할 수 없습니다: {e!r}"}) from e
         if resp.is_error:
             try:
                 detail = resp.json().get("detail", resp.text)
             except ValueError:
                 detail = resp.text
             raise ApiError(resp.status_code, detail)
-        return resp.json()
+        return None if resp.status_code == 204 else resp.json()
 
-    # places
+    # ----- places -----
     async def search_places(self, **params) -> dict:
         return await self._req("GET", "/places", params={k: v for k, v in params.items() if v not in (None, "")})
 
     async def get_place(self, place_id: str) -> dict:
         return await self._req("GET", f"/places/{place_id}")
 
-    # planner
+    # ----- planner: 계획 -----
     async def get_plan(self, plan_id: int) -> dict:
         return await self._req("GET", f"/planner/plans/{plan_id}")
 
     async def preview(self, plan_id: int, ops: list[dict]) -> dict:
         return await self._req("POST", f"/planner/plans/{plan_id}/preview", json={"ops": ops})
 
+    # ----- planner: 제안 -----
     async def list_proposals(self, plan_id: int, status: str | None = None) -> list[dict]:
         return await self._req("GET", f"/planner/plans/{plan_id}/proposals", params={"status": status} if status else None)
 
     async def get_proposal(self, plan_id: int, proposal_id: int) -> dict:
         return await self._req("GET", f"/planner/plans/{plan_id}/proposals/{proposal_id}")
 
-    async def create_proposal(self, plan_id: int, ops: list[dict], summary: str, origin: str,
-                              supersedes: int | None) -> dict:
-        body = {"ops": ops, "summary": summary, "source": "llm", "origin": origin, "supersedes": supersedes}
+    async def create_proposal(self, plan_id: int, ops: list[dict], *, summary: str, request: str, origin: str,
+                              supersedes: int | None, expected_version: int | None) -> dict:
+        body = {"ops": ops, "summary": summary[:2000], "request": request[:4000], "source": "llm", "origin": origin,
+                "supersedes": supersedes, "expected_version": expected_version}
         return await self._req("POST", f"/planner/plans/{plan_id}/proposals", json=body)
 
-    async def accept_proposal(self, plan_id: int, proposal_id: int) -> dict:
-        return await self._req("POST", f"/planner/plans/{plan_id}/proposals/{proposal_id}/accept")
+    async def accept_proposal(self, plan_id: int, proposal_id: int, mode: str = "auto") -> dict:
+        return await self._req("POST", f"/planner/plans/{plan_id}/proposals/{proposal_id}/accept", json={"mode": mode})
 
     async def reject_proposal(self, plan_id: int, proposal_id: int) -> dict:
         return await self._req("POST", f"/planner/plans/{plan_id}/proposals/{proposal_id}/reject")
+
+    # ----- planner: 추천 -----
+    async def create_recommendation(self, plan_id: int, title: str, candidates: list[dict], origin: str) -> dict:
+        body = {"title": title, "source": "llm", "origin": origin, "candidates": candidates}
+        return await self._req("POST", f"/planner/plans/{plan_id}/recommendations", json=body)
+
+    async def get_recommendation(self, plan_id: int, rec_id: int) -> dict:
+        return await self._req("GET", f"/planner/plans/{plan_id}/recommendations/{rec_id}")
+
+    async def candidate_action(self, plan_id: int, rec_id: int, cand_id: int, action: str) -> dict:
+        return await self._req("POST", f"/planner/plans/{plan_id}/recommendations/{rec_id}/candidates/{cand_id}/{action}")
 
 
 _http: httpx.AsyncClient | None = None

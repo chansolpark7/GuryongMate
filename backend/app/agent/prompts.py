@@ -14,6 +14,13 @@ SYSTEM = """너는 포항 구룡포 여행을 함께 계획하는 AI 여행 동�
 - "이렇게 해볼까요?"라고 먼저 묻지 말고 바로 변경 도구로 제안을 만든다.
   사용자는 제안 카드에서 승인·거절하거나 말로 더 고칠 수 있으므로, 제안 자체가 확인 절차다.
 
+## 변경 제안과 장소 추천 구분
+- "일정 짜줘", "바꿔줘", "비 오면 실내로 조정해줘"처럼 여러 변경을 한 번에 하는 요청 → 변경 도구(add_item 등)
+  → 응답이 끝나면 변경 제안 카드 하나로 전달된다 (사용자가 한 번에 승인).
+- "카페 추천해줘", "갈 만한 곳 알려줘"처럼 사용자가 골라서 넣을 요청 → search_places 로 찾은 뒤 recommend_places
+  → 추천 카드가 바로 보이고 사용자가 후보마다 [추가]를 누른다. 이때는 add_item 을 쓰지 않는다.
+- 한 턴에 추천 카드는 하나만 만든다.
+
 ## 일정을 새로 짤 때 순서
 1. search_places 로 후보를 찾는다. 이름 키워드("물회", "과메기")나 원하는 느낌("근대 역사를 느낄 수 있는 곳")으로 찾는다.
    구룡포 중심이면 area="구룡포읍" 을 함께 준다. 가까운 곳은 near_place_id 로 찾는다.
@@ -44,7 +51,7 @@ SYSTEM = """너는 포항 구룡포 여행을 함께 계획하는 AI 여행 동�
 
 
 def build_system(plan_view: dict, pending: dict | None, dropped: dict | None = None,
-                 now: datetime | None = None) -> str:
+                 repropose: dict | None = None, now: datetime | None = None) -> str:
     now = now or datetime.now(KST)
     parts = [SYSTEM, f"## 현재 시각\n{now:%Y-%m-%d %H:%M} (KST, {'월화수목금토일'[now.weekday()]}요일)"]
     parts.append("## 현재 일정" + (" (승인 대기 중인 제안이 적용된 상태)" if pending else "")
@@ -53,6 +60,11 @@ def build_system(plan_view: dict, pending: dict | None, dropped: dict | None = N
         parts.append(f"## 승인 대기 중인 제안 #{pending['id']}\n"
                      + "\n".join(f"- {c['message']}" for c in pending.get("changes", [])))
     if dropped:
-        parts.append(f"## 참고\n이전에 만든 제안 #{dropped['id']} 은 그사이 사용자가 일정을 직접 바꿔 더 이상 적용할 수 없어 "
-                     "폐기된다. 필요하면 현재 일정을 기준으로 다시 제안하고, 사용자에게도 그렇게 알린다.")
+        parts.append(f"## 참고\n이전에 만든 제안 #{dropped['id']} 은 그 뒤로 일정이 바뀌어 지금 일정과 기준이 다르다. "
+                     "이번에 새 변경 제안을 만들면 그 제안을 대체한다. 필요하면 현재 일정을 기준으로 다시 제안한다.")
+    if repropose:
+        parts.append(f"## 다시 제안 요청\n사용자가 제안 #{repropose['id']} 을 현재 일정에 맞춰 다시 만들어 달라고 했다.\n"
+                     f"원래 요청: {repropose.get('request') or '(기록 없음)'}\n당시 제안한 변경:\n"
+                     + "\n".join(f"- {c['message']}" for c in repropose.get("changes", []))
+                     + "\n같은 의도를 지금 일정에 맞게 변경 도구로 다시 만든다.")
     return "\n\n".join(parts)

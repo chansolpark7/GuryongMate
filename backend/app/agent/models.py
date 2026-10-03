@@ -32,5 +32,7 @@ class AgentMessage(Base):
     tool_call_id: Mapped[str] = mapped_column(String(64), default="")  # tool 응답이 가리키는 호출
     tool_ok: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     hidden: Mapped[bool] = mapped_column(Boolean, default=False)
-    proposal_id: Mapped[int | None] = mapped_column(Integer, nullable=True)  # 이 응답으로 만들어진 제안
+    # 턴의 마지막 assistant 메시지에만: 거친 단계와 만들어진 카드 [{"type": "proposal"|"recommendation", "id"}]
+    steps: Mapped[list[dict] | None] = mapped_column(JSONB, nullable=True)
+    cards: Mapped[list[dict] | None] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
