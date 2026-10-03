@@ -6,7 +6,7 @@ services:
       POSTGRES_PASSWORD: guryong
       POSTGRES_DB: guryongmate
     ports:
-      - "5432:5432"
+      - "${DB_PORT:-5432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -23,7 +23,7 @@ services:
     environment:
       DATABASE_URL: postgresql+psycopg://guryong:guryong@db:5432/guryongmate
     ports:
-      - "8000:8000"
+      - "${API_PORT:-8000}:8000"
     volumes:
       - ./backend:/srv
       - ./data:/data

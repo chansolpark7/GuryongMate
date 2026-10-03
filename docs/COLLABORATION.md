@@ -45,3 +45,15 @@ git -C C:/Users/chansol/Desktop/GuryongMate worktree add ../GuryongMate-wt/plann
 1. 작업 전 `git merge dev`로 최신 공용 파일 반영
 2. 기능 브랜치 → `dev` 머지 (공용 파일 충돌이 나면 양쪽 변경을 모두 살리는 방향으로 해결)
 3. `docker compose up --build` 후 `/health`와 각 모듈 테스트 통과 확인
+
+## 5. Docker 동시 실행
+
+worktree마다 compose 프로젝트(컨테이너·DB 볼륨)가 따로 생긴다. 동시에 띄울 때는 worktree 루트에 `.env`(커밋 안 됨)를 만들어 포트를 바꾼다.
+
+| worktree | `.env` |
+|---|---|
+| 원본 `GuryongMate/` | (기본값) `API_PORT=8000`, `DB_PORT=5432` |
+| `GuryongMate-wt/tour-data` | `API_PORT=8001`, `DB_PORT=5433` |
+| `GuryongMate-wt/planner` | `API_PORT=8002`, `DB_PORT=5434` |
+
+API 키는 각 worktree의 `backend/.env`에 둔다 (`backend/.env.example` 참고).
