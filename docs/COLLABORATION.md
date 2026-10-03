@@ -1,60 +1,124 @@
 # 병렬 개발 규칙 (사람 · 에이전트 공통)
 
 여러 명(또는 여러 AI 에이전트)이 동시에 기능을 개발할 때 충돌을 막기 위한 규칙.
+기능은 **서비스(컨테이너) 단위**로 나뉘고, 담당자는 자기 서비스만 수정·실행·테스트한다.
 
-## 1. 작업 공간: 기능마다 git worktree 하나
+## 1. 서비스 구성
+
+```
+Flutter 앱 ──► gateway (:API_PORT, 기본 8000)   Caddy. URL 앞부분으로 서비스에 나눠 보낸다
+                ├─ /places*   ──► places      관광지 검색·상세·근거 검색
+                ├─ /planner*  ──► planner     일정·검증·변경 제안
+                ├─ /agent*    ──► agent       LLM 채팅 (SSE) · 도구 실행
+                └─ /auth* /users* ──► account (예정) 로그인·사용자 프로필
+               embedding   임베딩 모델 서버 (내부 전용, places 가 호출)
+               places-init 시작 시 장소 데이터·임베딩이 비어 있으면 채우고 종료
+               db          Postgres + pgvector (모든 서비스 공용, 테이블 접두사로 구분)
+LLM: 호스트의 Ollama(host.docker.internal:11434) 또는 OpenAI API — Docker 밖
+```
+
+| 서비스 | 담당 | 코드 | 소유 경로 | DB 테이블 | 문서 |
+|---|---|---|---|---|---|
+| places | 관광지 담당 | `backend/app/places/` | `backend/app/places/`, `backend/requirements/places.txt`, `backend/tests/places/`, `scripts/places/`, `data/places/`, `docs/places/` | `place*` | `/places/docs` |
+| embedding | 관광지 담당 | `services/embedding/` | `services/embedding/` | 없음 | 내부 `http://embedding/info` |
+| planner | 플래너 담당 | `backend/app/planner/` | `backend/app/planner/`, `backend/requirements/planner.txt`, `backend/tests/planner/`, `scripts/planner/`, `docs/planner/` | `planner_*` | `/planner/docs` |
+| agent | Agent 담당 | `backend/app/agent/` | `backend/app/agent/`, `backend/tests/agent/`, `docs/agent/` | `agent_*` | `/agent/docs` |
+| account (예정) | 미정 | `backend/app/account/` | `backend/app/account/`, `backend/tests/account/`, `docs/account/` | `account_*` | `/account/docs` |
+| gateway·db·공용 | 공용 | — | 아래 "공용 파일" | — | — |
+
+### 백엔드 서비스는 이미지 하나, 컨테이너 여러 개
+- `backend/`는 하나의 Python 프로젝트·이미지다. compose가 같은 이미지를 `SERVICE=places`, `SERVICE=planner`처럼 **환경변수만 다르게** 여러 번 띄운다.
+- `SERVICE=places`인 컨테이너는 `app/places/`의 **테이블과 API만** 연다. 서비스 문서도 `/places/docs`에만 있다.
+- `SERVICE=all`(기본값)은 모든 모듈을 한 프로세스로 띄운다. 테스트(`backend/tests/conftest.py`)가 이 모드를 쓴다.
+- **새 서비스 추가**: `backend/app/<이름>/`에 `router.py`·`models.py`를 만들고, compose에 `SERVICE: <이름>` 서비스와 `infra/gateway/Caddyfile`에 경로 한 줄을 추가한다(공용 파일 변경 → 별도 커밋).
+- 무거운 런타임(모델 서버 등)은 `services/<이름>/`에 별도 Dockerfile로 둔다. 백엔드 이미지를 가볍게 유지하기 위해서다.
+
+### 공용 파일 (수정 시 반드시 별도 커밋, 가능하면 `dev`에 먼저 반영)
+`docker-compose.yml`, `infra/`, `backend/app/main.py`, `backend/app/db.py`, `backend/app/core/`, `backend/Dockerfile`,
+`backend/requirements/base.txt`, `backend/tests/conftest.py`, `backend/.env.example`, `PROJECT.md`, `.gitignore`
+
+기능 개발 중에는 공용 파일을 건드릴 필요가 없도록 다음과 같이 구성해 두었다.
+
+- **라우터 자동 등록**: `backend/app/<module>/router.py`에 `router = APIRouter(prefix="/<module>")`만 만들면 된다.
+- **테이블 자동 생성**: `backend/app/<module>/models.py`에 `app.db.Base`를 상속한 모델을 두면 해당 서비스가 시작할 때 `create_all` 된다. 해커톤 기간에는 Alembic을 쓰지 않는다. 테이블 이름은 반드시 모듈 접두사로 시작한다.
+- **의존성 분리**: 모듈 전용 패키지는 `backend/requirements/<module>.txt`에 추가한다. Dockerfile이 `requirements/*.txt`를 모두 설치한다.
+
+## 2. 서비스 간 연결 규칙
+
+- 다른 모듈의 **내부 코드(models, service)를 import하지 않는다.** 다른 서비스는 **HTTP API로만** 호출한다.
+- 서비스끼리도 **게이트웨이 주소(`http://gateway`)로 호출**한다. compose가 `PLANNER_PLACES_BASE_URL`, `AGENT_API_BASE_URL` 등을 이 주소로 넣어 준다. 서비스 위치가 바뀌어도 호출 코드는 그대로다.
+- **장소 식별자**: 장소는 `place_id`(문자열, 예: `kto-126128`)로만 참조한다. 상세는 `GET /places/{place_id}`.
+- **다른 서비스의 테이블을 직접 읽거나 쓰지 않는다.** DB는 하나지만 테이블 접두사가 소유 경계다.
+
+## 3. 인증 (account 서비스 도입 시)
+
+- account가 로그인 시 JWT(HS256, claim `sub` = user_id)를 발급한다. 앱은 요청마다 `Authorization: Bearer <토큰>`을 붙인다.
+- 다른 서비스는 account를 호출하지 않고 **공용 코드로 토큰을 직접 검증**한다.
+
+  ```python
+  from app.core.auth import CurrentUser, OptionalUser
+  @router.get("/plans")
+  def list_plans(user_id: CurrentUser): ...
+  ```
+
+- 서명 키는 `JWT_SECRET`, 로그인 강제 여부는 `AUTH_REQUIRED`(기본 `false`, 토큰이 없으면 `anonymous`)로 정한다. 토큰 발급은 `app.core.auth.issue_token`.
+- 현재 planner·agent는 임시로 `X-User-Id` 헤더를 쓴다. account가 생기면 `CurrentUser`로 바꾼다.
+
+## 4. 작업 공간: 기능마다 git worktree 하나
 
 같은 폴더에서 여러 에이전트가 브랜치를 바꿔가며 작업하면 서로의 파일을 덮어쓴다.
 **기능마다 별도 worktree(폴더)와 브랜치를 쓴다.**
 
 ```bash
-# 예: planner 작업 시작
-git -C C:/Users/chansol/Desktop/GuryongMate worktree add ../GuryongMate-wt/planner -b feat/planner dev
+git -C C:/Users/chansol/Desktop/GuryongMate worktree add ../GuryongMate-wt/<이름> -b feat/<이름> dev
 ```
 
 - 원본 폴더(`GuryongMate/`)는 `dev` 브랜치 상태로 두고, 통합(merge) 용도로만 쓴다.
-- 작업이 끝나면 `dev`에 머지 후 `git worktree remove ../GuryongMate-wt/<이름>`.
+- 작업이 끝나면 `dev`에 머지한 뒤 `git worktree remove ../GuryongMate-wt/<이름>`.
 
-## 2. 디렉터리 소유권
+## 5. 실행
 
-각 모듈은 **자기 디렉터리만** 수정한다.
+```bash
+cp backend/.env.example backend/.env           # 키 입력 (load 만 쓸 거면 비워도 됨)
+docker compose up -d --build                   # 전체. 첫 실행 시 임베딩 모델 다운로드·장소 적재로 몇 분 걸린다
+docker compose up -d places                    # places 와 의존 서비스(db, embedding, places-init)만
+docker compose up -d gateway                   # 게이트웨이 + 모든 백엔드 서비스
+docker compose logs -f planner                 # 한 서비스 로그
+docker compose run --rm planner pytest tests/planner   # 테스트 (어느 백엔드 서비스에서 돌려도 됨)
+```
 
-| 모듈 | 브랜치 | 소유 경로 | DB 테이블 접두사 |
-|---|---|---|---|
-| 관광지 정보 (places) | `feat/tour-data` | `backend/app/places/`, `backend/requirements/places.txt`, `backend/tests/places/`, `scripts/places/`, `docs/places/` | `place*` |
-| 플래너 (planner) | `feat/planner` | `backend/app/planner/`, `backend/requirements/planner.txt`, `backend/tests/planner/`, `scripts/planner/`, `docs/planner/` | `planner_*` |
-| Planner Agent (agent) | `feat/planner` | `backend/app/agent/`, `backend/tests/agent/`, `docs/agent/` | `agent_*` |
+- 백엔드 코드는 볼륨으로 마운트되고 `--reload`로 실행된다. 저장하면 각 서비스가 재시작된다. 임베딩 모델은 별도 컨테이너라 영향이 없다.
+- `places-init`은 비어 있는 것만 채운다. 장소 데이터를 다시 적재하려면 `docker compose run --rm places python -m app.places.ingest load --embed`를 실행한다.
+- DB를 완전히 초기화하려면 `docker compose down -v` 후 `up`.
 
-### 공용 파일 (수정 시 반드시 별도 커밋, 가능하면 `dev`에 먼저 반영)
-`backend/app/main.py`, `backend/app/db.py`, `backend/app/core/`, `backend/Dockerfile`,
-`backend/requirements/base.txt`, `docker-compose.yml`, `backend/.env.example`, `PROJECT.md`, `.gitignore`
+### 메모리 (Docker Desktop 한도 약 3.8GB)
 
-기능 개발 중에는 **공용 파일을 건드릴 필요가 없도록** 다음과 같이 구성해 두었다.
+| 컨테이너 | 상주 메모리 |
+|---|---|
+| embedding | 약 1.0GB |
+| places · planner · agent | 각 약 110MB |
+| db | 약 50MB |
+| gateway | 약 15MB |
+| **합계** | **약 1.5GB** |
 
-- **라우터 자동 등록**: `backend/app/<module>/router.py`에 `router = APIRouter(...)`만 만들면 `main.py`가 알아서 포함한다.
-- **테이블 자동 생성**: `backend/app/<module>/models.py`에 `app.db.Base`를 상속한 모델을 두면 시작 시 `create_all` 된다. (해커톤 기간에는 Alembic을 쓰지 않는다. 스키마를 바꾸면 `docker compose down -v`로 DB를 초기화)
-- **의존성 분리**: 모듈 전용 패키지는 `backend/requirements/<module>.txt`에 추가한다. Dockerfile이 `requirements/*.txt`를 모두 설치한다.
+여러 worktree에서 전체 스택을 동시에 띄우면 그만큼 늘어난다. 필요한 서비스만 띄우는 것을 권장한다.
 
-## 3. 모듈 간 연결 규칙
+### worktree 동시 실행
 
-- 다른 모듈의 **내부 코드(models, service)를 import하지 않는다.** 필요한 것은 HTTP API 또는 그 모듈이 공개한 `schemas.py`로만 쓴다.
-- **장소 식별자**: planner는 장소를 `place_id`(문자열, 예: `kto-126128`)로만 참조한다. 장소의 이름·좌표·운영시간 등은 `GET /places/{place_id}`로 조회한다.
-- API 경로 prefix는 모듈 이름: `/places/...`, `/planner/...`
-
-## 4. 머지 순서
-
-1. 작업 전 `git merge dev`로 최신 공용 파일 반영
-2. 기능 브랜치 → `dev` 머지 (공용 파일 충돌이 나면 양쪽 변경을 모두 살리는 방향으로 해결)
-3. `docker compose up --build` 후 `/health`와 각 모듈 테스트 통과 확인
-
-## 5. Docker 동시 실행
-
-worktree마다 compose 프로젝트(컨테이너·DB 볼륨)가 따로 생긴다. 동시에 띄울 때는 worktree 루트에 `.env`(커밋 안 됨)를 만들어 포트를 바꾼다.
+worktree마다 compose 프로젝트(컨테이너·DB 볼륨)가 따로 생긴다. 임베딩 모델 파일만 이름이 고정된 볼륨(`guryongmate-hf-models`)으로 공유해서 한 번만 내려받는다.
+동시에 띄울 때는 worktree 루트에 `.env`(커밋 안 됨)를 만들어 포트를 바꾼다.
 
 | worktree | `.env` |
 |---|---|
 | 원본 `GuryongMate/` | (기본값) `API_PORT=8000`, `DB_PORT=5432` |
 | `GuryongMate-wt/tour-data` | `API_PORT=8001`, `DB_PORT=5433` |
 | `GuryongMate-wt/planner` | `API_PORT=8002`, `DB_PORT=5434` |
+| `GuryongMate-wt/service-split` | `API_PORT=8003`, `DB_PORT=5435` |
 
 API 키는 각 worktree의 `backend/.env`에 둔다 (`backend/.env.example` 참고).
+
+## 6. 머지 순서
+
+1. 작업 전 `git merge dev`로 최신 공용 파일을 반영한다.
+2. 기능 브랜치를 `dev`에 머지한다. 공용 파일 충돌이 나면 양쪽 변경을 모두 살리는 방향으로 해결한다.
+3. `docker compose up -d --build` 후 `curl :8000/health`와 `docker compose run --rm places pytest tests`(전체 테스트) 통과를 확인한다.

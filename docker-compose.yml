@@ -1,4 +1,41 @@
+# 서비스별 컨테이너 구성. 앱은 gateway(:API_PORT) 하나로만 접속한다.
+#   docker compose up -d --build            전체
+#   docker compose up -d places             places 와 그 의존 서비스(db, embedding, places-init)만
+# 자세한 내용: docs/COLLABORATION.md
+
+x-backend: &backend
+  build: ./backend
+  env_file:
+    - path: ./backend/.env
+      required: false
+  volumes:
+    - ./backend:/srv
+    - ./data:/data
+  command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir /srv/app
+  healthcheck:
+    test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+    interval: 5s
+    timeout: 3s
+    retries: 20
+
+x-backend-env: &backend-env
+  DATABASE_URL: postgresql+psycopg://guryong:guryong@db:5432/guryongmate
+  EMBEDDING_URL: http://embedding:80
+  PLANNER_PLACES_BASE_URL: http://gateway   # 서비스끼리도 게이트웨이를 통해 호출
+  AGENT_API_BASE_URL: http://gateway
+
 services:
+  gateway:
+    image: caddy:2.8-alpine
+    ports:
+      - "${API_PORT:-8000}:80"
+    volumes:
+      - ./infra/gateway/Caddyfile:/etc/caddy/Caddyfile:ro
+    depends_on:
+      - places
+      - planner
+      - agent
+
   db:
     image: pgvector/pgvector:pg16
     environment:
@@ -15,24 +52,65 @@ services:
       timeout: 3s
       retries: 20
 
-  api:
-    build: ./backend
-    env_file:
-      - path: ./backend/.env
-        required: false
+  # 임베딩 모델 서버 (TEI 호환 API: POST /embed). 내부 전용. services/embedding/app.py 참고
+  embedding:
+    build: ./services/embedding
     environment:
-      DATABASE_URL: postgresql+psycopg://guryong:guryong@db:5432/guryongmate
-    ports:
-      - "${API_PORT:-8000}:8000"
+      MODEL_ID: intfloat/multilingual-e5-base
     volumes:
-      - ./backend:/srv
-      - ./data:/data
+      - hf-models:/models
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:80/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 120   # 첫 실행 시 모델 다운로드(약 1.1GB) 후 로드
+
+  # 장소 데이터·임베딩이 비어 있으면 채우고 종료
+  places-init:
+    <<: *backend
+    environment:
+      <<: *backend-env
+      SERVICE: places
+    command: python -m app.places.ingest init
+    healthcheck:
+      disable: true
+    restart: "no"
+    depends_on:
+      db:
+        condition: service_healthy
+      embedding:
+        condition: service_healthy
+
+  places:
+    <<: *backend
+    environment:
+      <<: *backend-env
+      SERVICE: places
+    depends_on:
+      places-init:
+        condition: service_completed_successfully
+
+  planner:
+    <<: *backend
+    environment:
+      <<: *backend-env
+      SERVICE: planner
+    depends_on:
+      db:
+        condition: service_healthy
+
+  agent:
+    <<: *backend
+    environment:
+      <<: *backend-env
+      SERVICE: agent
     extra_hosts:
-      - "host.docker.internal:host-gateway"  # Linux 에서도 호스트의 Ollama 접속
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+      - "host.docker.internal:host-gateway"  # 호스트의 Ollama 접속
     depends_on:
       db:
         condition: service_healthy
 
 volumes:
   pgdata:
+  hf-models:
+    name: guryongmate-hf-models  # 이름 고정: 모든 worktree 스택이 모델 파일을 공유 (한 번만 다운로드)

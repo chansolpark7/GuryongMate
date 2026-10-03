@@ -19,17 +19,16 @@
 ## 실행
 
 ```bash
-cp backend/.env.example backend/.env       # DATA_GO_KR_SERVICE_KEY 입력 (load 만 쓸 거면 불필요)
-docker compose up -d --build
-docker compose run --rm api python -m app.places.ingest load    # 커밋된 스냅샷 -> DB (키 불필요)
-docker compose run --rm api python -m app.places.ingest embed   # 의미 검색용 임베딩 생성 (약 3분, 최초 1회 모델 1.1GB 다운로드)
-docker compose run --rm api python -m app.places.ingest fetch   # API 재수집 -> DB + 스냅샷 갱신 (키 필요)
-docker compose run --rm api pytest tests/places
+cp backend/.env.example backend/.env       # DATA_GO_KR_SERVICE_KEY 입력 (fetch 할 때만 필요)
+docker compose up -d places                # db, embedding, places-init(비어 있으면 load + embed), places
+docker compose run --rm places python -m app.places.ingest fetch --embed   # API 재수집 -> DB + 스냅샷 갱신 + 임베딩 (키 필요)
+docker compose run --rm places python -m app.places.ingest load --embed    # 스냅샷으로 다시 적재 + 임베딩
+docker compose run --rm places python -m app.places.ingest embed           # 임베딩만 다시 생성 (약 1분)
+docker compose run --rm places pytest tests/places
 ```
 
-- `load`/`fetch`는 places 테이블을 **새로 만든다**. 스키마가 바뀌어도 이 명령만 다시 실행하면 된다. 임베딩도 지워지므로 필요하면 `--embed`를 붙이거나 `embed`를 다시 실행한다.
-- 원본 응답은 `data/places/raw/`, 임베딩 모델은 `data/places/models/`에 캐시한다. 둘 다 커밋하지 않는다.
-- `data/places/snapshot/*.json`은 정규화된 결과이며 커밋한다.
+- `load`/`fetch`는 places 테이블을 **새로 만든다**. 임베딩도 지워지므로 `--embed`를 붙인다.
+- 원본 응답은 `data/places/raw/`에 캐시하고 커밋하지 않는다. `data/places/snapshot/*.json`은 정규화된 결과이며 커밋한다.
 
 ## API
 
@@ -55,21 +54,20 @@ docker compose run --rm api pytest tests/places
 - semantic의 `score`는 e5 모델 특성상 0.80~0.85 사이에 몰려 있다. 절대값보다 **순위**로 쓴다.
 - `place_id` 형식은 `kto-{contentid}`이다. **다른 모듈은 이 ID로만 장소를 참조한다.**
 
-## 임베딩 (로컬)
+## 임베딩 (로컬, embedding 컨테이너)
 
-- 모델은 `intfloat/multilingual-e5-base`(768차원, CPU)를 쓴다. 장소 소개문은 머리말(이름·분류·읍면)을 붙여 500자 단위로, 오디오 가이드 대본은 100자씩 겹쳐 500자 단위로 자른다. 현재 430조각이다.
-- 실측 값 (Docker Desktop, 12코어)
+- 모델은 `intfloat/multilingual-e5-base`(768차원, CPU)를 쓴다. `services/embedding/`의 작은 서버가 sentence-transformers로 띄우고, places는 `POST http://embedding/embed`로 벡터만 받는다. API 형식은 Hugging Face TEI와 같다.
+- TEI(ONNX)는 모델 로드 중 메모리를 3GB 넘게 써서 Docker Desktop 한도(약 3.8GB)에서 OOM으로 종료됐다. 그래서 직접 만든 서버를 쓴다. 메모리를 늘리면 compose의 `embedding` 이미지를 TEI로 바꿔도 places 코드는 그대로 동작한다.
+- 조각 나누기: 장소 소개문은 머리말(이름·분류·읍면)을 붙여 500자 단위로, 오디오 가이드 대본은 100자씩 겹쳐 500자 단위로 자른다. 현재 430조각이다.
+- 실측 값
 
 | 항목 | 값 |
 |---|---|
-| 모델 파일 | 1.1GB (`data/places/models/`) |
-| API 서버 메모리 | 모델 로드 전 약 120MB → **로드 후 약 740MB** |
-| `ingest embed` 최대 메모리 / 소요 | 1.15GB / 약 3분 |
-| 의미 검색 응답 | 첫 호출 12~25초(모델 로드), 이후 **약 50ms** |
-| Docker 이미지 | 약 300MB → 약 2GB (CPU torch 포함) |
-
-- 모델은 semantic/hybrid/passages를 **처음 호출할 때만** 로드한다. keyword 검색만 쓰는 컨테이너는 메모리를 더 쓰지 않는다.
-- Docker Desktop 메모리 한도가 약 3.8GB다. 여러 worktree 스택에서 동시에 의미 검색을 쓰면 각자 약 740MB씩 더 쓴다.
+| 모델 파일 | 1.1GB (볼륨 `guryongmate-hf-models`, 모든 worktree 공유) |
+| embedding 컨테이너 메모리 | 약 0.8~1.0GB (시작할 때 로드, 항상 상주) |
+| places 컨테이너 메모리 | 약 110MB |
+| 의미 검색 응답 | 약 60ms (places 가 재시작돼도 모델은 embedding 컨테이너에 그대로 있음) |
+| 이미지 | backend 약 400MB, embedding 약 1.9GB |
 
 ## 아직 안 한 것
 

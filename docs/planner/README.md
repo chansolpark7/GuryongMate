@@ -102,11 +102,11 @@
 ```bash
 # worktree 루트 .env: API_PORT=8002, DB_PORT=5434
 docker compose up -d --build
-docker compose run --rm api python -m app.places.ingest load    # 장소 데이터 (스냅샷)
-docker compose run --rm api pytest tests/planner
+# 장소 데이터·임베딩은 docker compose up 시 places-init 이 자동으로 채운다
+docker compose run --rm planner pytest tests/planner
 ```
 
-환경변수 `PLANNER_PLACES_BASE_URL`(기본값 `http://127.0.0.1:8000`, 같은 컨테이너의 API)로 places API 주소를 바꿀 수 있다.
+환경변수 `PLANNER_PLACES_BASE_URL`로 places API 주소를 바꿀 수 있다. compose에서는 게이트웨이(`http://gateway`)로 지정되고, 단독 실행(`SERVICE=all`) 기본값은 `http://127.0.0.1:8000`이다.
 
 ## CLI
 

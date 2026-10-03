@@ -178,30 +178,28 @@ Proposal     { id, reason, diff[ add|remove|move|update ], violations_after[], s
 
 ---
 
-## 7. 저장소 구조 (제안)
+## 7. 저장소 구조
 
-모노레포 하나에서 모듈별 디렉터리로 분리.
+기능별 서비스(컨테이너)로 나뉘고, 게이트웨이 하나로 접속한다. 자세한 규칙·담당·실행 방법은 `docs/COLLABORATION.md`에 있다.
 
 ```
 GuryongMate/
 ├─ PROJECT.md              # 이 문서
-├─ docs/                   # 설계 메모, API 명세, 발표 자료
-│  └─ spikes/              # 검증 실험 결과 정리
-├─ app/                    # Flutter
-│  └─ lib/features/{planner,map,chat,voice,trip}/
-├─ backend/                # FastAPI
+├─ docker-compose.yml      # gateway, db, embedding, places-init, places, planner, agent
+├─ infra/gateway/          # Caddy 설정 (URL 경로 -> 서비스)
+├─ services/embedding/     # 임베딩 모델 서버 (별도 이미지)
+├─ backend/                # FastAPI. 이미지 하나를 SERVICE 환경변수로 서비스별 컨테이너로 띄움
 │  └─ app/
-│     ├─ contracts/        # 공통 Pydantic 모델 (§6)
-│     ├─ planner/          # M1
-│     ├─ agent/            # M4
-│     ├─ trip/             # M5 Travel State & Event
-│     ├─ docent/           # M6
-│     └─ adapters/         # M7 (dt, tour, kakao, weather) + mocks
-├─ data/                   # 구룡포 POI 시드, 해설 corpus
-└─ scripts/                # 시드 적재, 데모 시뮬레이터
+│     ├─ core/             # 공용: 설정, 인증(JWT 검증)
+│     ├─ places/           # 관광지 정보·검색 (M7 데이터 + M6 근거 검색)
+│     ├─ planner/          # M1 Planner
+│     ├─ agent/            # M4 Agent (채팅·도구 실행)
+│     └─ (account/)        # 예정: 로그인·사용자 프로필
+├─ app/                    # Flutter (예정)
+├─ data/places/            # 관광지 스냅샷
+├─ docs/                   # 설계·API 문서, 서비스별 README
+└─ scripts/                # CLI 등
 ```
-
----
 
 ## 8. Git 운영 방식
 

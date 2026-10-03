@@ -1,9 +1,10 @@
 """구룡포 관광 정보 수집 -> DB 적재.
 
 사용법 (docker):
-    docker compose run --rm api python -m app.places.ingest fetch   # API 호출 -> DB + 스냅샷 저장
-    docker compose run --rm api python -m app.places.ingest load    # 커밋된 스냅샷 -> DB (키 불필요)
-    docker compose run --rm api python -m app.places.ingest embed   # 의미 검색용 임베딩 생성 (fetch/load 에 --embed 도 가능)
+    docker compose run --rm places python -m app.places.ingest fetch   # API 호출 -> DB + 스냅샷 저장
+    docker compose run --rm places python -m app.places.ingest load    # 커밋된 스냅샷 -> DB (키 불필요)
+    docker compose run --rm places python -m app.places.ingest embed   # 의미 검색용 임베딩 생성 (fetch/load 에 --embed 도 가능)
+    (docker compose up 시 places-init 이 비어 있으면 load + embed 를 자동 실행한다)
 
 API 원본 응답은 data/places/raw/ 에 캐시되므로, 일일 호출 한도(개발계정 오퍼레이션별 1,000건)에
 걸려 중단돼도 다시 실행하면 이어서 진행된다. 캐시를 무시하려면 --refresh.
@@ -143,7 +144,7 @@ def write_db(data: dict[str, list]) -> None:
 
 
 def embed_db() -> None:
-    """DB 의 장소·이야기를 조각내어 임베딩 (처음 실행 시 모델 다운로드 약 1.1GB)."""
+    """DB 의 장소·이야기를 조각내어 embedding 서비스로 벡터를 만들어 저장."""
     from app.places.embedding import MODEL_NAME, encode_passages
 
     with SessionLocal() as s:
@@ -158,11 +159,27 @@ def embed_db() -> None:
     log.info("임베딩 완료: %d조각", len(chunks))
 
 
+def init_if_empty() -> None:
+    """compose 의 places-init 이 시작할 때 실행. 비어 있는 것만 채우므로 여러 번 실행해도 안전하다."""
+    init_db()
+    with SessionLocal() as s:
+        has_places = s.scalar(select(Place.id).limit(1)) is not None
+        has_chunks = has_places and s.scalar(select(PlaceChunk.id).limit(1)) is not None
+    if not has_places:
+        log.info("장소 데이터 없음 -> 스냅샷 적재")
+        write_db(load_snapshot())
+    if not has_chunks:
+        log.info("임베딩 없음 -> 생성")
+        embed_db()
+    if has_places and has_chunks:
+        log.info("장소·임베딩 이미 있음 -> 건너뜀")
+
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     logging.getLogger("httpx").setLevel(logging.WARNING)  # 요청 URL 에 서비스키가 포함되므로 로그 금지
     ap = argparse.ArgumentParser()
-    ap.add_argument("command", choices=["fetch", "load", "embed"])
+    ap.add_argument("command", choices=["fetch", "load", "embed", "init"])
     ap.add_argument("--embed", action="store_true", help="fetch/load 후 임베딩까지 생성")
     ap.add_argument("--radius", type=int, default=ODII_RADIUS_M, help="오디오 가이드 수집 반경(m)")
     ap.add_argument("--lat", type=float, default=GURYONGPO_CENTER[0])
@@ -172,6 +189,9 @@ def main() -> None:
 
     if args.command == "embed":
         embed_db()
+        return
+    if args.command == "init":
+        init_if_empty()
         return
     if args.command == "load":
         write_db(load_snapshot())

@@ -109,5 +109,5 @@ Git Bash에서 `-m /accept`를 쓸 때는 `MSYS_NO_PATHCONV=1`을 붙여야 한�
 ## 테스트
 
 ```bash
-docker compose run --rm api pytest tests/agent   # 대본대로 움직이는 가짜 LLM. Ollama 없이 돈다
+docker compose run --rm agent pytest tests/agent   # 대본대로 움직이는 가짜 LLM. Ollama 없이 돈다
 ```

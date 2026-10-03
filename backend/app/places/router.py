@@ -6,7 +6,7 @@ from sqlalchemy import ColumnElement, Float, case, cast, func, literal, or_, sel
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.places.embedding import encode_query
+from app.places.embedding import EmbeddingUnavailable, encode_query
 from app.places.models import Place, PlaceChunk, PlaceStory
 from app.places.normalize import query_terms
 from app.places.schemas import Passage, PlaceDetail, PlaceSearchResult, PlaceSummary, Story, TagCount
@@ -47,6 +47,13 @@ def _require_embeddings(db: Session) -> None:
         raise HTTPException(503, "임베딩이 없습니다. `python -m app.places.ingest embed` 를 먼저 실행하세요.")
 
 
+def _query_vector(q: str) -> list[float]:
+    try:
+        return encode_query(q)
+    except EmbeddingUnavailable as e:
+        raise HTTPException(503, str(e)) from e
+
+
 def _keyword_ranked(db: Session, q: str, conds: list, dist) -> list[str]:
     """모든 단어가 (동의어·조사 제거 포함) 어딘가에 들어 있는 장소. 제목에 많이 맞을수록 앞."""
     terms = query_terms(q)
@@ -67,7 +74,7 @@ def _keyword_ranked(db: Session, q: str, conds: list, dist) -> list[str]:
 def _semantic_ranked(db: Session, q: str, conds: list) -> list[tuple[str, float]]:
     """장소별로 가장 가까운 조각(소개문·오디오 가이드 대본)의 코사인 유사도 순."""
     _require_embeddings(db)
-    d = PlaceChunk.embedding.cosine_distance(encode_query(q))
+    d = PlaceChunk.embedding.cosine_distance(_query_vector(q))
     best = (
         select(PlaceChunk.place_id.label("pid"), func.min(d).label("d"))
         .where(PlaceChunk.place_id.is_not(None))
@@ -155,7 +162,7 @@ def search_passages(
     """현장 해설·질의응답의 근거가 될 원문 조각을 의미 유사도 순으로 반환 (RAG 용)."""
     has_point = _check_point(lat, lng, radius_m)
     _require_embeddings(db)
-    sim = (1 - PlaceChunk.embedding.cosine_distance(encode_query(q))).label("score")
+    sim = (1 - PlaceChunk.embedding.cosine_distance(_query_vector(q))).label("score")
     dist = _distance_m(PlaceChunk.lat, PlaceChunk.lng, lat, lng) if has_point else None
     conds = []
     if place_id:
