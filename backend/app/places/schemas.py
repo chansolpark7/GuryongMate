@@ -1,5 +1,5 @@
 """places 모듈의 공개 응답 스키마. 다른 모듈(planner 등)은 이 형태로만 장소 정보를 사용한다."""
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class PlaceSummary(BaseModel):
@@ -16,6 +16,7 @@ class PlaceSummary(BaseModel):
     area: str
     thumbnail_url: str
     distance_m: float | None = None
+    score: float | None = Field(None, description="semantic: 코사인 유사도, hybrid: 순위 결합 점수")
 
 
 class PlaceImage(BaseModel):
@@ -73,3 +74,16 @@ class Story(BaseModel):
 class TagCount(BaseModel):
     tag: str
     count: int
+
+
+class Passage(BaseModel):
+    """RAG 근거 조각. title 은 출처(장소명 또는 '관광지 - 이야기 제목')."""
+
+    id: int
+    kind: str  # place | story
+    place_id: str | None
+    story_id: str | None
+    title: str
+    text: str
+    score: float
+    distance_m: float | None = None

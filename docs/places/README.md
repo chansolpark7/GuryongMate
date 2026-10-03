@@ -19,32 +19,60 @@
 ## 실행
 
 ```bash
-cp backend/.env.example backend/.env       # DATA_GO_KR_SERVICE_KEY 입력
+cp backend/.env.example backend/.env       # DATA_GO_KR_SERVICE_KEY 입력 (load 만 쓸 거면 불필요)
 docker compose up -d --build
-docker compose run --rm api python -m app.places.ingest fetch   # API 수집 -> DB + data/places/snapshot/ 갱신
-docker compose run --rm api python -m app.places.ingest load    # 키 없이 커밋된 스냅샷으로 DB 채우기
+docker compose run --rm api python -m app.places.ingest load    # 커밋된 스냅샷 -> DB (키 불필요)
+docker compose run --rm api python -m app.places.ingest embed   # 의미 검색용 임베딩 생성 (약 3분, 최초 1회 모델 1.1GB 다운로드)
+docker compose run --rm api python -m app.places.ingest fetch   # API 재수집 -> DB + 스냅샷 갱신 (키 필요)
 docker compose run --rm api pytest tests/places
 ```
 
-- 원본 응답은 `data/places/raw/`에 캐시한다(커밋 안 됨). 호출 한도에 걸려 중단돼도 다시 실행하면 이어서 진행된다. 캐시를 무시하려면 `--refresh`를 붙인다.
-- `data/places/snapshot/*.json`은 정규화된 결과이며 커밋한다. 키가 없는 팀원이나 다른 모듈은 `load`로 바로 DB를 채울 수 있다.
+- `load`/`fetch`는 places 테이블을 **새로 만든다**. 스키마가 바뀌어도 이 명령만 다시 실행하면 된다. 임베딩도 지워지므로 필요하면 `--embed`를 붙이거나 `embed`를 다시 실행한다.
+- 원본 응답은 `data/places/raw/`, 임베딩 모델은 `data/places/models/`에 캐시한다. 둘 다 커밋하지 않는다.
+- `data/places/snapshot/*.json`은 정규화된 결과이며 커밋한다.
 
 ## API
 
 | 메서드 | 경로 | 설명 |
 |---|---|---|
-| GET | `/places` | 검색. `q`(키워드: 이름·개요·주소·태그·메뉴), `tags`(반복, 모두 포함), `content_type`, `area`, `lat`+`lng`(+`radius_m`), `limit`, `offset` |
+| GET | `/places` | 장소 검색 (아래 참고) |
+| GET | `/places/passages?q=` | **RAG용 근거 조각** 검색. 소개문·오디오 가이드 대본 조각을 의미 유사도 순으로 반환. `place_id`, `kind`(place/story), `lat`+`lng`+`radius_m`로 범위를 좁힐 수 있음 |
 | GET | `/places/tags` | 태그 목록과 개수 |
 | GET | `/places/{place_id}` | 상세 (운영시간 `open_hours`, 휴무 `rest_date`, 메뉴, 이미지, 반복정보, 원본 `intro`) |
 | GET | `/places/{place_id}/stories` | 해당 장소의 오디오 가이드 이야기 |
-| GET | `/places/stories/near?lat=&lng=&radius_m=` | 현재 위치 주변 이야기 (현장 해설) |
+| GET | `/places/stories/near?lat=&lng=&radius_m=` | 현재 위치 주변 이야기 |
 
+### `GET /places` 검색
+
+필터는 모든 모드에 공통으로 적용된다: `tags`(반복, 모두 포함), `content_type`, `area`, `lat`+`lng`(+`radius_m`), `limit`, `offset`.
+
+| `mode` | 동작 | 예 |
+|---|---|---|
+| `keyword` (기본) | 여러 단어는 모두 포함(AND). 띄어쓰기 무시, 끝 조사 제거, 일부 동의어(맛집→음식점·식당, 숙소→숙박·펜션 …). 이름·분류·태그·주소·메뉴·개요·반복정보 대상. 제목 일치 > 가까운 순 > 유사도 순 | `구룡포 맛집` 16건, `일본인가옥` → 구룡포 일본인 가옥거리 |
+| `semantic` | 질의 문장과 의미가 가까운 순. 장소별 소개문·오디오 가이드 대본 조각 중 가장 가까운 것 기준. `score` = 코사인 유사도 | `일제강점기 근대 역사를 느낄 수 있는 곳` → 일본인 가옥거리, 근대문화역사관 |
+| `hybrid` | keyword 순위와 semantic 순위를 RRF로 결합. 정확한 이름도 맞히고 뜻도 반영 | `과메기` → 과메기 음식점, 과메기문화관, 구룡포항 |
+
+- semantic의 `score`는 e5 모델 특성상 0.80~0.85 사이에 몰려 있다. 절대값보다 **순위**로 쓴다.
 - `place_id` 형식은 `kto-{contentid}`이다. **다른 모듈은 이 ID로만 장소를 참조한다.**
-- 정렬은 제목 키워드 일치 → (위치를 줬으면) 가까운 순 → 제목 유사도(pg_trgm) → 이름순이다.
-- 태그는 콘텐츠 타입(관광지/음식점…), 신분류체계 대·중·소 이름, 읍면(구룡포읍/호미곶면…), `오디오가이드`, `반려동물동반`으로 구성한다.
+
+## 임베딩 (로컬)
+
+- 모델은 `intfloat/multilingual-e5-base`(768차원, CPU)를 쓴다. 장소 소개문은 머리말(이름·분류·읍면)을 붙여 500자 단위로, 오디오 가이드 대본은 100자씩 겹쳐 500자 단위로 자른다. 현재 430조각이다.
+- 실측 값 (Docker Desktop, 12코어)
+
+| 항목 | 값 |
+|---|---|
+| 모델 파일 | 1.1GB (`data/places/models/`) |
+| API 서버 메모리 | 모델 로드 전 약 120MB → **로드 후 약 740MB** |
+| `ingest embed` 최대 메모리 / 소요 | 1.15GB / 약 3분 |
+| 의미 검색 응답 | 첫 호출 12~25초(모델 로드), 이후 **약 50ms** |
+| Docker 이미지 | 약 300MB → 약 2GB (CPU torch 포함) |
+
+- 모델은 semantic/hybrid/passages를 **처음 호출할 때만** 로드한다. keyword 검색만 쓰는 컨테이너는 메모리를 더 쓰지 않는다.
+- Docker Desktop 메모리 한도가 약 3.8GB다. 여러 worktree 스택에서 동시에 의미 검색을 쓰면 각자 약 740MB씩 더 쓴다.
 
 ## 아직 안 한 것
 
-- **임베딩 검색**: DB 이미지에 pgvector가 들어 있다. LLM/임베딩 모델이 정해지면 `place` 테이블에 embedding 컬럼을 추가한다.
 - 운영시간·휴무는 원문 텍스트다. Planner의 결정론적 검증에 쓰려면 구조화(요일·시간 파싱)가 필요하다.
-- 음식점은 KTO 데이터에 없는 곳이 많을 수 있다. Kakao 장소 검색으로 보완할지 검토한다.
+- 전화번호가 `intro`의 문의처 필드에, 요금이 `extra_info`에 흩어져 있다. `tel`/`fee`로 정리해야 한다.
+- 음식점은 KTO 데이터에 없는 곳이 많다. Kakao 장소 검색으로 보완할지 검토한다.

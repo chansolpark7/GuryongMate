@@ -3,6 +3,7 @@
 사용법 (docker):
     docker compose run --rm api python -m app.places.ingest fetch   # API 호출 -> DB + 스냅샷 저장
     docker compose run --rm api python -m app.places.ingest load    # 커밋된 스냅샷 -> DB (키 불필요)
+    docker compose run --rm api python -m app.places.ingest embed   # 의미 검색용 임베딩 생성 (fetch/load 에 --embed 도 가능)
 
 API 원본 응답은 data/places/raw/ 에 캐시되므로, 일일 호출 한도(개발계정 오퍼레이션별 1,000건)에
 걸려 중단돼도 다시 실행하면 이어서 진행된다. 캐시를 무시하려면 --refresh.
@@ -14,14 +15,15 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import delete
+from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 
 from app.core.config import settings
-from app.db import SessionLocal, init_db
+from app.db import Base, SessionLocal, engine, init_db
 from app.places.client import DataGoKrError, TourApiClient
-from app.places.models import Place, PlaceCategory, PlaceStory
-from app.places.normalize import build_place, build_story, fill_missing_areas, match_story_place
+from app.places.models import Place, PlaceCategory, PlaceChunk, PlaceStory
+from app.places.normalize import (build_place, build_search_compact, build_story, fill_missing_areas, match_story_place,
+                                  place_chunks, story_chunks)
 
 log = logging.getLogger("places.ingest")
 
@@ -127,30 +129,54 @@ def _upsert(session, model, rows: list[dict], key: str) -> None:
 
 
 def write_db(data: dict[str, list]) -> None:
+    """places 테이블을 새로 만들고 적재. 전부 스냅샷에서 재생성 가능한 데이터라 스키마 변경 시에도 안전."""
+    tables = [PlaceChunk.__table__, PlaceStory.__table__, Place.__table__, PlaceCategory.__table__]
+    Base.metadata.drop_all(engine, tables=tables)
     init_db()
+    for p in data["places"]:
+        p["search_compact"] = build_search_compact(p)  # 예전 스냅샷 호환
     with SessionLocal.begin() as s:
         _upsert(s, PlaceCategory, data["categories"], "code")
         _upsert(s, Place, data["places"], "id")
-        # 이번 수집 범위 밖으로 빠진 항목 정리
-        s.execute(delete(PlaceStory).where(PlaceStory.id.not_in([r["id"] for r in data["stories"]] or [""])))
-        s.execute(delete(Place).where(Place.source == "kto", Place.id.not_in([r["id"] for r in data["places"]] or [""])))
         _upsert(s, PlaceStory, data["stories"], "id")
     log.info("DB 적재: 장소 %d, 이야기 %d, 분류 %d", len(data["places"]), len(data["stories"]), len(data["categories"]))
+
+
+def embed_db() -> None:
+    """DB 의 장소·이야기를 조각내어 임베딩 (처음 실행 시 모델 다운로드 약 1.1GB)."""
+    from app.places.embedding import MODEL_NAME, encode_passages
+
+    with SessionLocal() as s:
+        places = [{c.name: getattr(p, c.name) for c in Place.__table__.columns} for p in s.scalars(select(Place))]
+        stories = [{c.name: getattr(t, c.name) for c in PlaceStory.__table__.columns} for t in s.scalars(select(PlaceStory))]
+    chunks = [c for p in places for c in place_chunks(p)] + [c for t in stories for c in story_chunks(t)]
+    log.info("임베딩 %d조각 (%s) ...", len(chunks), MODEL_NAME)
+    vectors = encode_passages([c["text"] for c in chunks])
+    with SessionLocal.begin() as s:
+        s.execute(PlaceChunk.__table__.delete())
+        s.execute(insert(PlaceChunk), [{**c, "embedding": v} for c, v in zip(chunks, vectors)])
+    log.info("임베딩 완료: %d조각", len(chunks))
 
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     logging.getLogger("httpx").setLevel(logging.WARNING)  # 요청 URL 에 서비스키가 포함되므로 로그 금지
     ap = argparse.ArgumentParser()
-    ap.add_argument("command", choices=["fetch", "load"])
+    ap.add_argument("command", choices=["fetch", "load", "embed"])
+    ap.add_argument("--embed", action="store_true", help="fetch/load 후 임베딩까지 생성")
     ap.add_argument("--radius", type=int, default=ODII_RADIUS_M, help="오디오 가이드 수집 반경(m)")
     ap.add_argument("--lat", type=float, default=GURYONGPO_CENTER[0])
     ap.add_argument("--lng", type=float, default=GURYONGPO_CENTER[1])
     ap.add_argument("--refresh", action="store_true", help="원본 캐시를 무시하고 다시 호출")
     args = ap.parse_args()
 
+    if args.command == "embed":
+        embed_db()
+        return
     if args.command == "load":
         write_db(load_snapshot())
+        if args.embed:
+            embed_db()
         return
 
     client = TourApiClient(settings.data_go_kr_service_key, settings.mobile_app)
@@ -164,6 +190,8 @@ def main() -> None:
         client.close()
     save_snapshot(data)
     write_db(data)
+    if args.embed:
+        embed_db()
 
 
 if __name__ == "__main__":
