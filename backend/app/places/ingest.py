@@ -21,13 +21,17 @@ from app.core.config import settings
 from app.db import SessionLocal, init_db
 from app.places.client import DataGoKrError, TourApiClient
 from app.places.models import Place, PlaceCategory, PlaceStory
-from app.places.normalize import build_place, build_story, match_story_place
+from app.places.normalize import build_place, build_story, fill_missing_areas, match_story_place
 
 log = logging.getLogger("places.ingest")
 
-# 구룡포항 중심. 반경 12km 이면 구룡포읍 전체와 호미곶(약 10km)까지 포함된다.
+# KTO 데이터가 구룡포 반경 12km 안에 39건뿐이라(2026-10 기준) 포항시 전체를 수집하고,
+# 구룡포 집중은 area(읍면동) 필터나 위치 반경 검색으로 한다.
+POHANG_SIGUNGU = {"47": ["111", "113"]}  # 경상북도: 포항시 남구, 북구 (법정동 코드)
+
+# 오디오 가이드(Odii)는 위치 기반으로만 수집. 구룡포항 중심 20km(API 최대) = 포항 남부 대부분.
 GURYONGPO_CENTER = (35.9890, 129.5560)
-DEFAULT_RADIUS_M = 12_000
+ODII_RADIUS_M = 20_000
 
 DATA_DIR = Path(__file__).resolve().parents[3] / "data" / "places"
 RAW_DIR = DATA_DIR / "raw"
@@ -62,10 +66,14 @@ def parse_categories(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def fetch_all(client: TourApiClient, cache: RawCache, lat: float, lng: float, radius_m: int) -> dict[str, list]:
+    """lat/lng/radius_m 는 오디오 가이드 수집 범위. 장소 목록은 POHANG_SIGUNGU 전체."""
     categories = parse_categories(cache.get_or_fetch("categories", "all", client.category_codes))
     names = {c["code"]: c["name"] for c in categories}
 
-    listings = cache.get_or_fetch("list", f"{lat}_{lng}_{radius_m}", lambda: list(client.location_based(lat, lng, radius_m)))
+    listings = []
+    for regn, signgus in POHANG_SIGUNGU.items():
+        for sg in signgus:
+            listings += cache.get_or_fetch("list", f"area_{regn}_{sg}", lambda: list(client.area_based(regn, sg)))
     log.info("목록 %d건", len(listings))
 
     places = []
@@ -78,6 +86,8 @@ def fetch_all(client: TourApiClient, cache: RawCache, lat: float, lng: float, ra
         places.append(build_place(item, common[0] if common else None, intro[0] if intro else None, images, infos, names))
         if i % 25 == 0:
             log.info("상세 %d/%d (이번 실행 API 호출 %d회)", i, len(listings), client.calls)
+
+    fill_missing_areas(places)
 
     stories = []
     try:
@@ -130,9 +140,10 @@ def write_db(data: dict[str, list]) -> None:
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+    logging.getLogger("httpx").setLevel(logging.WARNING)  # 요청 URL 에 서비스키가 포함되므로 로그 금지
     ap = argparse.ArgumentParser()
     ap.add_argument("command", choices=["fetch", "load"])
-    ap.add_argument("--radius", type=int, default=DEFAULT_RADIUS_M)
+    ap.add_argument("--radius", type=int, default=ODII_RADIUS_M, help="오디오 가이드 수집 반경(m)")
     ap.add_argument("--lat", type=float, default=GURYONGPO_CENTER[0])
     ap.add_argument("--lng", type=float, default=GURYONGPO_CENTER[1])
     ap.add_argument("--refresh", action="store_true", help="원본 캐시를 무시하고 다시 호출")

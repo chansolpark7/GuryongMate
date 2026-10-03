@@ -33,10 +33,16 @@ def parse_response(operation: str, status_code: int, text: str) -> dict[str, Any
         code = _xml_tag(body, "returnReasonCode") or _xml_tag(body, "resultCode") or str(status_code)
         msg = _xml_tag(body, "returnAuthMsg") or _xml_tag(body, "resultMsg") or _xml_tag(body, "errMsg") or body[:200]
         raise DataGoKrError(operation, code, msg)
-    if status_code != 200 or not body.startswith("{"):
+    if not body.startswith("{"):
         raise DataGoKrError(operation, str(status_code), body[:200] or "empty response")
 
     data = json.loads(body)
+    if "OpenAPI_ServiceResponse" in data:  # 게이트웨이 오류의 JSON 형태
+        header = data["OpenAPI_ServiceResponse"].get("cmmMsgHeader", {})
+        raise DataGoKrError(operation, str(header.get("returnReasonCode", status_code)),
+                            header.get("errMsg") or header.get("returnAuthMsg") or "")
+    if status_code != 200:
+        raise DataGoKrError(operation, str(status_code), body[:200])
     response = data.get("response", data)
     header = response.get("header", {})
     code = str(header.get("resultCode", "0000"))
@@ -110,6 +116,9 @@ class TourApiClient:
     # --- KorService2 ---
     def location_based(self, lat: float, lng: float, radius_m: int, **params: Any) -> Iterator[dict[str, Any]]:
         return self.paginate(KOR_SERVICE, "locationBasedList2", mapX=lng, mapY=lat, radius=radius_m, arrange="E", **params)
+
+    def area_based(self, regn_cd: str, signgu_cd: str, **params: Any) -> Iterator[dict[str, Any]]:
+        return self.paginate(KOR_SERVICE, "areaBasedList2", lDongRegnCd=regn_cd, lDongSignguCd=signgu_cd, arrange="C", **params)
 
     def detail(self, operation: str, content_id: str, **params: Any) -> list[dict[str, Any]]:
         return extract_items(self.get(KOR_SERVICE, operation, contentId=content_id, numOfRows=100, pageNo=1, **params))

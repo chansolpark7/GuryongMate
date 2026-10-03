@@ -1,0 +1,1892 @@
+[
+ {
+  "code": "AC",
+  "name": "숙박",
+  "depth": 1,
+  "parent_code": ""
+ },
+ {
+  "code": "AC01",
+  "name": "호텔",
+  "depth": 2,
+  "parent_code": "AC"
+ },
+ {
+  "code": "AC010100",
+  "name": "호텔",
+  "depth": 3,
+  "parent_code": "AC01"
+ },
+ {
+  "code": "AC02",
+  "name": "콘도미니엄",
+  "depth": 2,
+  "parent_code": "AC"
+ },
+ {
+  "code": "AC020100",
+  "name": "콘도",
+  "depth": 3,
+  "parent_code": "AC02"
+ },
+ {
+  "code": "AC020200",
+  "name": "레지던스",
+  "depth": 3,
+  "parent_code": "AC02"
+ },
+ {
+  "code": "AC03",
+  "name": "펜션/민박",
+  "depth": 2,
+  "parent_code": "AC"
+ },
+ {
+  "code": "AC030100",
+  "name": "펜션",
+  "depth": 3,
+  "parent_code": "AC03"
+ },
+ {
+  "code": "AC030200",
+  "name": "한옥스테이",
+  "depth": 3,
+  "parent_code": "AC03"
+ },
+ {
+  "code": "AC030300",
+  "name": "농어촌민박",
+  "depth": 3,
+  "parent_code": "AC03"
+ },
+ {
+  "code": "AC030400",
+  "name": "홈스테이",
+  "depth": 3,
+  "parent_code": "AC03"
+ },
+ {
+  "code": "AC04",
+  "name": "모텔",
+  "depth": 2,
+  "parent_code": "AC"
+ },
+ {
+  "code": "AC040100",
+  "name": "모텔",
+  "depth": 3,
+  "parent_code": "AC04"
+ },
+ {
+  "code": "AC05",
+  "name": "캠핑",
+  "depth": 2,
+  "parent_code": "AC"
+ },
+ {
+  "code": "AC050100",
+  "name": "일반야영장",
+  "depth": 3,
+  "parent_code": "AC05"
+ },
+ {
+  "code": "AC050200",
+  "name": "오토캠핑장",
+  "depth": 3,
+  "parent_code": "AC05"
+ },
+ {
+  "code": "AC050300",
+  "name": "카라반",
+  "depth": 3,
+  "parent_code": "AC05"
+ },
+ {
+  "code": "AC050400",
+  "name": "글램핑장",
+  "depth": 3,
+  "parent_code": "AC05"
+ },
+ {
+  "code": "AC06",
+  "name": "호스텔",
+  "depth": 2,
+  "parent_code": "AC"
+ },
+ {
+  "code": "AC060100",
+  "name": "유스호스텔",
+  "depth": 3,
+  "parent_code": "AC06"
+ },
+ {
+  "code": "AC060200",
+  "name": "게스트하우스",
+  "depth": 3,
+  "parent_code": "AC06"
+ },
+ {
+  "code": "C01",
+  "name": "추천코스",
+  "depth": 1,
+  "parent_code": ""
+ },
+ {
+  "code": "C0112",
+  "name": "가족코스",
+  "depth": 2,
+  "parent_code": "C01"
+ },
+ {
+  "code": "C01120001",
+  "name": "가족코스",
+  "depth": 3,
+  "parent_code": "C0112"
+ },
+ {
+  "code": "C0113",
+  "name": "나홀로코스",
+  "depth": 2,
+  "parent_code": "C01"
+ },
+ {
+  "code": "C01130001",
+  "name": "나홀로코스",
+  "depth": 3,
+  "parent_code": "C0113"
+ },
+ {
+  "code": "C0114",
+  "name": "힐링코스",
+  "depth": 2,
+  "parent_code": "C01"
+ },
+ {
+  "code": "C01140001",
+  "name": "힐링코스",
+  "depth": 3,
+  "parent_code": "C0114"
+ },
+ {
+  "code": "C0115",
+  "name": "도보코스",
+  "depth": 2,
+  "parent_code": "C01"
+ },
+ {
+  "code": "C01150001",
+  "name": "도보코스",
+  "depth": 3,
+  "parent_code": "C0115"
+ },
+ {
+  "code": "C0116",
+  "name": "캠핑코스",
+  "depth": 2,
+  "parent_code": "C01"
+ },
+ {
+  "code": "C01160001",
+  "name": "캠핑코스",
+  "depth": 3,
+  "parent_code": "C0116"
+ },
+ {
+  "code": "C0117",
+  "name": "맛코스",
+  "depth": 2,
+  "parent_code": "C01"
+ },
+ {
+  "code": "C01170001",
+  "name": "맛코스",
+  "depth": 3,
+  "parent_code": "C0117"
+ },
+ {
+  "code": "EV",
+  "name": "축제/공연/행사",
+  "depth": 1,
+  "parent_code": ""
+ },
+ {
+  "code": "EV01",
+  "name": "축제",
+  "depth": 2,
+  "parent_code": "EV"
+ },
+ {
+  "code": "EV010100",
+  "name": "문화관광축제",
+  "depth": 3,
+  "parent_code": "EV01"
+ },
+ {
+  "code": "EV010200",
+  "name": "문화예술축제",
+  "depth": 3,
+  "parent_code": "EV01"
+ },
+ {
+  "code": "EV010300",
+  "name": "지역특산물축제",
+  "depth": 3,
+  "parent_code": "EV01"
+ },
+ {
+  "code": "EV010400",
+  "name": "전통역사축제",
+  "depth": 3,
+  "parent_code": "EV01"
+ },
+ {
+  "code": "EV010500",
+  "name": "생태자연축제",
+  "depth": 3,
+  "parent_code": "EV01"
+ },
+ {
+  "code": "EV010600",
+  "name": "기타축제",
+  "depth": 3,
+  "parent_code": "EV01"
+ },
+ {
+  "code": "EV02",
+  "name": "공연",
+  "depth": 2,
+  "parent_code": "EV"
+ },
+ {
+  "code": "EV020100",
+  "name": "전통공연",
+  "depth": 3,
+  "parent_code": "EV02"
+ },
+ {
+  "code": "EV020200",
+  "name": "연극",
+  "depth": 3,
+  "parent_code": "EV02"
+ },
+ {
+  "code": "EV020300",
+  "name": "뮤지컬",
+  "depth": 3,
+  "parent_code": "EV02"
+ },
+ {
+  "code": "EV020400",
+  "name": "오페라",
+  "depth": 3,
+  "parent_code": "EV02"
+ },
+ {
+  "code": "EV020500",
+  "name": "무용",
+  "depth": 3,
+  "parent_code": "EV02"
+ },
+ {
+  "code": "EV020600",
+  "name": "클래식음악회",
+  "depth": 3,
+  "parent_code": "EV02"
+ },
+ {
+  "code": "EV020700",
+  "name": "대중콘서트",
+  "depth": 3,
+  "parent_code": "EV02"
+ },
+ {
+  "code": "EV020800",
+  "name": "영화",
+  "depth": 3,
+  "parent_code": "EV02"
+ },
+ {
+  "code": "EV020900",
+  "name": "기타공연",
+  "depth": 3,
+  "parent_code": "EV02"
+ },
+ {
+  "code": "EV021000",
+  "name": "넌버벌",
+  "depth": 3,
+  "parent_code": "EV02"
+ },
+ {
+  "code": "EV03",
+  "name": "행사",
+  "depth": 2,
+  "parent_code": "EV"
+ },
+ {
+  "code": "EV030100",
+  "name": "전시회",
+  "depth": 3,
+  "parent_code": "EV03"
+ },
+ {
+  "code": "EV030200",
+  "name": "박람회",
+  "depth": 3,
+  "parent_code": "EV03"
+ },
+ {
+  "code": "EV030300",
+  "name": "스포츠경기",
+  "depth": 3,
+  "parent_code": "EV03"
+ },
+ {
+  "code": "EV030400",
+  "name": "기타행사",
+  "depth": 3,
+  "parent_code": "EV03"
+ },
+ {
+  "code": "EX",
+  "name": "체험관광",
+  "depth": 1,
+  "parent_code": ""
+ },
+ {
+  "code": "EX01",
+  "name": "전통체험",
+  "depth": 2,
+  "parent_code": "EX"
+ },
+ {
+  "code": "EX010100",
+  "name": "전통문화체험",
+  "depth": 3,
+  "parent_code": "EX01"
+ },
+ {
+  "code": "EX02",
+  "name": "공예체험",
+  "depth": 2,
+  "parent_code": "EX"
+ },
+ {
+  "code": "EX020100",
+  "name": "금속공예체험",
+  "depth": 3,
+  "parent_code": "EX02"
+ },
+ {
+  "code": "EX020200",
+  "name": "유리공예체험",
+  "depth": 3,
+  "parent_code": "EX02"
+ },
+ {
+  "code": "EX020300",
+  "name": "가죽공예체험",
+  "depth": 3,
+  "parent_code": "EX02"
+ },
+ {
+  "code": "EX020400",
+  "name": "기타공예체험",
+  "depth": 3,
+  "parent_code": "EX02"
+ },
+ {
+  "code": "EX03",
+  "name": "농.산.어촌 체험",
+  "depth": 2,
+  "parent_code": "EX"
+ },
+ {
+  "code": "EX030100",
+  "name": "체험마을",
+  "depth": 3,
+  "parent_code": "EX03"
+ },
+ {
+  "code": "EX030200",
+  "name": "체험목장",
+  "depth": 3,
+  "parent_code": "EX03"
+ },
+ {
+  "code": "EX030300",
+  "name": "체험농장",
+  "depth": 3,
+  "parent_code": "EX03"
+ },
+ {
+  "code": "EX030400",
+  "name": "체험어장",
+  "depth": 3,
+  "parent_code": "EX03"
+ },
+ {
+  "code": "EX04",
+  "name": "산사체험",
+  "depth": 2,
+  "parent_code": "EX"
+ },
+ {
+  "code": "EX040100",
+  "name": "템플스테이",
+  "depth": 3,
+  "parent_code": "EX04"
+ },
+ {
+  "code": "EX040200",
+  "name": "사찰문화체험",
+  "depth": 3,
+  "parent_code": "EX04"
+ },
+ {
+  "code": "EX05",
+  "name": "웰니스관광",
+  "depth": 2,
+  "parent_code": "EX"
+ },
+ {
+  "code": "EX050100",
+  "name": "온천 / 사우나 / 스파",
+  "depth": 3,
+  "parent_code": "EX05"
+ },
+ {
+  "code": "EX050200",
+  "name": "찜질방",
+  "depth": 3,
+  "parent_code": "EX05"
+ },
+ {
+  "code": "EX050300",
+  "name": "한방체험",
+  "depth": 3,
+  "parent_code": "EX05"
+ },
+ {
+  "code": "EX050400",
+  "name": "힐링명상",
+  "depth": 3,
+  "parent_code": "EX05"
+ },
+ {
+  "code": "EX050500",
+  "name": "뷰티스파",
+  "depth": 3,
+  "parent_code": "EX05"
+ },
+ {
+  "code": "EX050600",
+  "name": "기타웰니스",
+  "depth": 3,
+  "parent_code": "EX05"
+ },
+ {
+  "code": "EX050700",
+  "name": "자연치유",
+  "depth": 3,
+  "parent_code": "EX05"
+ },
+ {
+  "code": "EX050800",
+  "name": "기타의료관광",
+  "depth": 3,
+  "parent_code": "EX05"
+ },
+ {
+  "code": "EX06",
+  "name": "산업관광",
+  "depth": 2,
+  "parent_code": "EX"
+ },
+ {
+  "code": "EX060100",
+  "name": "근대산업유산",
+  "depth": 3,
+  "parent_code": "EX06"
+ },
+ {
+  "code": "EX060200",
+  "name": "게임 등 첨단IT산업",
+  "depth": 3,
+  "parent_code": "EX06"
+ },
+ {
+  "code": "EX060300",
+  "name": "전통/향토산업",
+  "depth": 3,
+  "parent_code": "EX06"
+ },
+ {
+  "code": "EX060400",
+  "name": "문화콘텐츠산업",
+  "depth": 3,
+  "parent_code": "EX06"
+ },
+ {
+  "code": "EX060500",
+  "name": "장수기업/산업테마거리",
+  "depth": 3,
+  "parent_code": "EX06"
+ },
+ {
+  "code": "EX060600",
+  "name": "자동차/조선/철강 등",
+  "depth": 3,
+  "parent_code": "EX06"
+ },
+ {
+  "code": "EX060700",
+  "name": "로봇/항공우주산업",
+  "depth": 3,
+  "parent_code": "EX06"
+ },
+ {
+  "code": "EX060800",
+  "name": "화장품/주류/먹거리",
+  "depth": 3,
+  "parent_code": "EX06"
+ },
+ {
+  "code": "EX060900",
+  "name": "친환경/신재생에너지",
+  "depth": 3,
+  "parent_code": "EX06"
+ },
+ {
+  "code": "EX061000",
+  "name": "기타산업관광지",
+  "depth": 3,
+  "parent_code": "EX06"
+ },
+ {
+  "code": "EX07",
+  "name": "기타체험",
+  "depth": 2,
+  "parent_code": "EX"
+ },
+ {
+  "code": "EX070100",
+  "name": "유람선/잠수함관광",
+  "depth": 3,
+  "parent_code": "EX07"
+ },
+ {
+  "code": "EX070200",
+  "name": "기타체험관광",
+  "depth": 3,
+  "parent_code": "EX07"
+ },
+ {
+  "code": "FD",
+  "name": "음식",
+  "depth": 1,
+  "parent_code": ""
+ },
+ {
+  "code": "FD01",
+  "name": "한식",
+  "depth": 2,
+  "parent_code": "FD"
+ },
+ {
+  "code": "FD010100",
+  "name": "관광식당",
+  "depth": 3,
+  "parent_code": "FD01"
+ },
+ {
+  "code": "FD010200",
+  "name": "모범음식점",
+  "depth": 3,
+  "parent_code": "FD01"
+ },
+ {
+  "code": "FD02",
+  "name": "외국식",
+  "depth": 2,
+  "parent_code": "FD"
+ },
+ {
+  "code": "FD020100",
+  "name": "중식",
+  "depth": 3,
+  "parent_code": "FD02"
+ },
+ {
+  "code": "FD020200",
+  "name": "일식",
+  "depth": 3,
+  "parent_code": "FD02"
+ },
+ {
+  "code": "FD020300",
+  "name": "서양식",
+  "depth": 3,
+  "parent_code": "FD02"
+ },
+ {
+  "code": "FD020400",
+  "name": "기타외국식",
+  "depth": 3,
+  "parent_code": "FD02"
+ },
+ {
+  "code": "FD020500",
+  "name": "퓨전음식",
+  "depth": 3,
+  "parent_code": "FD02"
+ },
+ {
+  "code": "FD03",
+  "name": "간이음식",
+  "depth": 2,
+  "parent_code": "FD"
+ },
+ {
+  "code": "FD030100",
+  "name": "제과",
+  "depth": 3,
+  "parent_code": "FD03"
+ },
+ {
+  "code": "FD030200",
+  "name": "피자, 햄버거, 샌드위치 및 유사음식",
+  "depth": 3,
+  "parent_code": "FD03"
+ },
+ {
+  "code": "FD030300",
+  "name": "치킨",
+  "depth": 3,
+  "parent_code": "FD03"
+ },
+ {
+  "code": "FD030400",
+  "name": "김밥 분식",
+  "depth": 3,
+  "parent_code": "FD03"
+ },
+ {
+  "code": "FD030500",
+  "name": "이동음식",
+  "depth": 3,
+  "parent_code": "FD03"
+ },
+ {
+  "code": "FD030600",
+  "name": "기타간이음식",
+  "depth": 3,
+  "parent_code": "FD03"
+ },
+ {
+  "code": "FD04",
+  "name": "주점",
+  "depth": 2,
+  "parent_code": "FD"
+ },
+ {
+  "code": "FD040100",
+  "name": "바/펍",
+  "depth": 3,
+  "parent_code": "FD04"
+ },
+ {
+  "code": "FD040200",
+  "name": "생맥주전문점",
+  "depth": 3,
+  "parent_code": "FD04"
+ },
+ {
+  "code": "FD040300",
+  "name": "클럽",
+  "depth": 3,
+  "parent_code": "FD04"
+ },
+ {
+  "code": "FD040400",
+  "name": "전통주/민속주점",
+  "depth": 3,
+  "parent_code": "FD04"
+ },
+ {
+  "code": "FD040500",
+  "name": "기타주점",
+  "depth": 3,
+  "parent_code": "FD04"
+ },
+ {
+  "code": "FD05",
+  "name": "카페/ 찻집",
+  "depth": 2,
+  "parent_code": "FD"
+ },
+ {
+  "code": "FD050100",
+  "name": "카페",
+  "depth": 3,
+  "parent_code": "FD05"
+ },
+ {
+  "code": "FD050200",
+  "name": "찻집",
+  "depth": 3,
+  "parent_code": "FD05"
+ },
+ {
+  "code": "FD050300",
+  "name": "기타음료점",
+  "depth": 3,
+  "parent_code": "FD05"
+ },
+ {
+  "code": "HS",
+  "name": "역사관광",
+  "depth": 1,
+  "parent_code": ""
+ },
+ {
+  "code": "HS01",
+  "name": "역사유적지",
+  "depth": 2,
+  "parent_code": "HS"
+ },
+ {
+  "code": "HS010100",
+  "name": "고궁",
+  "depth": 3,
+  "parent_code": "HS01"
+ },
+ {
+  "code": "HS010200",
+  "name": "성ㆍ산성ㆍ성곽",
+  "depth": 3,
+  "parent_code": "HS01"
+ },
+ {
+  "code": "HS010300",
+  "name": "문",
+  "depth": 3,
+  "parent_code": "HS01"
+ },
+ {
+  "code": "HS010400",
+  "name": "고택",
+  "depth": 3,
+  "parent_code": "HS01"
+ },
+ {
+  "code": "HS010500",
+  "name": "생가",
+  "depth": 3,
+  "parent_code": "HS01"
+ },
+ {
+  "code": "HS010600",
+  "name": "민속마을",
+  "depth": 3,
+  "parent_code": "HS01"
+ },
+ {
+  "code": "HS010700",
+  "name": "사적지",
+  "depth": 3,
+  "parent_code": "HS01"
+ },
+ {
+  "code": "HS010800",
+  "name": "고분, 능",
+  "depth": 3,
+  "parent_code": "HS01"
+ },
+ {
+  "code": "HS010900",
+  "name": "사당",
+  "depth": 3,
+  "parent_code": "HS01"
+ },
+ {
+  "code": "HS011000",
+  "name": "선사유적지",
+  "depth": 3,
+  "parent_code": "HS01"
+ },
+ {
+  "code": "HS011100",
+  "name": "근대건축물",
+  "depth": 3,
+  "parent_code": "HS01"
+ },
+ {
+  "code": "HS011200",
+  "name": "기타역사유적지",
+  "depth": 3,
+  "parent_code": "HS01"
+ },
+ {
+  "code": "HS02",
+  "name": "역사유물",
+  "depth": 2,
+  "parent_code": "HS"
+ },
+ {
+  "code": "HS020100",
+  "name": "탑ㆍ비석ㆍ기념탑",
+  "depth": 3,
+  "parent_code": "HS02"
+ },
+ {
+  "code": "HS020200",
+  "name": "선사유물",
+  "depth": 3,
+  "parent_code": "HS02"
+ },
+ {
+  "code": "HS020300",
+  "name": "불상",
+  "depth": 3,
+  "parent_code": "HS02"
+ },
+ {
+  "code": "HS020400",
+  "name": "기타역사유물",
+  "depth": 3,
+  "parent_code": "HS02"
+ },
+ {
+  "code": "HS03",
+  "name": "종교성지",
+  "depth": 2,
+  "parent_code": "HS"
+ },
+ {
+  "code": "HS030100",
+  "name": "불교",
+  "depth": 3,
+  "parent_code": "HS03"
+ },
+ {
+  "code": "HS030200",
+  "name": "기독교",
+  "depth": 3,
+  "parent_code": "HS03"
+ },
+ {
+  "code": "HS030300",
+  "name": "이슬람",
+  "depth": 3,
+  "parent_code": "HS03"
+ },
+ {
+  "code": "HS030400",
+  "name": "기타 종교성지",
+  "depth": 3,
+  "parent_code": "HS03"
+ },
+ {
+  "code": "HS04",
+  "name": "안보관광지",
+  "depth": 2,
+  "parent_code": "HS"
+ },
+ {
+  "code": "HS040100",
+  "name": "안보유적지",
+  "depth": 3,
+  "parent_code": "HS04"
+ },
+ {
+  "code": "HS040200",
+  "name": "안보관광시설",
+  "depth": 3,
+  "parent_code": "HS04"
+ },
+ {
+  "code": "HS040300",
+  "name": "북한관광지",
+  "depth": 3,
+  "parent_code": "HS04"
+ },
+ {
+  "code": "HS040400",
+  "name": "기타안보관광지",
+  "depth": 3,
+  "parent_code": "HS04"
+ },
+ {
+  "code": "LS",
+  "name": "레저스포츠",
+  "depth": 1,
+  "parent_code": ""
+ },
+ {
+  "code": "LS01",
+  "name": "육상레저스포츠",
+  "depth": 2,
+  "parent_code": "LS"
+ },
+ {
+  "code": "LS010100",
+  "name": "인라인(실내 인라인 포함)",
+  "depth": 3,
+  "parent_code": "LS01"
+ },
+ {
+  "code": "LS010200",
+  "name": "자전거하이킹",
+  "depth": 3,
+  "parent_code": "LS01"
+ },
+ {
+  "code": "LS010300",
+  "name": "카트",
+  "depth": 3,
+  "parent_code": "LS01"
+ },
+ {
+  "code": "LS010400",
+  "name": "골프",
+  "depth": 3,
+  "parent_code": "LS01"
+ },
+ {
+  "code": "LS010500",
+  "name": "경마",
+  "depth": 3,
+  "parent_code": "LS01"
+ },
+ {
+  "code": "LS010600",
+  "name": "경륜",
+  "depth": 3,
+  "parent_code": "LS01"
+ },
+ {
+  "code": "LS010700",
+  "name": "승마",
+  "depth": 3,
+  "parent_code": "LS01"
+ },
+ {
+  "code": "LS010800",
+  "name": "스키/스노보드",
+  "depth": 3,
+  "parent_code": "LS01"
+ },
+ {
+  "code": "LS010900",
+  "name": "스케이트",
+  "depth": 3,
+  "parent_code": "LS01"
+ },
+ {
+  "code": "LS011000",
+  "name": "썰매장",
+  "depth": 3,
+  "parent_code": "LS01"
+ },
+ {
+  "code": "LS011100",
+  "name": "수렵장",
+  "depth": 3,
+  "parent_code": "LS01"
+ },
+ {
+  "code": "LS011200",
+  "name": "사격장",
+  "depth": 3,
+  "parent_code": "LS01"
+ },
+ {
+  "code": "LS011300",
+  "name": "암벽등반",
+  "depth": 3,
+  "parent_code": "LS01"
+ },
+ {
+  "code": "LS011400",
+  "name": "서바이벌게임",
+  "depth": 3,
+  "parent_code": "LS01"
+ },
+ {
+  "code": "LS011500",
+  "name": "ATV",
+  "depth": 3,
+  "parent_code": "LS01"
+ },
+ {
+  "code": "LS011600",
+  "name": "MTB",
+  "depth": 3,
+  "parent_code": "LS01"
+ },
+ {
+  "code": "LS011700",
+  "name": "오프로드",
+  "depth": 3,
+  "parent_code": "LS01"
+ },
+ {
+  "code": "LS011800",
+  "name": "번지점프",
+  "depth": 3,
+  "parent_code": "LS01"
+ },
+ {
+  "code": "LS011900",
+  "name": "기타육상레저스포츠",
+  "depth": 3,
+  "parent_code": "LS01"
+ },
+ {
+  "code": "LS02",
+  "name": "수상레저스포츠",
+  "depth": 2,
+  "parent_code": "LS"
+ },
+ {
+  "code": "LS020100",
+  "name": "윈드서핑/제트스키",
+  "depth": 3,
+  "parent_code": "LS02"
+ },
+ {
+  "code": "LS020200",
+  "name": "카약/카누",
+  "depth": 3,
+  "parent_code": "LS02"
+ },
+ {
+  "code": "LS020300",
+  "name": "요트",
+  "depth": 3,
+  "parent_code": "LS02"
+ },
+ {
+  "code": "LS020400",
+  "name": "스노쿨링/스킨스쿠버다이빙",
+  "depth": 3,
+  "parent_code": "LS02"
+ },
+ {
+  "code": "LS020500",
+  "name": "민물낚시",
+  "depth": 3,
+  "parent_code": "LS02"
+ },
+ {
+  "code": "LS020600",
+  "name": "바다낚시",
+  "depth": 3,
+  "parent_code": "LS02"
+ },
+ {
+  "code": "LS020700",
+  "name": "수영",
+  "depth": 3,
+  "parent_code": "LS02"
+ },
+ {
+  "code": "LS020800",
+  "name": "래프팅",
+  "depth": 3,
+  "parent_code": "LS02"
+ },
+ {
+  "code": "LS020900",
+  "name": "수상오토바이",
+  "depth": 3,
+  "parent_code": "LS02"
+ },
+ {
+  "code": "LS021000",
+  "name": "수상자전거",
+  "depth": 3,
+  "parent_code": "LS02"
+ },
+ {
+  "code": "LS021100",
+  "name": "조정",
+  "depth": 3,
+  "parent_code": "LS02"
+ },
+ {
+  "code": "LS021200",
+  "name": "워터슬레드",
+  "depth": 3,
+  "parent_code": "LS02"
+ },
+ {
+  "code": "LS021300",
+  "name": "패러세일",
+  "depth": 3,
+  "parent_code": "LS02"
+ },
+ {
+  "code": "LS021400",
+  "name": "기타수상레저스포츠",
+  "depth": 3,
+  "parent_code": "LS02"
+ },
+ {
+  "code": "LS03",
+  "name": "항공레저스포츠",
+  "depth": 2,
+  "parent_code": "LS"
+ },
+ {
+  "code": "LS030100",
+  "name": "스카이다이빙",
+  "depth": 3,
+  "parent_code": "LS03"
+ },
+ {
+  "code": "LS030200",
+  "name": "초경량비행",
+  "depth": 3,
+  "parent_code": "LS03"
+ },
+ {
+  "code": "LS030300",
+  "name": "헹글라이딩/패러글라이딩",
+  "depth": 3,
+  "parent_code": "LS03"
+ },
+ {
+  "code": "LS030400",
+  "name": "열기구",
+  "depth": 3,
+  "parent_code": "LS03"
+ },
+ {
+  "code": "LS030500",
+  "name": "무인비행장치(드론)",
+  "depth": 3,
+  "parent_code": "LS03"
+ },
+ {
+  "code": "LS030600",
+  "name": "기타항공레저스포츠",
+  "depth": 3,
+  "parent_code": "LS03"
+ },
+ {
+  "code": "LS04",
+  "name": "복합레저스포츠",
+  "depth": 2,
+  "parent_code": "LS"
+ },
+ {
+  "code": "LS040100",
+  "name": "복합레저스포츠",
+  "depth": 3,
+  "parent_code": "LS04"
+ },
+ {
+  "code": "NA",
+  "name": "자연관광",
+  "depth": 1,
+  "parent_code": ""
+ },
+ {
+  "code": "NA01",
+  "name": "자연경관(산)",
+  "depth": 2,
+  "parent_code": "NA"
+ },
+ {
+  "code": "NA010100",
+  "name": "산, 고개, 오름, 봉우리",
+  "depth": 3,
+  "parent_code": "NA01"
+ },
+ {
+  "code": "NA010200",
+  "name": "숲",
+  "depth": 3,
+  "parent_code": "NA01"
+ },
+ {
+  "code": "NA010300",
+  "name": "폭포",
+  "depth": 3,
+  "parent_code": "NA01"
+ },
+ {
+  "code": "NA010400",
+  "name": "계곡",
+  "depth": 3,
+  "parent_code": "NA01"
+ },
+ {
+  "code": "NA010500",
+  "name": "약수터",
+  "depth": 3,
+  "parent_code": "NA01"
+ },
+ {
+  "code": "NA02",
+  "name": "자연경관(하천‧해양)",
+  "depth": 2,
+  "parent_code": "NA"
+ },
+ {
+  "code": "NA020100",
+  "name": "강",
+  "depth": 3,
+  "parent_code": "NA02"
+ },
+ {
+  "code": "NA020200",
+  "name": "호수",
+  "depth": 3,
+  "parent_code": "NA02"
+ },
+ {
+  "code": "NA020300",
+  "name": "저수지",
+  "depth": 3,
+  "parent_code": "NA02"
+ },
+ {
+  "code": "NA020400",
+  "name": "연못·늪",
+  "depth": 3,
+  "parent_code": "NA02"
+ },
+ {
+  "code": "NA020500",
+  "name": "섬",
+  "depth": 3,
+  "parent_code": "NA02"
+ },
+ {
+  "code": "NA020600",
+  "name": "염전",
+  "depth": 3,
+  "parent_code": "NA02"
+ },
+ {
+  "code": "NA020700",
+  "name": "항구/포구",
+  "depth": 3,
+  "parent_code": "NA02"
+ },
+ {
+  "code": "NA020800",
+  "name": "해안절경",
+  "depth": 3,
+  "parent_code": "NA02"
+ },
+ {
+  "code": "NA020900",
+  "name": "해변. 해수욕장",
+  "depth": 3,
+  "parent_code": "NA02"
+ },
+ {
+  "code": "NA03",
+  "name": "자연생태",
+  "depth": 2,
+  "parent_code": "NA"
+ },
+ {
+  "code": "NA030100",
+  "name": "동굴",
+  "depth": 3,
+  "parent_code": "NA03"
+ },
+ {
+  "code": "NA030200",
+  "name": "희귀동.식물",
+  "depth": 3,
+  "parent_code": "NA03"
+ },
+ {
+  "code": "NA030300",
+  "name": "기암괴석",
+  "depth": 3,
+  "parent_code": "NA03"
+ },
+ {
+  "code": "NA030400",
+  "name": "생태습지",
+  "depth": 3,
+  "parent_code": "NA03"
+ },
+ {
+  "code": "NA030500",
+  "name": "기타자연생태",
+  "depth": 3,
+  "parent_code": "NA03"
+ },
+ {
+  "code": "NA04",
+  "name": "자연공원",
+  "depth": 2,
+  "parent_code": "NA"
+ },
+ {
+  "code": "NA040100",
+  "name": "국립공원",
+  "depth": 3,
+  "parent_code": "NA04"
+ },
+ {
+  "code": "NA040200",
+  "name": "도립공원",
+  "depth": 3,
+  "parent_code": "NA04"
+ },
+ {
+  "code": "NA040300",
+  "name": "군립공원",
+  "depth": 3,
+  "parent_code": "NA04"
+ },
+ {
+  "code": "NA040400",
+  "name": "지질공원",
+  "depth": 3,
+  "parent_code": "NA04"
+ },
+ {
+  "code": "NA040500",
+  "name": "생태관광지",
+  "depth": 3,
+  "parent_code": "NA04"
+ },
+ {
+  "code": "NA040600",
+  "name": "자연휴양림",
+  "depth": 3,
+  "parent_code": "NA04"
+ },
+ {
+  "code": "NA040700",
+  "name": "수목원ㆍ정원",
+  "depth": 3,
+  "parent_code": "NA04"
+ },
+ {
+  "code": "NA05",
+  "name": "기타자연관광",
+  "depth": 2,
+  "parent_code": "NA"
+ },
+ {
+  "code": "NA050100",
+  "name": "기타자연관광",
+  "depth": 3,
+  "parent_code": "NA05"
+ },
+ {
+  "code": "SH",
+  "name": "쇼핑",
+  "depth": 1,
+  "parent_code": ""
+ },
+ {
+  "code": "SH01",
+  "name": "백화점",
+  "depth": 2,
+  "parent_code": "SH"
+ },
+ {
+  "code": "SH010100",
+  "name": "백화점",
+  "depth": 3,
+  "parent_code": "SH01"
+ },
+ {
+  "code": "SH02",
+  "name": "쇼핑몰",
+  "depth": 2,
+  "parent_code": "SH"
+ },
+ {
+  "code": "SH020100",
+  "name": "복합쇼핑몰",
+  "depth": 3,
+  "parent_code": "SH02"
+ },
+ {
+  "code": "SH020200",
+  "name": "아웃렛",
+  "depth": 3,
+  "parent_code": "SH02"
+ },
+ {
+  "code": "SH03",
+  "name": "대형마트",
+  "depth": 2,
+  "parent_code": "SH"
+ },
+ {
+  "code": "SH030100",
+  "name": "대형마트",
+  "depth": 3,
+  "parent_code": "SH03"
+ },
+ {
+  "code": "SH04",
+  "name": "면세점",
+  "depth": 2,
+  "parent_code": "SH"
+ },
+ {
+  "code": "SH040100",
+  "name": "공항면세점",
+  "depth": 3,
+  "parent_code": "SH04"
+ },
+ {
+  "code": "SH040200",
+  "name": "시내면세점",
+  "depth": 3,
+  "parent_code": "SH04"
+ },
+ {
+  "code": "SH040300",
+  "name": "사후면세점",
+  "depth": 3,
+  "parent_code": "SH04"
+ },
+ {
+  "code": "SH05",
+  "name": "전문매장/상가",
+  "depth": 2,
+  "parent_code": "SH"
+ },
+ {
+  "code": "SH050100",
+  "name": "공방/공예품점",
+  "depth": 3,
+  "parent_code": "SH05"
+ },
+ {
+  "code": "SH050200",
+  "name": "전문상가",
+  "depth": 3,
+  "parent_code": "SH05"
+ },
+ {
+  "code": "SH050300",
+  "name": "관광기념품/특산물판매점",
+  "depth": 3,
+  "parent_code": "SH05"
+ },
+ {
+  "code": "SH06",
+  "name": "시장",
+  "depth": 2,
+  "parent_code": "SH"
+ },
+ {
+  "code": "SH060100",
+  "name": "비상설시장",
+  "depth": 3,
+  "parent_code": "SH06"
+ },
+ {
+  "code": "SH060200",
+  "name": "상설시장",
+  "depth": 3,
+  "parent_code": "SH06"
+ },
+ {
+  "code": "SH07",
+  "name": "기타쇼핑시설",
+  "depth": 2,
+  "parent_code": "SH"
+ },
+ {
+  "code": "SH070100",
+  "name": "기타쇼핑시설",
+  "depth": 3,
+  "parent_code": "SH07"
+ },
+ {
+  "code": "VE",
+  "name": "문화관광",
+  "depth": 1,
+  "parent_code": ""
+ },
+ {
+  "code": "VE01",
+  "name": "랜드마크관광",
+  "depth": 2,
+  "parent_code": "VE"
+ },
+ {
+  "code": "VE010100",
+  "name": "건물",
+  "depth": 3,
+  "parent_code": "VE01"
+ },
+ {
+  "code": "VE010200",
+  "name": "타워 / 전망대",
+  "depth": 3,
+  "parent_code": "VE01"
+ },
+ {
+  "code": "VE010300",
+  "name": "다리 / 대교",
+  "depth": 3,
+  "parent_code": "VE01"
+ },
+ {
+  "code": "VE010400",
+  "name": "분수",
+  "depth": 3,
+  "parent_code": "VE01"
+ },
+ {
+  "code": "VE010500",
+  "name": "동상",
+  "depth": 3,
+  "parent_code": "VE01"
+ },
+ {
+  "code": "VE010600",
+  "name": "터널",
+  "depth": 3,
+  "parent_code": "VE01"
+ },
+ {
+  "code": "VE010700",
+  "name": "댐",
+  "depth": 3,
+  "parent_code": "VE01"
+ },
+ {
+  "code": "VE010800",
+  "name": "등대",
+  "depth": 3,
+  "parent_code": "VE01"
+ },
+ {
+  "code": "VE010900",
+  "name": "기타 건축/조형물",
+  "depth": 3,
+  "parent_code": "VE01"
+ },
+ {
+  "code": "VE02",
+  "name": "테마공원",
+  "depth": 2,
+  "parent_code": "VE"
+ },
+ {
+  "code": "VE020100",
+  "name": "테마파크",
+  "depth": 3,
+  "parent_code": "VE02"
+ },
+ {
+  "code": "VE020200",
+  "name": "워터파크",
+  "depth": 3,
+  "parent_code": "VE02"
+ },
+ {
+  "code": "VE020300",
+  "name": "동물원",
+  "depth": 3,
+  "parent_code": "VE02"
+ },
+ {
+  "code": "VE020400",
+  "name": "수족관 / 아쿠라리움",
+  "depth": 3,
+  "parent_code": "VE02"
+ },
+ {
+  "code": "VE020500",
+  "name": "천문대",
+  "depth": 3,
+  "parent_code": "VE02"
+ },
+ {
+  "code": "VE03",
+  "name": "도시공원",
+  "depth": 2,
+  "parent_code": "VE"
+ },
+ {
+  "code": "VE030100",
+  "name": "시민공원",
+  "depth": 3,
+  "parent_code": "VE03"
+ },
+ {
+  "code": "VE030200",
+  "name": "소공원",
+  "depth": 3,
+  "parent_code": "VE03"
+ },
+ {
+  "code": "VE030300",
+  "name": "어린이공원",
+  "depth": 3,
+  "parent_code": "VE03"
+ },
+ {
+  "code": "VE030400",
+  "name": "근린공원",
+  "depth": 3,
+  "parent_code": "VE03"
+ },
+ {
+  "code": "VE030500",
+  "name": "주제공원",
+  "depth": 3,
+  "parent_code": "VE03"
+ },
+ {
+  "code": "VE04",
+  "name": "도시.지역문화관광",
+  "depth": 2,
+  "parent_code": "VE"
+ },
+ {
+  "code": "VE040100",
+  "name": "골목길, 문화거리",
+  "depth": 3,
+  "parent_code": "VE04"
+ },
+ {
+  "code": "VE040200",
+  "name": "마을관광지",
+  "depth": 3,
+  "parent_code": "VE04"
+ },
+ {
+  "code": "VE040300",
+  "name": "둘레길",
+  "depth": 3,
+  "parent_code": "VE04"
+ },
+ {
+  "code": "VE05",
+  "name": "복합관광시설",
+  "depth": 2,
+  "parent_code": "VE"
+ },
+ {
+  "code": "VE050100",
+  "name": "관광단지",
+  "depth": 3,
+  "parent_code": "VE05"
+ },
+ {
+  "code": "VE050200",
+  "name": "리조트",
+  "depth": 3,
+  "parent_code": "VE05"
+ },
+ {
+  "code": "VE06",
+  "name": "공연시설",
+  "depth": 2,
+  "parent_code": "VE"
+ },
+ {
+  "code": "VE060100",
+  "name": "공연장",
+  "depth": 3,
+  "parent_code": "VE06"
+ },
+ {
+  "code": "VE060200",
+  "name": "영화관",
+  "depth": 3,
+  "parent_code": "VE06"
+ },
+ {
+  "code": "VE07",
+  "name": "전시시설",
+  "depth": 2,
+  "parent_code": "VE"
+ },
+ {
+  "code": "VE070100",
+  "name": "박물관",
+  "depth": 3,
+  "parent_code": "VE07"
+ },
+ {
+  "code": "VE070200",
+  "name": "기념관",
+  "depth": 3,
+  "parent_code": "VE07"
+ },
+ {
+  "code": "VE070300",
+  "name": "전시관",
+  "depth": 3,
+  "parent_code": "VE07"
+ },
+ {
+  "code": "VE070400",
+  "name": "컨벤션센터",
+  "depth": 3,
+  "parent_code": "VE07"
+ },
+ {
+  "code": "VE070500",
+  "name": "과학관",
+  "depth": 3,
+  "parent_code": "VE07"
+ },
+ {
+  "code": "VE070600",
+  "name": "미술관/화랑",
+  "depth": 3,
+  "parent_code": "VE07"
+ },
+ {
+  "code": "VE08",
+  "name": "행사시설",
+  "depth": 2,
+  "parent_code": "VE"
+ },
+ {
+  "code": "VE080600",
+  "name": "연회장",
+  "depth": 3,
+  "parent_code": "VE08"
+ },
+ {
+  "code": "VE09",
+  "name": "교육시설",
+  "depth": 2,
+  "parent_code": "VE"
+ },
+ {
+  "code": "VE090100",
+  "name": "한국문화원",
+  "depth": 3,
+  "parent_code": "VE09"
+ },
+ {
+  "code": "VE090200",
+  "name": "외국문화원",
+  "depth": 3,
+  "parent_code": "VE09"
+ },
+ {
+  "code": "VE090300",
+  "name": "도서관",
+  "depth": 3,
+  "parent_code": "VE09"
+ },
+ {
+  "code": "VE090400",
+  "name": "문화전수시설",
+  "depth": 3,
+  "parent_code": "VE09"
+ },
+ {
+  "code": "VE090500",
+  "name": "어학당",
+  "depth": 3,
+  "parent_code": "VE09"
+ },
+ {
+  "code": "VE090600",
+  "name": "학교",
+  "depth": 3,
+  "parent_code": "VE09"
+ },
+ {
+  "code": "VE10",
+  "name": "레저스포츠시설",
+  "depth": 2,
+  "parent_code": "VE"
+ },
+ {
+  "code": "VE100100",
+  "name": "스포츠경기장",
+  "depth": 3,
+  "parent_code": "VE10"
+ },
+ {
+  "code": "VE100200",
+  "name": "스포츠센터, 수련시설",
+  "depth": 3,
+  "parent_code": "VE10"
+ },
+ {
+  "code": "VE11",
+  "name": "교통시설",
+  "depth": 2,
+  "parent_code": "VE"
+ },
+ {
+  "code": "VE110100",
+  "name": "공항",
+  "depth": 3,
+  "parent_code": "VE11"
+ },
+ {
+  "code": "VE110200",
+  "name": "기차역",
+  "depth": 3,
+  "parent_code": "VE11"
+ },
+ {
+  "code": "VE110300",
+  "name": "버스터미널",
+  "depth": 3,
+  "parent_code": "VE11"
+ },
+ {
+  "code": "VE110400",
+  "name": "여객선터미널",
+  "depth": 3,
+  "parent_code": "VE11"
+ },
+ {
+  "code": "VE110500",
+  "name": "고속도로휴게소",
+  "depth": 3,
+  "parent_code": "VE11"
+ },
+ {
+  "code": "VE110600",
+  "name": "지하철",
+  "depth": 3,
+  "parent_code": "VE11"
+ },
+ {
+  "code": "VE12",
+  "name": "기타문화관광지",
+  "depth": 2,
+  "parent_code": "VE"
+ },
+ {
+  "code": "VE120100",
+  "name": "서점",
+  "depth": 3,
+  "parent_code": "VE12"
+ },
+ {
+  "code": "VE120200",
+  "name": "카지노",
+  "depth": 3,
+  "parent_code": "VE12"
+ },
+ {
+  "code": "VE120300",
+  "name": "기타문화시설",
+  "depth": 3,
+  "parent_code": "VE12"
+ }
+]

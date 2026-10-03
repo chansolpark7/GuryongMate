@@ -2,7 +2,8 @@ import pytest
 
 from app.places.client import DataGoKrError, extract_items, parse_response
 from app.places.ingest import parse_categories
-from app.places.normalize import build_place, build_story, clean_text, extract_area, extract_homepage, match_story_place
+from app.places.normalize import (build_place, build_story, clean_text, extract_area, extract_homepage, fill_missing_areas,
+                                  match_story_place)
 
 LISTING = {
     "contentid": "126128",
@@ -40,7 +41,16 @@ def test_clean_text_and_homepage():
 def test_extract_area():
     assert extract_area("경상북도 포항시 남구 구룡포읍 구룡포길 153-1") == "구룡포읍"
     assert extract_area("경상북도 포항시 남구 호미곶면 해맞이로 150") == "호미곶면"
+    assert extract_area("경상북도 포항시 남구 운하로251번길 34-1 (송도동)") == "송도동"
     assert extract_area("부산광역시 사하구") == ""
+
+
+def test_fill_missing_areas():
+    a = {"area": "구룡포읍", "lat": 35.9880, "lng": 129.5570, "tags": []}
+    b = {"area": "", "lat": 35.9900, "lng": 129.5560, "tags": []}  # 약 240m
+    c = {"area": "", "lat": 36.2000, "lng": 129.3000, "tags": []}  # 멀리
+    fill_missing_areas([a, b, c])
+    assert (b["area"], b["tags"], c["area"]) == ("구룡포읍", ["구룡포읍"], "")
 
 
 def test_build_place():
@@ -83,6 +93,10 @@ def test_parse_response_errors():
            "</cmmMsgHeader></OpenAPI_ServiceResponse>")
     with pytest.raises(DataGoKrError) as e:
         parse_response("op", 200, xml)
+    assert e.value.code == "30"
+    with pytest.raises(DataGoKrError) as e:
+        parse_response("op", 403, '{"OpenAPI_ServiceResponse":{"cmmMsgHeader":{"errMsg":"SERVICE_KEY_IS_NOT_REGISTERED_ERROR",'
+                                  '"returnReasonCode":"30"}}}')
     assert e.value.code == "30"
     with pytest.raises(DataGoKrError):
         parse_response("op", 401, "Unauthorized")

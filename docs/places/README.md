@@ -6,11 +6,13 @@
 
 | 소스 | 서비스 (data.go.kr) | 사용하는 오퍼레이션 | 용도 |
 |---|---|---|---|
-| 한국관광공사 국문 관광정보 | [KorService2 (15101578)](https://www.data.go.kr/data/15101578/openapi.do) | `locationBasedList2`, `detailCommon2`, `detailIntro2`, `detailImage2`, `detailInfo2`, `lclsSystmCode2` | 장소 목록·개요·운영시간·휴무·메뉴·이미지·분류 |
+| 한국관광공사 국문 관광정보 | [KorService2 (15101578)](https://www.data.go.kr/data/15101578/openapi.do) | `areaBasedList2`, `detailCommon2`, `detailIntro2`, `detailImage2`, `detailInfo2`, `lclsSystmCode2` | 장소 목록·개요·운영시간·휴무·메뉴·이미지·분류 |
 | 한국관광공사 오디오 가이드 Odii (콘텐츠랩 api.visitkorea.or.kr 목록) | [Odii (15101971)](https://www.data.go.kr/data/15101971/openapi.do) | `themeLocationBasedList`, `storyLocationBasedList` | 현장 해설용 대본·음성 (Docent RAG 근거 자료) |
 
 - 두 서비스 모두 **data.go.kr 인증키 하나**로 호출하지만 **서비스별로 활용신청**이 필요하다. 개발계정은 자동 승인되고, 오퍼레이션별 하루 1,000건까지 호출할 수 있다.
-- 수집 범위는 구룡포항(35.9890, 129.5560)에서 반경 12km이다. 구룡포읍 전체와 호미곶까지 들어간다.
+- 수집 범위
+  - 장소: **포항시 전체(남구+북구, `areaBasedList2`)**. KTO 데이터는 구룡포 반경 12km 안에 39건뿐(2026-10 기준)이라 넓게 수집하고, 구룡포 집중은 `area=구룡포읍` 필터나 위치 반경 검색으로 한다.
+  - 오디오 가이드: 구룡포항(35.9890, 129.5560)에서 반경 20km(API 최대값).
 - 매뉴얼: `docs/개방데이터_활용매뉴얼(국문)/`
 - 콘텐츠랩의 다른 API 중 나중에 붙일 만한 것: 관광지별 연관 관광지(15128560 계열), 관광지 집중률 방문자 추이 예측, 무장애 여행 정보(15101897)
 

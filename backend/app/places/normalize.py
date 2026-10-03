@@ -27,6 +27,7 @@ _INTRO_FIELDS = {
 _TAG_RE = re.compile(r"<[^>]+>")
 _BR_RE = re.compile(r"<br\s*/?>", re.I)
 _AREA_RE = re.compile(r"포항시\s+[남북]구\s+(\S+?[읍면동])(?:\s|$)")
+_PAREN_DONG_RE = re.compile(r"\((\S+?[읍면동])[,)]")  # 도로명 주소 끝의 (송도동)
 
 
 def clean_text(value: Any) -> str:
@@ -50,8 +51,20 @@ def extract_homepage(value: Any) -> str:
 
 
 def extract_area(addr: str) -> str:
-    m = _AREA_RE.search(addr + " ")
+    m = _AREA_RE.search(addr + " ") or _PAREN_DONG_RE.search(addr)
     return m.group(1) if m else ""
+
+
+def fill_missing_areas(places: list[dict[str, Any]], max_m: float = 1500) -> None:
+    """주소에 읍면동이 없는 장소는 가장 가까운(max_m 이내) 장소의 읍면동으로 채운다."""
+    known = [p for p in places if p["area"]]
+    for p in places:
+        if p["area"]:
+            continue
+        nearest = min(known, key=lambda k: haversine_m(p["lat"], p["lng"], k["lat"], k["lng"]), default=None)
+        if nearest and haversine_m(p["lat"], p["lng"], nearest["lat"], nearest["lng"]) <= max_m:
+            p["area"] = nearest["area"]
+            p["tags"].append(nearest["area"])
 
 
 def pick_intro(intro: dict[str, Any]) -> dict[str, str]:
