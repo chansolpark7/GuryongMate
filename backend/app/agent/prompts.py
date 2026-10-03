@@ -43,7 +43,8 @@ SYSTEM = """너는 포항 구룡포 여행을 함께 계획하는 AI 여행 동�
 """
 
 
-def build_system(plan_view: dict, pending: dict | None, now: datetime | None = None) -> str:
+def build_system(plan_view: dict, pending: dict | None, dropped: dict | None = None,
+                 now: datetime | None = None) -> str:
     now = now or datetime.now(KST)
     parts = [SYSTEM, f"## 현재 시각\n{now:%Y-%m-%d %H:%M} (KST, {'월화수목금토일'[now.weekday()]}요일)"]
     parts.append("## 현재 일정" + (" (승인 대기 중인 제안이 적용된 상태)" if pending else "")
@@ -51,4 +52,7 @@ def build_system(plan_view: dict, pending: dict | None, now: datetime | None = N
     if pending:
         parts.append(f"## 승인 대기 중인 제안 #{pending['id']}\n"
                      + "\n".join(f"- {c['message']}" for c in pending.get("changes", [])))
+    if dropped:
+        parts.append(f"## 참고\n이전에 만든 제안 #{dropped['id']} 은 그사이 사용자가 일정을 직접 바꿔 더 이상 적용할 수 없어 "
+                     "폐기된다. 필요하면 현재 일정을 기준으로 다시 제안하고, 사용자에게도 그렇게 알린다.")
     return "\n\n".join(parts)

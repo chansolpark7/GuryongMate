@@ -13,6 +13,8 @@ import shlex
 import sys
 import unicodedata
 
+import httpx
+
 from client import PlannerApiError, PlannerClient
 
 MODE = {"walk": "도보", "car": "차량"}
@@ -238,8 +240,9 @@ class ChatPrinter:
     def handle(self, event: str, d: dict) -> None:
         if event != "thinking" and self.thinking:
             self.thinking = False
-            self._out(RESET)
-            self._newline()
+            if self.show_thinking:  # "(생각 중…)" 한 줄만 찍은 경우엔 이미 줄이 끝나 있다
+                self._out(RESET)
+                self._newline()
         if event == "thinking":
             if self.show_thinking:
                 if not self.thinking:
@@ -299,6 +302,8 @@ def cmd_chat(c, a):
                 printer.handle(event, data)
         except KeyboardInterrupt:
             print("\n(중단)")
+        except httpx.HTTPError as e:  # 스트림이 끊겨도 대화는 계속
+            print(f"\n연결 오류: {e!r}")
 
     def decide(accept: bool) -> None:
         pending = _pending(c, sid)

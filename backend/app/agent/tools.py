@@ -93,6 +93,7 @@ class ToolOutcome:
     ok: bool
     content: str  # LLM 에 돌려줄 내용 (JSON 문자열)
     summary: str  # 앱·CLI 에 보여줄 한 줄
+    history: str | None = None  # 대화 기록에 남길 짧은 형태 (없으면 content). 일정 스냅샷이 기록에 쌓이지 않게
 
 
 # ---------- LLM 에 보여줄 압축 표현 ----------
@@ -158,7 +159,7 @@ class Toolbox:
                 raise ValueError("arguments 는 JSON 객체여야 합니다")
         except ValueError as e:
             return ToolOutcome(False, _dump({"error": f"인자 JSON 을 해석할 수 없습니다: {e}"}), "인자 오류")
-        args = {k: v for k, v in args.items() if v is not None}
+        args = {k: v for k, v in args.items() if v is not None or (name == "update_item" and k == "start_time")}
         handler = getattr(self, f"_t_{name}", None)
         if handler is None:
             return ToolOutcome(False, _dump({"error": f"알 수 없는 도구: {name}"}), "알 수 없는 도구")
@@ -196,24 +197,32 @@ class Toolbox:
         return ToolOutcome(True, _dump(out), p["title"])
 
     async def _t_view_plan(self) -> ToolOutcome:
-        return ToolOutcome(True, _dump(await self.current_view()), "일정 조회")
+        return ToolOutcome(True, _dump(await self.current_view()), "일정 조회",
+                           history=_dump({"result": "(당시 일정 조회 결과 생략. 최신 일정은 시스템 프롬프트 참고)"}))
 
     # ----- 변경 (초안에 쌓음) -----
-    async def _stage(self, op: dict, label: str) -> ToolOutcome:
+    async def _stage(self, op: dict, label: str, notice: str = "") -> ToolOutcome:
         candidate = [*self.draft.ops, op]
         r = await self.api.preview(self.plan_id, candidate)  # 적용 불가면 ApiError -> 초안에 넣지 않음
         self.draft.ops = candidate
         self.draft.changed = True
-        view = compact_plan(r["plan"], [c["message"] for c in r["changes"]], len(candidate))
-        note = "제안 초안에 반영됨 (아직 실제 일정 아님. 응답이 끝나면 사용자에게 승인 요청됨)"
-        return ToolOutcome(True, _dump({"result": note, "plan_after": view}), label)
+        changes = [c["message"] for c in r["changes"]]
+        view = compact_plan(r["plan"], changes, len(candidate))
+        note = "제안 초안에 반영됨 (아직 실제 일정 아님. 응답이 끝나면 사용자에게 승인 요청됨)" + notice
+        short = {"result": note, "changes": changes, "violations": view["violations"]}
+        return ToolOutcome(True, _dump({"result": note, "plan_after": view}), label, history=_dump(short))
 
     async def _t_add_item(self, place_id: str, day: int = 1, order: int | None = None, stay_minutes: int = 60,
                           memo: str = "", **ignored) -> ToolOutcome:
-        # 모델이 없는 인자(start_time, near_place_id 등)를 붙여도 실패시키지 않는다
+        # 모델이 없는 인자(start_time, near_place_id 등)를 붙여도 실패시키지 않되, 무시했다고 알려준다
         op = {"op": "add_item", "place_id": place_id, "day": day, "order": order, "stay_minutes": stay_minutes,
               "memo": memo}
-        return await self._stage(op, f"추가 {place_id} ({day}일차)")
+        notice = ""
+        if ignored:
+            notice = f". 무시된 인자: {sorted(ignored)}"
+            if "start_time" in ignored:
+                notice += " (시작 시각 고정은 update_item 으로만 할 수 있다)"
+        return await self._stage(op, f"추가 {place_id} ({day}일차)", notice)
 
     async def _t_update_item(self, item_id: int, **changes) -> ToolOutcome:
         allowed = {"day", "order", "stay_minutes", "start_time", "memo", "status"}

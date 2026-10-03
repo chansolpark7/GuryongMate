@@ -32,7 +32,8 @@ class FakeLookup:
 
 
 class ScriptedLLM:
-    """호출될 때마다 script 에서 하나씩 꺼내 응답. 각 항목은 str(텍스트) 또는 (도구이름, 인자dict) 목록."""
+    """호출될 때마다 script 에서 하나씩 꺼내 응답.
+    각 항목은 str(텍스트), (도구이름, 인자dict), async 함수(턴 도중 외부 사건), 예외(발생시킴)의 목록."""
 
     name = "fake"
 
@@ -45,7 +46,11 @@ class ScriptedLLM:
         self.calls.append(list(messages))
         self.tools_seen.append(tools)
         for n, part in enumerate(self.script.pop(0)):
-            if isinstance(part, str):
+            if callable(part):  # 턴 도중에 일어나는 외부 사건 (예: 다른 화면에서 제안 승인)
+                await part()
+            elif isinstance(part, Exception):
+                raise part
+            elif isinstance(part, str):
                 for ch in (part[:3], part[3:]):  # 조각으로 나눠 스트리밍 흉내
                     yield TextDelta(ch)
             else:
@@ -56,6 +61,7 @@ class ScriptedLLM:
 
 
 llm = ScriptedLLM()
+asgi: httpx.AsyncClient | None = None
 
 
 @pytest.fixture(scope="module")
@@ -68,6 +74,7 @@ def client():
             s.execute(delete(PlannerPlan).where(PlannerPlan.user_id.like("test-%")))
 
     cleanup()
+    global asgi
     asgi = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://app")
     app.dependency_overrides |= {get_place_lookup: FakeLookup, get_llm: lambda: llm, get_http: lambda: asgi}
     with TestClient(app) as c:
@@ -189,3 +196,84 @@ def test_session_access(client, session):
     sid, _ = session
     assert client.get(f"/agent/sessions/{sid}", headers={"X-User-Id": "test-other"}).status_code == 404
     assert client.post("/agent/sessions", json={"plan_id": 999999}, headers=H).status_code == 404
+
+
+def _first_item(client, pid):
+    return ok(client.get(f"/planner/plans/{pid}", headers=H))["days"][0]["items"][0]
+
+
+def test_fixed_start_time_survives_continued_proposal(client, session):
+    """대기 제안을 이어서 고칠 때 생략된 start_time 이 null(해제)로 바뀌면 안 된다."""
+    sid, pid = session
+    house = _first_item(client, pid)["id"]
+    ok(client.patch(f"/planner/plans/{pid}/items/{house}", json={"start_time": "13:00"}, headers=H))
+    llm.script = [[("update_item", {"item_id": house, "stay_minutes": 30})], ["줄였어요"]]
+    sse(client.post(f"/agent/sessions/{sid}/chat", json={"message": "짧게"}, headers=H))
+    llm.script = [[("add_item", {"place_id": "p-food"})], ["추가"]]
+    p2 = dict(sse(client.post(f"/agent/sessions/{sid}/chat", json={"message": "점심"}, headers=H)))["proposal"]
+    assert not any("시작 고정" in c["message"] for c in p2["changes"])
+    assert {"op": "update_item", "item_id": house, "stay_minutes": 30} in p2["ops"]  # 보낸 필드만
+    result = ok(client.post(f"/agent/sessions/{sid}/proposals/{p2['id']}/accept", headers=H))
+    assert result["plan"]["days"][0]["items"][0]["start_time"] == "13:00"
+
+
+def test_update_item_null_start_time_clears(client, session):
+    sid, pid = session
+    house = _first_item(client, pid)["id"]
+    ok(client.patch(f"/planner/plans/{pid}/items/{house}", json={"start_time": "13:00"}, headers=H))
+    llm.script = [[("update_item", {"item_id": house, "start_time": None})], ["해제"]]
+    p = dict(sse(client.post(f"/agent/sessions/{sid}/chat", json={"message": "고정 풀어"}, headers=H)))["proposal"]
+    assert any("시작 고정 13:00 → 없음" in c["message"] for c in p["changes"])
+
+
+def test_proposal_decided_during_turn_is_not_revived(client, session):
+    """턴 도중 이어받은 제안이 승인되면, 그 ops 를 다시 담은 제안을 만들지 않는다 (이중 반영 방지)."""
+    sid, pid = session
+    llm.script = [[("add_item", {"place_id": "p-food"})], ["추가"]]
+    p1 = dict(sse(client.post(f"/agent/sessions/{sid}/chat", json={"message": "점심"}, headers=H)))["proposal"]
+
+    async def accept_elsewhere():  # 다른 화면에서 planner API 로 바로 승인
+        r = await asgi.post(f"/planner/plans/{pid}/proposals/{p1['id']}/accept", headers=H)
+        assert r.status_code == 200
+    llm.script = [[accept_elsewhere, ("add_item", {"place_id": "p-house"})], ["또 추가"]]
+    events = dict(sse(client.post(f"/agent/sessions/{sid}/chat", json={"message": "하나 더"}, headers=H)))
+    assert "proposal" not in events and "그사이" in events["error"]["message"]
+    places = [i["place_id"] for i in ok(client.get(f"/planner/plans/{pid}", headers=H))["days"][0]["items"]]
+    assert places.count("p-food") == 1
+
+
+def test_accept_blocked_while_turn_running(client, session):
+    from app.agent import router as agent_router
+    sid, pid = session
+    llm.script = [[("add_item", {"place_id": "p-food"})], ["추가"]]
+    p = dict(sse(client.post(f"/agent/sessions/{sid}/chat", json={"message": "a"}, headers=H)))["proposal"]
+    agent_router._active[sid] = __import__("time").monotonic()
+    try:
+        assert client.post(f"/agent/sessions/{sid}/proposals/{p['id']}/accept", headers=H).status_code == 409
+        assert client.post(f"/agent/sessions/{sid}/chat", json={"message": "b"}, headers=H).status_code == 409
+    finally:
+        agent_router._active.pop(sid, None)
+    assert ok(client.post(f"/agent/sessions/{sid}/proposals/{p['id']}/accept", headers=H))["proposal"]["status"] == "accepted"
+
+
+def test_unexpected_error_becomes_error_event_and_releases_session(client, session):
+    sid, _ = session
+    llm.script = [[RuntimeError("boom")]]
+    events = sse(client.post(f"/agent/sessions/{sid}/chat", json={"message": "a"}, headers=H))
+    assert events[-1][0] == "error"
+    llm.script = [["다시 정상"]]
+    assert dict(sse(client.post(f"/agent/sessions/{sid}/chat", json={"message": "b"}, headers=H)))["done"]
+
+
+def test_history_keeps_short_tool_results(client, session):
+    from sqlalchemy import select
+    from app.agent.models import AgentMessage
+    sid, _ = session
+    llm.script = [[("add_item", {"place_id": "p-food", "start_time": "12:00"})], ["추가"]]
+    sse(client.post(f"/agent/sessions/{sid}/chat", json={"message": "a"}, headers=H))
+    assert "plan_after" in llm.calls[-1][-1]["content"]  # 이번 턴엔 전체 일정
+    assert "start_time" in llm.calls[-1][-1]["content"]  # 무시한 인자를 알려줌
+    with SessionLocal() as db:
+        tool_rows = db.scalars(select(AgentMessage).where(AgentMessage.session_id == sid,
+                                                          AgentMessage.role == "tool")).all()
+    assert tool_rows and all("plan_after" not in m.content for m in tool_rows)  # 기록엔 요약만

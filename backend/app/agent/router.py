@@ -2,13 +2,15 @@
 
 흐름: 세션 생성(plan_id) -> chat (SSE 스트림) -> proposal 이벤트로 제안 수신 -> accept / reject
 """
-import asyncio
 import json
+import logging
+import time
 import uuid
 from collections.abc import AsyncIterator
 from typing import Annotated
 
 import httpx
+from anyio import to_thread
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select
@@ -28,7 +30,7 @@ from app.agent.schemas import (
     SessionView,
     ToolCallLog,
 )
-from app.db import SessionLocal, get_db
+from app.db import get_db
 
 router = APIRouter(prefix="/agent", tags=["agent"])
 
@@ -37,7 +39,17 @@ UserId = Annotated[str, Header(alias="X-User-Id", min_length=1, max_length=64)]
 Http = Annotated[httpx.AsyncClient, Depends(get_http)]
 Llm = Annotated[LLMProvider, Depends(get_llm)]
 
-_locks: dict[str, asyncio.Lock] = {}  # 세션당 동시에 한 턴만
+log = logging.getLogger("app.agent")
+
+# 응답 생성 중인 세션 -> 시작 시각. 세션당 동시에 한 턴만, 그동안 제안 승인·거절도 막는다.
+# (시작 직후 연결이 끊겨 정리 코드가 못 도는 경우에 대비해 오래된 항목은 끝난 것으로 본다. 프로세스 단위)
+_active: dict[str, float] = {}
+_STALE_SEC = 15 * 60
+
+
+def _busy(session_id: str) -> bool:
+    started = _active.get(session_id)
+    return started is not None and time.monotonic() - started < _STALE_SEC
 
 
 def _get_session(db: Session, user_id: str, session_id: str) -> AgentSession:
@@ -115,20 +127,24 @@ def _sse(ev: dict) -> str:
              responses={200: {"content": {"text/event-stream": {}}, "description": "stream=true 면 SSE 이벤트 스트림"}})
 async def chat(session_id: str, body: ChatRequest, db: DbSession, user_id: UserId, http: Http, llm: Llm,
                stream: Annotated[bool, Query(description="true: SSE 실시간 스트림, false: 끝난 뒤 JSON 한 번")] = True):
-    _get_session(db, user_id, session_id)  # 존재 확인은 스트림 시작 전에 (404 를 바로 돌려주기 위해)
-    lock = _locks.setdefault(session_id, asyncio.Lock())
-    if lock.locked():
+    s = _get_session(db, user_id, session_id)  # 존재 확인은 스트림 시작 전에 (404 를 바로 돌려주기 위해)
+    plan_id = s.plan_id
+    # 확인과 등록 사이에 await 가 없으므로 이벤트 루프 안에서 원자적이다
+    if _busy(session_id):
         raise HTTPException(409, "이 세션은 이전 메시지에 응답하는 중입니다.")
+    _active[session_id] = time.monotonic()
 
     async def events() -> AsyncIterator[dict]:
-        async with lock:
-            with SessionLocal() as tdb:  # 스트림은 요청 의존성보다 오래 살아서 세션을 따로 연다
-                s = tdb.get(AgentSession, session_id)
-                try:
-                    async for ev in run_turn(tdb, s, body.message, llm, ServiceApi(http, user_id)):
-                        yield ev
-                except ApiError as e:
-                    yield {"event": "error", "data": {"message": e.message}}
+        try:
+            async for ev in run_turn(session_id, plan_id, body.message, llm, ServiceApi(http, user_id)):
+                yield ev
+        except ApiError as e:
+            yield {"event": "error", "data": {"message": e.message}}
+        except Exception as e:  # 예상 못 한 오류도 스트림을 그냥 끊지 말고 error 이벤트로 알린다
+            log.exception("session=%s 턴 처리 중 오류", session_id[:8])
+            yield {"event": "error", "data": {"message": f"서버 오류: {type(e).__name__}"}}
+        finally:
+            _active.pop(session_id, None)
 
     if stream:
         async def sse() -> AsyncIterator[str]:
@@ -155,24 +171,34 @@ async def chat(session_id: str, body: ChatRequest, db: DbSession, user_id: UserI
                       proposal=proposal, error=error)
 
 
+async def _decide(session_id: str, proposal_id: int, db: Session, user_id: str, http: httpx.AsyncClient,
+                  accept: bool) -> dict:
+    s = _get_session(db, user_id, session_id)
+    if _busy(session_id):
+        # 턴은 시작할 때 대기 제안을 이어받아 끝에 대체 제안을 만든다. 그 사이에 승인·거절하면
+        # 변경이 두 번 반영되거나 거절한 변경이 되살아날 수 있어 응답이 끝날 때까지 막는다.
+        raise HTTPException(409, "Agent 가 응답하는 중입니다. 응답이 끝난 뒤 다시 시도하세요.")
+    api = ServiceApi(http, user_id)
+    try:
+        if accept:
+            result = await api.accept_proposal(s.plan_id, proposal_id)
+        else:
+            result = await api.reject_proposal(s.plan_id, proposal_id)
+    except ApiError as e:
+        raise _api_error(e) from e
+    note = (f"사용자가 제안 #{proposal_id} 을 승인해 일정에 반영됐습니다." if accept
+            else f"사용자가 제안 #{proposal_id} 을 거절했습니다. 일정은 그대로입니다.")
+    await to_thread.run_sync(add_note, session_id, note)
+    return result
+
+
 @router.post("/sessions/{session_id}/proposals/{proposal_id}/accept")
 async def accept(session_id: str, proposal_id: int, db: DbSession, user_id: UserId, http: Http) -> dict:
     """제안 승인 -> 실제 일정에 반영. 응답은 planner AcceptResult {proposal, plan}."""
-    s = _get_session(db, user_id, session_id)
-    try:
-        result = await ServiceApi(http, user_id).accept_proposal(s.plan_id, proposal_id)
-    except ApiError as e:
-        raise _api_error(e) from e
-    add_note(db, s, f"사용자가 제안 #{proposal_id} 을 승인해 일정에 반영됐습니다.")
-    return result
+    return await _decide(session_id, proposal_id, db, user_id, http, accept=True)
 
 
 @router.post("/sessions/{session_id}/proposals/{proposal_id}/reject")
 async def reject(session_id: str, proposal_id: int, db: DbSession, user_id: UserId, http: Http) -> dict:
-    s = _get_session(db, user_id, session_id)
-    try:
-        result = await ServiceApi(http, user_id).reject_proposal(s.plan_id, proposal_id)
-    except ApiError as e:
-        raise _api_error(e) from e
-    add_note(db, s, f"사용자가 제안 #{proposal_id} 을 거절했습니다. 일정은 그대로입니다.")
-    return result
+    """제안 거절. 응답은 planner ProposalView."""
+    return await _decide(session_id, proposal_id, db, user_id, http, accept=False)

@@ -1,6 +1,7 @@
 """LLM 공급자 추상화.
 
-로컬(Ollama 등)과 ChatGPT 모두 OpenAI 호환 Chat Completions(스트리밍 + tool calling)로 호출한다.
+- OllamaProvider: Ollama 네이티브 /api/chat (요청마다 컨텍스트 길이 지정). 로컬 기본값
+- OpenAICompatProvider: OpenAI 호환 Chat Completions. ChatGPT, LM Studio, vLLM 등
 하네스는 LLMProvider 인터페이스만 알고, 어떤 모델인지는 설정(config.py)에서만 정해진다.
 다른 형식의 API(예: Responses API, Anthropic)를 붙이려면 같은 이벤트를 내는 Provider 를 하나 더 만들면 된다.
 """

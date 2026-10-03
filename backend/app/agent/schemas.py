@@ -45,7 +45,7 @@ class SessionDetail(SessionView):
 
 
 class ChatRequest(BaseModel):
-    message: str = Field(min_length=1, max_length=4000)
+    message: str = Field(min_length=1, max_length=4000, pattern=r"\S", description="공백만 있는 메시지는 거부")
 
 
 class ToolCallLog(BaseModel):

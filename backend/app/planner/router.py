@@ -186,14 +186,15 @@ def _get_proposal(db: Session, plan: PlannerPlan, proposal_id: int) -> PlannerPr
 
 def _proposal_detail(prop: PlannerProposal, plan: PlannerPlan, places: PlaceLookup) -> ProposalDetail:
     view = ProposalView.model_validate(prop)
+    base = {k: getattr(view, k) for k in ProposalView.model_fields}  # ops 는 모델 그대로 (보낸 필드 정보 유지)
     if prop.status != "pending":
-        return ProposalDetail(**view.model_dump(), changes=[])
+        return ProposalDetail(**base, changes=[])
     try:
         before, after, changes = engine.preview(plan, view.ops, places)
     except engine.OpError as e:
-        return ProposalDetail(**view.model_dump(), changes=[], before=engine.detail(plan, places), applicable=False,
+        return ProposalDetail(**base, changes=[], before=engine.detail(plan, places), applicable=False,
                               error=f"현재 계획에 적용할 수 없습니다: {e.message}")
-    return ProposalDetail(**view.model_dump(), changes=changes, before=before, after=after)
+    return ProposalDetail(**base, changes=changes, before=before, after=after)
 
 
 def _decide(prop: PlannerProposal, status: str) -> None:
@@ -210,8 +211,11 @@ def create_proposal(plan_id: int, body: ProposalCreate, db: DbSession, user_id: 
         raise HTTPException(e.status, e.message) from e
     if body.supersedes is not None:
         old = _get_proposal(db, plan, body.supersedes)
-        if old.status == "pending":
-            _decide(old, "superseded")
+        if old.status != "pending":
+            # 대체하려던 제안이 그사이 승인·거절됐다. 그 ops 를 이어받은 새 제안을 만들면
+            # 이미 반영된 변경이 두 번 들어가거나 거절한 변경이 되살아난다.
+            raise HTTPException(409, f"대체하려던 제안 {old.id} 이 이미 {old.status} 상태입니다.")
+        _decide(old, "superseded")
     prop = PlannerProposal(plan_id=plan.id, ops=_ops_adapter.dump_python(body.ops, mode="json", exclude_unset=True),
                            summary=body.summary, source=body.source, origin=body.origin, status="pending")
     db.add(prop)

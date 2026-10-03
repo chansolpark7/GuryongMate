@@ -19,6 +19,8 @@
 - 턴이 끝나면 초안을 planner 제안으로 저장하고 `proposal` 이벤트를 보낸다. 제안에는 변경 요약(`changes`), 현재(`before`), 승인 시(`after`) 일정이 모두 들어 있어 비교 카드를 그릴 수 있다.
 - 승인하기 전에 사용자가 "그건 빼줘"처럼 이어서 말하면, 대기 중인 제안 위에 수정을 더한 **새 제안**이 나온다. 이전 제안은 `superseded`가 된다.
 - 승인·거절 결과는 숨김 메시지로 대화 기록에 남는다. 그래서 다음 턴의 LLM은 그 사실을 알지만 화면에는 보이지 않는다.
+- 응답 생성 중에는 그 세션의 제안을 승인·거절할 수 없다(409). 턴은 대기 제안을 이어받아 끝에 대체 제안을 만들기 때문이다. planner API로 직접 승인하는 등 그 사이에 제안이 처리되면, 턴은 새 제안을 만들지 않고 `error` 이벤트로 알린다(이중 반영 방지).
+- 대화 기록에는 도구 결과를 요약 형태로만 저장한다. 다음 턴에는 최신 일정이 시스템 프롬프트로 들어가므로 옛 일정 스냅샷이 쌓이지 않는다.
 
 ## API
 
@@ -31,7 +33,7 @@
 | GET | `/agent/sessions/{sid}` | 화면용 대화 기록과 대기 중인 제안(`pending_proposal`) |
 | DELETE | `/agent/sessions/{sid}` | 세션 삭제 |
 | POST | `/agent/sessions/{sid}/chat` | 메시지 전송. 기본은 **SSE 스트림**. `?stream=false`이면 끝난 뒤 JSON(`ChatResult`)으로 받는다. 같은 세션에서 응답이 진행 중이면 409 |
-| POST | `/agent/sessions/{sid}/proposals/{pid}/accept` | 제안 승인 → `{proposal, plan}` |
+| POST | `/agent/sessions/{sid}/proposals/{pid}/accept` | 제안 승인 → `{proposal, plan}`. 응답 생성 중이면 409 (응답이 끝난 뒤 다시) |
 | POST | `/agent/sessions/{sid}/proposals/{pid}/reject` | 제안 거절 |
 | GET | `/agent/info` | (디버깅용) 현재 LLM 이름 |
 
@@ -62,7 +64,7 @@ Flutter에서는 `http`의 `Client.send(StreamedRequest)`로 응답 바이트 �
 | `add_rule` / `remove_rule` | 사용자 조건(규칙) → 초안 |
 | `discard_changes` | 초안 비우기 (대기 중인 제안 거절) |
 
-같은 턴에서 새로 추가한 항목은 음수 임시 id(-1, -2…)로 다시 참조한다.
+제안에서 새로 추가한 항목은 음수 임시 id(-1, -2…)로 다시 참조한다. 이 id는 제안이 승인되기 전까지 이어지는 턴에서도 유효하다(초안을 다시 적용하므로 같은 번호가 유지된다). 승인되면 실제 id로 바뀐다.
 
 ## LLM 설정 (서버 `backend/.env`)
 

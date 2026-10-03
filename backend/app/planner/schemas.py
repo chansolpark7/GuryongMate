@@ -5,7 +5,7 @@
 from datetime import date, datetime, time
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, PlainSerializer, model_validator
+from pydantic import BaseModel, ConfigDict, Field, PlainSerializer, field_serializer, model_validator
 
 HHMM = Annotated[time, PlainSerializer(lambda t: t.strftime("%H:%M"), return_type=str)]
 
@@ -282,6 +282,12 @@ class ProposalView(BaseModel):
     ops: list[PlanOp]
     created_at: datetime
     decided_at: datetime | None
+
+    @field_serializer("ops")
+    def _ops_as_sent(self, ops: list) -> list[dict]:
+        # 보낸 필드만 내보낸다. update_item 의 start_time 처럼 "생략"과 "null(해제)"이 다른 뜻이라,
+        # 생략된 필드를 null 로 채워 보내면 이 ops 를 다시 쓰는 쪽(Agent 초안)에서 의미가 바뀐다.
+        return [op.model_dump(mode="json", exclude_unset=True) for op in ops]
 
 
 class ProposalDetail(ProposalView):
