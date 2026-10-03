@@ -1,0 +1,36 @@
+from datetime import datetime
+
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, func
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.orm import Mapped, mapped_column
+
+from app.db import Base
+
+
+class AgentSession(Base):
+    """한 계획에 대한 Agent 대화. 여행 전·중 맥락이 이 세션에 이어진다."""
+
+    __tablename__ = "agent_session"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(64), index=True)
+    plan_id: Mapped[int] = mapped_column(Integer, index=True)  # planner 계획 id (HTTP API 로만 접근)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class AgentMessage(Base):
+    """LLM 대화 기록 (OpenAI 메시지 형식). hidden 은 LLM 에만 주고 화면에는 안 보이는 알림."""
+
+    __tablename__ = "agent_message"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    session_id: Mapped[str] = mapped_column(ForeignKey("agent_session.id", ondelete="CASCADE"), index=True)
+    role: Mapped[str] = mapped_column(String(10))  # user | assistant | tool
+    content: Mapped[str] = mapped_column(Text, default="")
+    tool_calls: Mapped[list[dict] | None] = mapped_column(JSONB, nullable=True)  # assistant 의 도구 호출
+    tool_call_id: Mapped[str] = mapped_column(String(64), default="")  # tool 응답이 가리키는 호출
+    tool_ok: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    hidden: Mapped[bool] = mapped_column(Boolean, default=False)
+    proposal_id: Mapped[int | None] = mapped_column(Integer, nullable=True)  # 이 응답으로 만들어진 제안
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
