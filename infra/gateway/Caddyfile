@@ -1,5 +1,5 @@
 # 게이트웨이: 앱은 이 주소 하나만 안다. URL 앞부분으로 서비스에 나눠 보낸다.
-# 서비스 문서: /places/docs, /planner/docs, /agent/docs
+# 서비스 문서: /places/docs, /planner/docs, /agent/docs, /safety/docs
 {
 	admin off
 }
@@ -16,6 +16,10 @@
 
 	handle /planner* {
 		reverse_proxy planner:8000
+	}
+
+	handle /safety* {
+		reverse_proxy safety:8000
 	}
 
 	handle /agent* {
