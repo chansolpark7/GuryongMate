@@ -1,0 +1,4 @@
+# 컨테이너에 그대로 마운트되는 파일은 Windows 에서도 LF 유지
+infra/** text eol=lf
+*.sh text eol=lf
+Dockerfile text eol=lf
