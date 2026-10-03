@@ -269,6 +269,32 @@ def _title(item) -> str:
     return item.place.title if item.place else item.place_id
 
 
+def _moved_ids(before: PlanDetail, after: PlanDetail) -> set[int]:
+    """실제로 옮긴 항목. 다른 날로 간 항목 + 같은 날에 남은 항목 중 상대 순서가 바뀐 것.
+    다른 항목이 추가·삭제돼 번호만 밀린 항목은 넣지 않는다. 같은 날 남은 항목의 예전 순서열에서
+    가장 긴 증가 부분수열(LIS)에 든 항목은 제자리, 나머지가 옮긴 항목이다."""
+    old_pos = {i.id: (d.day, n) for d in before.days for n, i in enumerate(d.items)}
+    moved: set[int] = set()
+    for d in after.days:
+        stay = [i.id for i in d.items if i.id in old_pos and old_pos[i.id][0] == d.day]
+        moved |= {i.id for i in d.items if i.id in old_pos and old_pos[i.id][0] != d.day}
+        seq = [old_pos[i][1] for i in stay]
+        # O(n^2) LIS (하루 항목 수는 수십 개 이하)
+        best = [1] * len(seq)
+        prev = [-1] * len(seq)
+        for a in range(len(seq)):
+            for b in range(a):
+                if seq[b] < seq[a] and best[b] + 1 > best[a]:
+                    best[a], prev[a] = best[b] + 1, b
+        keep: set[int] = set()
+        k = max(range(len(seq)), key=lambda x: best[x]) if seq else -1
+        while k != -1:
+            keep.add(stay[k])
+            k = prev[k]
+        moved |= set(stay) - keep
+    return moved
+
+
 def diff(before: PlanDetail, after: PlanDetail) -> list[Change]:
     out: list[Change] = []
     labels = {"title": "제목", "start_date": "시작일", "end_date": "종료일", "day_start": "하루 시작", "day_end": "하루 종료",
@@ -281,6 +307,7 @@ def diff(before: PlanDetail, after: PlanDetail) -> list[Change]:
 
     old = {i.id: i for d in before.days for i in d.items}
     new = {i.id: i for d in after.days for i in d.items}
+    moved = _moved_ids(before, after)
     for i in (i for d in after.days for i in d.items):
         if i.id not in old:
             at = f" {i.start_time.strftime('%H:%M')} 고정" if i.start_time else ""
@@ -288,7 +315,7 @@ def diff(before: PlanDetail, after: PlanDetail) -> list[Change]:
                               message=f"추가: {i.day}일차 {i.order}번째 '{_title(i)}' ({i.stay_minutes}분{at})"))
             continue
         o = old[i.id]
-        if (o.day, o.order) != (i.day, i.order):
+        if i.id in moved:
             out.append(Change(kind="moved", item_id=i.id, day=i.day,
                               message=f"이동: '{_title(i)}' {o.day}일차 {o.order}번째 → {i.day}일차 {i.order}번째"))
         parts = []

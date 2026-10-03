@@ -3,6 +3,7 @@
 Agent 는 앱·CLI 와 똑같은 공개 API 만 쓴다. 주소는 AGENT_API_BASE_URL (compose 에서는 게이트웨이).
 """
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 
@@ -50,9 +51,14 @@ class ServiceApi:
             raise ApiError(503, {"code": "upstream_unavailable", "message": f"서비스에 연결할 수 없습니다: {e!r}"}) from e
         if resp.is_error:
             try:
-                detail = resp.json().get("detail", resp.text)
+                body = resp.json()
+                detail = body.get("detail", body) if isinstance(body, dict) else body
             except ValueError:
                 detail = resp.text
+            if resp.status_code >= 500 and not (isinstance(detail, dict) and "code" in detail):
+                # 게이트웨이 502·HTML 같은 형식 없는 서버 오류는 "서비스에 접근할 수 없음"으로 통일
+                raise ApiError(503, {"code": "upstream_unavailable",
+                                     "message": f"서비스가 응답하지 않습니다 (HTTP {resp.status_code})."})
             raise ApiError(resp.status_code, detail)
         return None if resp.status_code == 204 else resp.json()
 
@@ -61,7 +67,7 @@ class ServiceApi:
         return await self._req("GET", "/places", params={k: v for k, v in params.items() if v not in (None, "")})
 
     async def get_place(self, place_id: str) -> dict:
-        return await self._req("GET", f"/places/{place_id}")
+        return await self._req("GET", f"/places/{quote(place_id, safe='')}")
 
     # ----- planner: 계획 -----
     async def get_plan(self, plan_id: int) -> dict:

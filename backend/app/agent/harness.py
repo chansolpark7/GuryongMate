@@ -127,7 +127,11 @@ async def latest_pending(api: ServiceApi, plan_id: int, session_id: str) -> dict
 
 async def run_turn(session_id: str, plan_id: int, user_text: str, llm: LLMProvider, api: ServiceApi, *,
                    repropose: dict | None = None) -> AsyncIterator[Event]:
-    """repropose: 다시 만들 제안 (ProposalDetail). 빈 초안에서 시작하고, 새 제안이 그것을 대체한다."""
+    """repropose: 다시 만들 제안 (ProposalDetail). 빈 초안에서 시작하고, 새 제안이 그것을 대체한다.
+
+    대화 기록은 턴이 끝날 때 한 번 저장한다. 오류로 끝나거나 연결이 끊겨도 그때까지의 완결된 기록
+    (도구 호출과 결과의 짝이 맞는 부분)과 이미 만든 카드는 저장한다.
+    """
     yield _ev("start", session_id=session_id)
     sid = session_id[:8]
 
@@ -135,7 +139,9 @@ async def run_turn(session_id: str, plan_id: int, user_text: str, llm: LLMProvid
     pending = dropped = None
     if repropose:
         draft.base_proposal_id = repropose["id"]
+        request = repropose["request"]
     else:
+        request = user_text
         pending = await latest_pending(api, plan_id, session_id)
         if pending:
             draft.base_proposal_id = pending["id"]
@@ -143,6 +149,8 @@ async def run_turn(session_id: str, plan_id: int, user_text: str, llm: LLMProvid
                 dropped, pending = pending, None
             else:
                 draft.ops, draft.continued = pending["ops"], True
+                if pending["request"]:  # 이어서 고친 제안은 원래 요청부터 누적 (다시 제안할 때 원래 의도 유지)
+                    request = f"{pending['request']}\n{user_text}"
     toolbox = Toolbox(api, plan_id, draft, session_id)
     plan_view = await toolbox.current_view()
     base_version = toolbox.last_plan["version"]
@@ -151,116 +159,147 @@ async def run_turn(session_id: str, plan_id: int, user_text: str, llm: LLMProvid
     messages = [{"role": "system", "content": build_system(plan_view, pending, dropped, repropose)},
                 *history, {"role": "user", "content": user_text}]
     new_rows = [AgentMessage(session_id=session_id, role="user", content=user_text)]
+    complete = 1  # new_rows[:complete] 는 저장해도 되는 완결된 기록 (도구 호출·결과 짝이 맞음)
     said: list[str] = []  # 이번 턴에 사용자에게 보인 말 (도구 호출 전 말 포함)
     steps = Steps()
     cards: list[dict] = []  # 이 턴에 만든 카드 [{"type", "id"}]
+    saved = False
 
-    for step_no in range(settings.max_steps):
-        # 마지막 단계에서는 도구 없이 호출해 반드시 답변으로 끝나게 한다
-        tools = TOOL_SPECS if step_no < settings.max_steps - 1 else []
-        for attempt in range(LLM_RETRIES + 1):
-            text, calls, finish, reasoning_len = "", [], "", 0
-            try:
-                async for ev in llm.stream(messages, tools):
-                    match ev:
-                        case TextDelta(text=t):
-                            text += t
-                            yield _ev("text", delta=t)
-                        case ReasoningDelta(text=t):
-                            reasoning_len += len(t)
-                            yield _ev("thinking", delta=t)
-                        case ToolCall():
-                            calls.append(ev)
-                        case Finish(reason=r):
-                            finish = r
+    def closing_rows(note: str | None = None) -> list[AgentMessage]:
+        """저장할 행. 단계·카드는 마지막 assistant 행에 붙인다 (없거나 note 가 있으면 새 행)."""
+        rows = new_rows[:complete]
+        if note is not None or rows[-1].role != "assistant" or rows[-1].tool_calls:
+            rows.append(AgentMessage(session_id=session_id, role="assistant", content=note or ""))
+        rows[-1].steps = steps.items or None
+        rows[-1].cards = cards or None
+        return rows
+
+    async def save(note: str | None = None) -> None:
+        nonlocal saved
+        saved = True
+        await to_thread.run_sync(_save, session_id, closing_rows(note))
+
+    try:
+        for step_no in range(settings.max_steps):
+            # 마지막 단계에서는 도구 없이 호출해 반드시 답변으로 끝나게 한다
+            tools = TOOL_SPECS if step_no < settings.max_steps - 1 else []
+            for attempt in range(LLM_RETRIES + 1):
+                text, calls, finish, reasoning_len = "", [], "", 0
+                try:
+                    async for ev in llm.stream(messages, tools):
+                        match ev:
+                            case TextDelta(text=t):
+                                text += t
+                                yield _ev("text", delta=t)
+                            case ReasoningDelta(text=t):
+                                reasoning_len += len(t)
+                                yield _ev("thinking", delta=t)
+                            case ToolCall():
+                                calls.append(ev)
+                            case Finish(reason=r):
+                                finish = r
+                    break
+                except LLMError as e:
+                    # 로컬 모델은 가끔 형식이 깨진 도구 호출을 내서 서버 파서가 실패한다.
+                    # 아직 답변 텍스트를 내보내지 않았으면 같은 단계를 다시 시도한다.
+                    log.warning("session=%s step=%d attempt=%d LLM 오류: %s", sid, step_no, attempt, e)
+                    if text or attempt == LLM_RETRIES:
+                        message = f"LLM 호출 실패: {e}"
+                        await save(message)
+                        yield _error("llm_failed", message)
+                        return
+
+            log.info("session=%s step=%d finish=%s text=%d reasoning=%d tools=%s", sid, step_no, finish,
+                     len(text), reasoning_len, [c.name for c in calls])
+            if not tools:  # 도구를 주지 않았는데도 도구 호출을 내는 모델이 있다 -> 무시하고 답변으로 끝낸다
+                calls = []
+            if text.strip():
+                said.append(text.strip())
+            tool_calls = [{"id": c.id, "type": "function", "function": {"name": c.name, "arguments": c.arguments}}
+                          for c in calls]
+            messages.append({"role": "assistant", "content": text,
+                             **({"tool_calls": tool_calls} if tool_calls else {})})
+            new_rows.append(AgentMessage(session_id=session_id, role="assistant", content=text,
+                                         tool_calls=tool_calls or None, hidden=bool(tool_calls) and not text.strip()))
+            if not calls:
+                complete = len(new_rows)
                 break
-            except LLMError as e:
-                # 로컬 모델은 가끔 형식이 깨진 도구 호출을 내서 서버 파서가 실패한다.
-                # 아직 답변 텍스트를 내보내지 않았으면 같은 단계를 다시 시도한다.
-                log.warning("session=%s step=%d attempt=%d LLM 오류: %s", sid, step_no, attempt, e)
-                if text or attempt == LLM_RETRIES:
-                    yield _error("llm_failed", f"LLM 호출 실패: {e}")
-                    return
+            if text.strip():
+                yield _ev("text", delta="\n\n")  # 도구 호출 앞의 말과 이후 답변을 구분
 
-        log.info("session=%s step=%d finish=%s text=%d reasoning=%d tools=%s", sid, step_no, finish,
-                 len(text), reasoning_len, [c.name for c in calls])
-        if not tools:  # 도구를 주지 않았는데도 도구 호출을 내는 모델이 있다 -> 무시하고 답변으로 끝낸다
-            calls = []
-        if text.strip():
-            said.append(text.strip())
-        tool_calls = [{"id": c.id, "type": "function", "function": {"name": c.name, "arguments": c.arguments}}
-                      for c in calls]
-        messages.append({"role": "assistant", "content": text, **({"tool_calls": tool_calls} if tool_calls else {})})
-        new_rows.append(AgentMessage(session_id=session_id, role="assistant", content=text,
-                                     tool_calls=tool_calls or None, hidden=bool(tool_calls) and not text.strip()))
-        if not calls:
-            break
-        if text.strip():
-            yield _ev("text", delta="\n\n")  # 도구 호출 앞의 말과 이후 답변을 구분
+            for c in calls:
+                kind = STEP_KIND.get(c.name)
+                if kind:
+                    for ev in steps.start(kind):
+                        yield ev
+                outcome = await toolbox.call(c.name, c.arguments)
+                if kind:
+                    yield steps.finish(outcome.ok, outcome.detail)
+                if outcome.card:
+                    card_type = outcome.card["type"]
+                    cards.append({"type": card_type, "id": outcome.card[card_type]["id"]})
+                    yield _ev(card_type, **outcome.card[card_type])
+                messages.append({"role": "tool", "tool_call_id": c.id, "content": outcome.content})
+                # 기록에는 짧은 형태만 남긴다 (다음 턴엔 최신 일정이 시스템 프롬프트로 들어가므로 옛 스냅샷은 불필요)
+                new_rows.append(AgentMessage(session_id=session_id, role="tool",
+                                             content=outcome.history or outcome.content,
+                                             tool_call_id=c.id, tool_ok=outcome.ok, hidden=True))
+            complete = len(new_rows)
 
-        for c in calls:
-            kind = STEP_KIND.get(c.name)
-            if kind:
-                for ev in steps.start(kind):
-                    yield ev
-            outcome = await toolbox.call(c.name, c.arguments)
-            if kind:
-                yield steps.finish(outcome.ok, outcome.detail)
-            if outcome.card:
-                card_type = outcome.card["type"]
-                cards.append({"type": card_type, "id": outcome.card[card_type]["id"]})
-                yield _ev(card_type, **outcome.card[card_type])
-            messages.append({"role": "tool", "tool_call_id": c.id, "content": outcome.content})
-            # 기록에는 짧은 형태만 남긴다 (다음 턴엔 최신 일정이 시스템 프롬프트로 들어가므로 옛 스냅샷은 불필요)
-            new_rows.append(AgentMessage(session_id=session_id, role="tool", content=outcome.history or outcome.content,
-                                         tool_call_id=c.id, tool_ok=outcome.ok, hidden=True))
+        # 초안 -> 변경 제안
+        proposal = None
+        full_text = "\n\n".join(said)
+        if draft.changed and draft.ops:
+            for ev in steps.start("proposal", "잠시만요..."):
+                yield ev
+            try:
+                proposal = await api.create_proposal(
+                    plan_id, draft.ops, summary=full_text, request=request, origin=session_id,
+                    supersedes=draft.base_proposal_id, expected_version=base_version)
+            except ApiError as e:
+                yield steps.finish(False, "만들지 못함")
+                if e.code == "version_conflict":
+                    code, message = "plan_changed", "응답을 만드는 동안 일정이 바뀌어 변경안을 만들지 않았어요. 다시 요청해 주세요."
+                elif e.code in ("supersede_conflict", "proposal_not_pending"):
+                    code, message = "proposal_changed", ("이어서 고치던 제안이 그사이 승인되거나 거절돼서 이번 변경은 "
+                                                         "제안으로 만들지 않았어요. 다시 요청해 주세요.")
+                else:
+                    code, message = e.code, f"변경안을 저장하지 못했습니다: {e.message}"
+                await save(message)
+                yield _error(code, message)
+                return
+            count = sum(1 for ch in proposal["changes"] if ch["kind"] != "day_end")
+            yield steps.finish(True, f"변경 {count}건")
+            cards.append({"type": "proposal", "id": proposal["id"]})
+        elif draft.changed and draft.continued and draft.base_proposal_id:
+            try:  # 이어받은 제안의 변경을 모두 취소하고 끝남 -> 그 제안 거절
+                await api.reject_proposal(plan_id, draft.base_proposal_id)
+            except ApiError as e:
+                log.warning("session=%s 이어받은 제안 거절 실패: %s", sid, e)
 
-    # 초안 -> 변경 제안
-    proposal = None
-    full_text = "\n\n".join(said)
-    if draft.changed and draft.ops:
-        for ev in steps.start("proposal", "잠시만요..."):
-            yield ev
-        try:
-            proposal = await api.create_proposal(
-                plan_id, draft.ops, summary=full_text, request=repropose["request"] if repropose else user_text,
-                origin=session_id, supersedes=draft.base_proposal_id, expected_version=base_version)
-        except ApiError as e:
-            yield steps.finish(False, "만들지 못함")
-            if e.code == "version_conflict":
-                yield _error("plan_changed", "응답을 만드는 동안 일정이 바뀌어 변경안을 만들지 않았어요. 다시 요청해 주세요.")
-            elif e.code in ("supersede_conflict", "proposal_not_pending"):
-                yield _error("proposal_changed", "이어서 고치던 제안이 그사이 승인되거나 거절돼서 이번 변경은 제안으로 "
-                                                 "만들지 않았어요. 다시 요청해 주세요.")
+        if not full_text:
+            # 모델이 생각·도구 호출만 하고 답변 없이 끝난 경우에도 사용자에게는 항상 한마디 남긴다
+            if proposal:
+                full_text = "변경안을 만들었어요. 제안 카드에서 확인하고 괜찮으면 승인해 주세요."
+            elif cards:
+                full_text = "추천 장소를 골라 봤어요. 마음에 드는 곳을 추가해 보세요."
             else:
-                yield _error(e.code, f"변경안을 저장하지 못했습니다: {e.message}")
-            return
-        count = sum(1 for ch in proposal["changes"] if ch["kind"] != "day_end")
-        yield steps.finish(True, f"변경 {count}건")
-        cards.append({"type": "proposal", "id": proposal["id"]})
-    elif draft.changed and draft.continued and draft.base_proposal_id:
-        try:  # 이어받은 제안의 변경을 모두 취소하고 끝남 -> 그 제안 거절
-            await api.reject_proposal(plan_id, draft.base_proposal_id)
-        except ApiError as e:
-            log.warning("session=%s 이어받은 제안 거절 실패: %s", sid, e)
+                full_text = "죄송해요, 요청을 끝까지 처리하지 못했어요. 조금 더 구체적으로 말씀해 주시겠어요?"
+            yield _ev("text", delta=full_text)
+            new_rows.append(AgentMessage(session_id=session_id, role="assistant", content=full_text))
+            complete = len(new_rows)
 
-    if not full_text:
-        # 모델이 생각·도구 호출만 하고 답변 없이 끝난 경우에도 사용자에게는 항상 한마디 남긴다
+        # 카드 이벤트를 보내기 전에 기록부터 저장한다 (여기서 연결이 끊겨도 카드와 대화 기록이 어긋나지 않게)
+        await save()
         if proposal:
-            full_text = "변경안을 만들었어요. 제안 카드에서 확인하고 괜찮으면 승인해 주세요."
-        elif cards:
-            full_text = "추천 장소를 골라 봤어요. 마음에 드는 곳을 추가해 보세요."
-        else:
-            full_text = "죄송해요, 요청을 끝까지 처리하지 못했어요. 조금 더 구체적으로 말씀해 주시겠어요?"
-        yield _ev("text", delta=full_text)
-        new_rows.append(AgentMessage(session_id=session_id, role="assistant", content=full_text))
-    new_rows[-1].steps = steps.items or None
-    new_rows[-1].cards = cards or None
-
-    # 카드 이벤트를 보내기 전에 기록부터 저장한다 (여기서 연결이 끊겨도 카드와 대화 기록이 어긋나지 않게)
-    await to_thread.run_sync(_save, session_id, new_rows)
-    if proposal:
-        yield _ev("proposal", **proposal)
-    if steps.summary:
-        yield _ev("steps_done", count=len(steps.items), summary=steps.summary)
-    yield _ev("done", text=full_text, cards=cards)
+            yield _ev("proposal", **proposal)
+        if steps.summary:
+            yield _ev("steps_done", count=len(steps.items), summary=steps.summary)
+        yield _ev("done", text=full_text, cards=cards)
+    finally:
+        if not saved:
+            # 연결 끊김(취소)이나 예상 못 한 예외: 여기서는 await 할 수 없어 짧게 동기로 저장한다
+            try:
+                _save(session_id, closing_rows("(응답이 중간에 끊겼어요)"))
+            except Exception:
+                log.exception("session=%s 중단된 턴 기록 저장 실패", sid)

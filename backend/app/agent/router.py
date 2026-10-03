@@ -8,12 +8,14 @@ import logging
 import time
 import uuid
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Annotated
 
 import httpx
 from anyio import to_thread
 from fastapi import APIRouter, Body, Depends, Header, Query, Response
 from fastapi.responses import StreamingResponse
+from starlette.background import BackgroundTask
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -44,8 +46,8 @@ Llm = Annotated[LLMProvider, Depends(get_llm)]
 
 log = logging.getLogger("app.agent")
 
-# 응답 생성 중인 세션 -> 시작 시각. 세션당 동시에 한 턴만, 그동안 카드 동작도 막는다.
-# (시작 직후 연결이 끊겨 정리 코드가 못 도는 경우에 대비해 오래된 항목은 끝난 것으로 본다. 프로세스 단위)
+# 작업 중인 세션 -> 시작 시각. 세션당 한 번에 한 작업(턴 또는 카드 동작)만 처리한다.
+# (정리 코드가 못 도는 경우에 대비해 오래된 항목은 끝난 것으로 본다. 프로세스 단위)
 _active: dict[str, float] = {}
 _STALE_SEC = 15 * 60
 
@@ -60,6 +62,28 @@ def _busy(session_id: str) -> bool:
 def _check_idle(session_id: str) -> None:
     if _busy(session_id):
         raise AgentError(409, "agent_busy", "Agent 가 응답하는 중입니다. 응답이 끝난 뒤 다시 시도하세요.")
+
+
+def _acquire(session_id: str) -> float:
+    """세션 잠금. 확인과 등록 사이에 await 가 없어 이벤트 루프 안에서 원자적이다. 돌려준 토큰으로 푼다."""
+    _check_idle(session_id)
+    token = time.monotonic()
+    _active[session_id] = token
+    return token
+
+
+def _release(session_id: str, token: float) -> None:
+    if _active.get(session_id) == token:  # 그사이 오래된 잠금으로 보고 다른 작업이 잡았으면 건드리지 않는다
+        _active.pop(session_id, None)
+
+
+@asynccontextmanager
+async def _hold(session_id: str):
+    token = _acquire(session_id)
+    try:
+        yield
+    finally:
+        _release(session_id, token)
 
 
 def _get_session(db: Session, user_id: str, session_id: str) -> AgentSession:
@@ -120,7 +144,7 @@ async def get_session(session_id: str, db: DbSession, user_id: UserId, http: Htt
     api = ServiceApi(http, user_id)
     messages: list[MessageView] = []
     for m in rows:
-        if not m.content.strip() and not m.cards:
+        if not m.content.strip() and not m.cards and not m.steps:
             continue
         cards = [c for ref in (m.cards or []) if (c := await _resolve_card(api, s.plan_id, ref))]
         steps = [Step.model_validate(x) for x in (m.steps or [])]
@@ -138,8 +162,9 @@ async def get_session(session_id: str, db: DbSession, user_id: UserId, http: Htt
 
 @router.delete("/sessions/{session_id}", status_code=204)
 def delete_session(session_id: str, db: DbSession, user_id: UserId) -> Response:
+    s = _get_session(db, user_id, session_id)
     _check_idle(session_id)
-    db.delete(_get_session(db, user_id, session_id))
+    db.delete(s)
     db.commit()
     return Response(status_code=204)
 
@@ -152,9 +177,7 @@ def _sse(ev: dict) -> str:
 
 async def _turn_response(session_id: str, plan_id: int, text: str, user_id: str, http: httpx.AsyncClient,
                          llm: LLMProvider, stream: bool, repropose: dict | None = None):
-    # 확인과 등록 사이에 await 가 없으므로 이벤트 루프 안에서 원자적이다
-    _check_idle(session_id)
-    _active[session_id] = time.monotonic()
+    token = _acquire(session_id)
 
     async def events() -> AsyncIterator[dict]:
         try:
@@ -166,14 +189,15 @@ async def _turn_response(session_id: str, plan_id: int, text: str, user_id: str,
             log.exception("session=%s 턴 처리 중 오류", session_id[:8])
             yield {"event": "error", "data": {"code": "internal_error", "message": f"서버 오류: {type(e).__name__}"}}
         finally:
-            _active.pop(session_id, None)
+            _release(session_id, token)
 
     if stream:
         async def sse() -> AsyncIterator[str]:
             async for ev in events():
                 yield _sse(ev)
 
-        return StreamingResponse(sse(), media_type="text/event-stream",
+        # 스트림이 시작되기 전에 연결이 끊기면 events() 의 finally 가 돌지 않으므로 응답 뒤에도 한 번 더 푼다
+        return StreamingResponse(sse(), media_type="text/event-stream", background=BackgroundTask(_release, session_id, token),
                                  headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
     text_out, steps, cards, summary, error = "", {}, [], None, None
@@ -238,13 +262,13 @@ async def accept(session_id: str, proposal_id: int, db: DbSession, user_id: User
                  body: Annotated[AcceptRequest | None, Body()] = None) -> dict:
     """제안 승인. 응답은 planner {proposal, plan}. 제안 이후 일정이 바뀌었으면 409 base_changed 를 그대로 전달."""
     s = _get_session(db, user_id, session_id)
-    _check_idle(session_id)
-    api = ServiceApi(http, user_id)
-    await _own_proposal(api, s, proposal_id)
-    mode = (body or AcceptRequest()).mode
-    result = await api.accept_proposal(s.plan_id, proposal_id, mode)
-    how = "카드의 일정 그대로 덮어써" if result["proposal"]["decision"] == "overwritten" else ""
-    await to_thread.run_sync(add_note, session_id, f"사용자가 제안 #{proposal_id} 을 승인해 {how}일정에 반영됐습니다.")
+    async with _hold(session_id):
+        api = ServiceApi(http, user_id)
+        await _own_proposal(api, s, proposal_id)
+        mode = (body or AcceptRequest()).mode
+        result = await api.accept_proposal(s.plan_id, proposal_id, mode)
+        how = "카드의 일정 그대로 덮어써 " if result["proposal"]["decision"] == "overwritten" else ""
+        await to_thread.run_sync(add_note, session_id, f"사용자가 제안 #{proposal_id} 을 승인해 {how}일정에 반영됐습니다.")
     return result
 
 
@@ -252,11 +276,11 @@ async def accept(session_id: str, proposal_id: int, db: DbSession, user_id: User
 async def reject(session_id: str, proposal_id: int, db: DbSession, user_id: UserId, http: Http) -> dict:
     """제안 거절. 응답은 planner ProposalDetail."""
     s = _get_session(db, user_id, session_id)
-    _check_idle(session_id)
-    api = ServiceApi(http, user_id)
-    await _own_proposal(api, s, proposal_id)
-    result = await api.reject_proposal(s.plan_id, proposal_id)
-    await to_thread.run_sync(add_note, session_id, f"사용자가 제안 #{proposal_id} 을 거절했습니다. 일정은 그대로입니다.")
+    async with _hold(session_id):
+        api = ServiceApi(http, user_id)
+        await _own_proposal(api, s, proposal_id)
+        result = await api.reject_proposal(s.plan_id, proposal_id)
+        await to_thread.run_sync(add_note, session_id, f"사용자가 제안 #{proposal_id} 을 거절했습니다. 일정은 그대로입니다.")
     return result
 
 
@@ -277,13 +301,13 @@ async def repropose(session_id: str, proposal_id: int, db: DbSession, user_id: U
 async def _candidate(session_id: str, rec_id: int, cand_id: int, action: str, db: Session, user_id: str,
                      http: httpx.AsyncClient) -> dict:
     s = _get_session(db, user_id, session_id)
-    _check_idle(session_id)
-    api = ServiceApi(http, user_id)
-    cand = await _own_recommendation(api, s, rec_id, cand_id)
-    result = await api.candidate_action(s.plan_id, rec_id, cand_id, action)
-    title = (cand.get("place") or {}).get("title", cand["place_id"])
-    verb = "일정에 추가했습니다" if action == "add" else "일정에서 뺐습니다"
-    await to_thread.run_sync(add_note, session_id, f"사용자가 추천 #{rec_id} 의 '{title}'({cand['day']}일차)를 {verb}.")
+    async with _hold(session_id):
+        api = ServiceApi(http, user_id)
+        cand = await _own_recommendation(api, s, rec_id, cand_id)
+        result = await api.candidate_action(s.plan_id, rec_id, cand_id, action)
+        title = (cand.get("place") or {}).get("title", cand["place_id"])
+        verb = "일정에 추가했습니다" if action == "add" else "일정에서 뺐습니다"
+        await to_thread.run_sync(add_note, session_id, f"사용자가 추천 #{rec_id} 의 '{title}'({cand['day']}일차)를 {verb}.")
     return result
 
 

@@ -25,7 +25,7 @@ Memo = Annotated[str, Field(max_length=500)]
 Day = Annotated[int, Field(ge=1, le=MAX_DAYS)]
 Order = Annotated[int, Field(ge=1)]
 Stay = Annotated[int, Field(ge=5, le=720)]
-PlaceId = Annotated[str, Field(min_length=1, max_length=40)]
+PlaceId = Annotated[str, Field(min_length=1, max_length=40, pattern=r"^[A-Za-z0-9_-]+$")]
 Id = Annotated[int, Field(description="양수는 실제 id, 음수는 같은 ops 목록에서 새로 만든 항목·규칙의 임시 id")]
 
 

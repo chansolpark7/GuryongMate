@@ -20,6 +20,8 @@
 - 본문은 JSON이다. **정의되지 않은 필드가 들어오면 422**로 거부한다(오타를 조용히 무시하지 않기 위해).
 - 시각은 `"HH:MM"`(24시간), 날짜는 `"YYYY-MM-DD"`다.
 - 경로의 id는 정수다. 정수가 아니면 422, 없으면 404다.
+- `place_id`는 영문·숫자·`-`·`_`만 쓴다 (예: `kto-126128`). 다른 문자가 있으면 422다.
+- `null`은 필드 설명에 "null 가능"이라고 적힌 곳에서만 받는다. `ItemCreate`의 `order`·`start_time`, `PlanCreate`의 `end_date`는 `null`이 "생략"과 같고, `ItemUpdate.start_time`의 `null`은 "고정 해제"다.
 
 ### 1.2 응답
 - 시각은 `"HH:MM"`으로 내보낸다. 자동 계산된 시각이 자정을 넘으면 `"24:30"`처럼 24 이상으로 표기한다.
@@ -67,6 +69,7 @@
 ### 2.2 `version`
 - 계획을 만들면 `1`이다. **일정을 바꾸는 요청이 성공할 때마다 1 오른다**(직접 편집, `ops`, 제안 승인, 추천 추가·빼기).
 - 조회, `preview`, 제안 생성·거절, 추천 생성은 `version`을 바꾸지 않는다.
+- 일정을 바꾸는 요청은 계획 행을 잠그고 처리한다. 동시에 들어온 요청은 차례로 처리되므로 같은 `version` 위에 두 변경이 겹치지 않는다(예: 같은 기준의 제안 둘을 동시에 승인하면 하나만 반영되고 나머지는 409 `base_changed`).
 - 제안은 만들 때의 `version`(`base_version`)을 기억한다. 둘이 같으면 "제안 이후 일정이 안 바뀜"이다.
 
 ### 2.3 `PlanSummary` / `PlanDetail`
@@ -125,6 +128,8 @@ params에 정의되지 않은 키가 있으면 422 `invalid_request`다.
 {"kind": "added", "message": "추가: 1일차 2번째 '카페파도' (30분)", "item_id": 21, "day": 1}
 ```
 `kind`: `added` · `removed` · `moved` · `updated` · `plan`(계획 설정) · `rule_added` · `rule_removed` · `day_end`(그날 종료 시각 변화)
+
+`moved`는 실제로 옮긴 항목만이다. 다른 날로 간 항목과, 같은 날 남은 항목들 사이의 상대 순서가 바뀐 항목이다. 앞에 항목이 추가·삭제돼 번호만 밀린 항목은 `moved`가 아니다.
 
 ---
 
@@ -213,7 +218,7 @@ pending ──accept──▶ accepted (decision: applied | overwritten)
 
 | 메서드 | 경로 | 본문 | 성공 | 오류 |
 |---|---|---|---|---|
-| POST | `/planner/plans/{plan_id}/proposals` | `ProposalCreate` | 201 `ProposalDetail` | 404, 409 `version_conflict`·`supersede_conflict`, 422, 503 (+`op_index`) |
+| POST | `/planner/plans/{plan_id}/proposals` | `ProposalCreate` | 201 `ProposalDetail` | 404 (`supersedes`가 없는 제안이면 `proposal_not_found`), 409 `version_conflict`·`supersede_conflict`, 422, 503 (+`op_index`) |
 | GET | `/planner/plans/{plan_id}/proposals?status=` | | 200 `ProposalSummary[]` (최신순) | 404, 422 (모르는 status) |
 | GET | `/planner/plans/{plan_id}/proposals/{proposal_id}` | | 200 `ProposalDetail` | 404 `proposal_not_found` |
 | POST | `/planner/plans/{plan_id}/proposals/{proposal_id}/accept` | `{"mode": "auto" \| "overwrite"}` (본문 생략 = auto) | 200 `{"proposal": ProposalDetail, "plan": PlanDetail}` | 404, 409 `proposal_not_pending`·`base_changed`, 422 |
@@ -291,7 +296,7 @@ LLM이 고른 장소 후보 묶음이다. 사용자가 후보마다 [추가]/[�
 | GET | `/planner/plans/{plan_id}/recommendations` | | 200 `RecommendationView[]` (최신순) | 404 |
 | GET | `/planner/plans/{plan_id}/recommendations/{recommendation_id}` | | 200 `RecommendationView` | 404 `recommendation_not_found` |
 | POST | `/planner/plans/{plan_id}/recommendations/{recommendation_id}/candidates/{candidate_id}/add` | | 200 `{"recommendation": RecommendationView, "plan": PlanDetail}` | 404 `candidate_not_found`, 409 `already_in_plan`, 422 `day_out_of_range`, 503 |
-| POST | `/planner/plans/{plan_id}/recommendations/{recommendation_id}/candidates/{candidate_id}/remove` | | 200 위와 같음 | 404, 409 `not_in_plan` |
+| POST | `/planner/plans/{plan_id}/recommendations/{recommendation_id}/candidates/{candidate_id}/remove` | | 200 위와 같음 | 404, 409 `not_in_plan` (후보의 날짜가 없어진 경우 포함) |
 
 ```jsonc
 // RecommendationCreate

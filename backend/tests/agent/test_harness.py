@@ -465,3 +465,82 @@ def test_session_create_errors(client):
     err(client.post("/agent/sessions", json={"plan_id": "x"}, headers=H), 422, "invalid_request")
     err(client.post("/agent/sessions", json={"plan_id": 1}), 422, "invalid_request")  # 헤더 없음
     err(client.post("/agent/sessions/nope/chat", json={"message": "a"}, headers=H), 404, "session_not_found")
+
+
+# ---------- 리뷰 회귀 ----------
+
+def test_error_turn_still_saves_history_and_cards(client, session):
+    """턴이 오류로 끝나도 그때까지의 대화와 이미 만든 카드는 기록에 남는다."""
+    sid, pid = session
+
+    async def edit_elsewhere():
+        r = await asgi.post(f"/planner/plans/{pid}/items", json={"place_id": "p-food"}, headers=H)
+        assert r.status_code == 201
+    events = chat(client, sid, "카페 추천하고 일정도 바꿔줘", [
+        [("recommend_places", {"title": "카페", "candidates": [{"place_id": "p-cafe"}]}), edit_elsewhere,
+         ("add_item", {"place_id": "p-cafe"})],
+        ["둘 다 해봤어요"],
+    ])
+    assert events[-1][1]["code"] == "plan_changed"
+    msgs = ok(client.get(f"/agent/sessions/{sid}", headers=H))["messages"]
+    assert [m["role"] for m in msgs] == ["user", "assistant"]
+    assert "일정이 바뀌어" in msgs[1]["content"]
+    assert [c["type"] for c in msgs[1]["cards"]] == ["recommendation"]
+    assert [s["kind"] for s in msgs[1]["steps"]] == ["recommend", "edit", "proposal"]
+    # 다음 턴 LLM 도 기록을 본다 (도구 호출-결과 짝이 맞는 기록)
+    chat(client, sid, "다시", [["네"]])
+    history = llm.calls[-1]
+    assert any(m["role"] == "tool" for m in history)
+    for n, m in enumerate(history):
+        if m.get("tool_calls"):
+            ids = {c["id"] for c in m["tool_calls"]}
+            assert ids == {x["tool_call_id"] for x in history[n + 1:n + 1 + len(ids)]}
+
+
+def test_llm_failure_saves_user_message(client, session):
+    from app.agent.llm import LLMError
+    sid, _ = session
+    chat(client, sid, "안녕", [[LLMError("x")], [LLMError("x")], [LLMError("x")]])
+    msgs = ok(client.get(f"/agent/sessions/{sid}", headers=H))["messages"]
+    assert [m["role"] for m in msgs] == ["user", "assistant"] and "LLM 호출 실패" in msgs[1]["content"]
+
+
+def test_steps_kept_when_final_text_empty(client, session):
+    sid, _ = session
+    events = chat(client, sid, "a", [["볼게요", ("view_plan", {})], [""]])
+    assert last(events, "steps_done")["count"] == 1
+    msg = ok(client.get(f"/agent/sessions/{sid}", headers=H))["messages"][-1]
+    assert msg["content"] == "볼게요" and [s["kind"] for s in msg["steps"]] == ["plan"]
+    assert msg["steps_summary"] == "1단계 완료 : 일정 확인"
+
+
+def test_continued_proposal_accumulates_request(client, session):
+    sid, pid = session
+    chat(client, sid, "점심 넣어줘", [[("add_item", {"place_id": "p-food"})], ["점심"]])
+    p2 = last(chat(client, sid, "카페도 넣어줘", [[("add_item", {"place_id": "p-cafe"})], ["카페"]]), "proposal")
+    assert p2["request"] == "점심 넣어줘\n카페도 넣어줘" and len(p2["ops"]) == 2
+    turn = len(llm.calls)
+    ok(client.post(f"/planner/plans/{pid}/items", json={"place_id": "p-house"}, headers=H), 201)
+    llm.script = [["다시"]]
+    sse(client.post(f"/agent/sessions/{sid}/proposals/{p2['id']}/repropose", headers=H))
+    assert "점심 넣어줘\n카페도 넣어줘" in llm.calls[turn][0]["content"]
+
+
+def test_upstream_unavailable(client):
+    dead = httpx.AsyncClient(base_url="http://127.0.0.1:9")
+    app.dependency_overrides[get_http] = lambda: dead
+    try:
+        err(client.post("/agent/sessions", json={"plan_id": 1}, headers=H), 503, "upstream_unavailable")
+    finally:
+        app.dependency_overrides[get_http] = lambda: asgi
+
+
+def test_card_actions_release_lock(client, session):
+    sid, pid = session
+    p = last(chat(client, sid, "a", [[("add_item", {"place_id": "p-food"})], ["추가"]]), "proposal")
+    err(client.post(f"/agent/sessions/{sid}/proposals/{p['id']}/accept", json={"mode": "bad"}, headers=H),
+        422, "invalid_request")
+    ok(client.post(f"/agent/sessions/{sid}/proposals/{p['id']}/reject", headers=H))
+    err(client.post(f"/agent/sessions/{sid}/proposals/{p['id']}/reject", headers=H), 409, "proposal_not_pending")
+    assert agent_router._active == {}  # 성공·실패 모두 잠금을 푼다
+    assert last(chat(client, sid, "b", [["네"]]), "done")

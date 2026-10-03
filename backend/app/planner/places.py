@@ -1,6 +1,7 @@
 """places 모듈 HTTP API 로 장소 정보를 조회한다 (모듈 간 규칙: 내부 코드 import 금지)."""
 import time as _time
 from typing import Protocol
+from urllib.parse import quote
 
 import httpx
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -40,7 +41,7 @@ class HttpPlaceLookup:
         if hit and _time.monotonic() - hit[0] < self._ttl:
             return hit[1]
         try:
-            resp = self._client.get(f"/places/{place_id}")
+            resp = self._client.get(f"/places/{quote(place_id, safe='')}")
         except httpx.HTTPError as e:
             raise PlacesUnavailable(str(e)) from e
         if resp.status_code == 404:

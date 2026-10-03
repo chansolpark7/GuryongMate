@@ -174,3 +174,32 @@ def test_proposal_scoped_to_plan_and_user(client):
         404, "plan_not_found")
     err(client.post(f"/planner/plans/{pid}/proposals/{p['id']}/accept", json={"mode": "force"}, headers=H),
         422, "invalid_request")
+
+
+def test_concurrent_accepts_only_one_wins(client):
+    """같은 기준의 제안 둘을 동시에 승인해도 하나만 반영되고 나머지는 base_changed (행 잠금)."""
+    from concurrent.futures import ThreadPoolExecutor
+    pid, house = setup_plan(client)
+    a = propose(client, pid, [{"op": "add_item", "place_id": "p-food"}])
+    b = propose(client, pid, [{"op": "add_item", "place_id": "p-cafe"}])
+    with ThreadPoolExecutor(2) as pool:
+        results = list(pool.map(lambda p: accept(client, pid, p["id"]), [a, b]))
+    codes = sorted(r.status_code for r in results)
+    assert codes == [200, 409]
+    assert next(r for r in results if r.status_code == 409).json()["detail"]["code"] == "base_changed"
+    plan = get_plan(client, pid)
+    assert plan["version"] == 3 and len(order(plan)) == 2
+    assert [i["order"] for i in plan["days"][0]["items"]] == [1, 2]
+
+
+def test_changes_report_only_real_moves(client):
+    pid = new_plan(client)["id"]
+    for place in ("p-house", "p-food", "p-museum"):
+        plan = add(client, pid, place)
+    house, museum = item_id(plan, "p-house"), item_id(plan, "p-museum")
+    r = ok(client.post(f"/planner/plans/{pid}/preview", json={"ops": [{"op": "remove_item", "item_id": house}]},
+                       headers=H))
+    assert [c["kind"] for c in r["changes"]] == ["removed", "day_end"]   # 뒤 항목은 밀렸을 뿐
+    r = ok(client.post(f"/planner/plans/{pid}/preview",
+                       json={"ops": [{"op": "update_item", "item_id": museum, "order": 1}]}, headers=H))
+    assert [(c["kind"], c["item_id"]) for c in r["changes"] if c["kind"] == "moved"] == [("moved", museum)]

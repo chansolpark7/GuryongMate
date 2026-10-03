@@ -176,7 +176,7 @@ def test_preview_does_not_save(client):
     ]}, headers=H))
     assert order(r["plan"]) == ["p-museum", "p-house", "p-food"]
     assert sorted(i["id"] for i in r["plan"]["days"][0]["items"] if i["id"] < 0) == [-2, -1]
-    assert [c["kind"] for c in r["changes"]] == ["added", "moved", "added", "day_end"]
+    assert [c["kind"] for c in r["changes"]] == ["added", "added", "day_end"]  # 가옥거리는 밀렸을 뿐 이동 아님
     assert order(get_plan(client, pid)) == ["p-house"]
     d = err(client.post(f"/planner/plans/{pid}/preview", json={"ops": [{"op": "add_item", "place_id": "p-food", "day": 2}]},
                         headers=H), 422, "day_out_of_range")
@@ -192,3 +192,16 @@ def test_places_unavailable(client):
     plan = get_plan(client, pid)  # 조회는 되고, 장소 정보만 비고 경고가 붙는다
     assert plan["days"][0]["items"][0]["place"] is None
     assert [v["code"] for v in plan["violations"]] == ["place_unavailable"]
+
+
+def test_concurrent_edits_are_serialized(client):
+    from concurrent.futures import ThreadPoolExecutor
+    pid = new_plan(client)["id"]
+    places = ["p-house", "p-food", "p-museum", "p-cafe"]
+    with ThreadPoolExecutor(4) as pool:
+        results = list(pool.map(lambda pl: client.post(f"/planner/plans/{pid}/items", json={"place_id": pl}, headers=H),
+                                places))
+    assert all(r.status_code == 201 for r in results)
+    plan = get_plan(client, pid)
+    assert plan["version"] == 5 and sorted(order(plan)) == sorted(places)
+    assert [i["order"] for i in plan["days"][0]["items"]] == [1, 2, 3, 4]

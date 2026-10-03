@@ -68,8 +68,10 @@ _ops_adapter = TypeAdapter(list[PlanOp])
 
 # ---------- 공통 ----------
 
-def _get_plan(db: Session, user_id: str, plan_id: int) -> PlannerPlan:
-    plan = db.get(PlannerPlan, plan_id)
+def _get_plan(db: Session, user_id: str, plan_id: int, lock: bool = False) -> PlannerPlan:
+    """lock=True: 계획 행을 잠근다 (SELECT ... FOR UPDATE). 일정을 바꾸는 요청은 모두 잠그고 처리해서
+    동시에 들어온 변경이 서로를 덮어쓰거나 같은 version 위에 두 번 반영되지 않게 한다."""
+    plan = db.get(PlannerPlan, plan_id, with_for_update=lock, populate_existing=lock)
     if plan is None or plan.user_id != user_id:
         raise not_found("plan_not_found", f"계획 {plan_id}")
     return plan
@@ -116,12 +118,12 @@ def get_plan(plan_id: int, db: DbSession, user_id: UserId, places: Places) -> Pl
 @router.patch("/plans/{plan_id}", response_model=PlanDetail)
 def update_plan(plan_id: int, body: PlanUpdate, db: DbSession, user_id: UserId, places: Places) -> PlanDetail:
     op = UpdatePlanOp(op="update_plan", **body.model_dump(exclude_unset=True))
-    return _apply(db, _get_plan(db, user_id, plan_id), [op], places)
+    return _apply(db, _get_plan(db, user_id, plan_id, lock=True), [op], places)
 
 
 @router.delete("/plans/{plan_id}", status_code=204)
 def delete_plan(plan_id: int, db: DbSession, user_id: UserId) -> Response:
-    db.delete(_get_plan(db, user_id, plan_id))  # 제안·추천은 DB 의 ON DELETE CASCADE 로 함께 삭제
+    db.delete(_get_plan(db, user_id, plan_id, lock=True))  # 제안·추천은 DB 의 ON DELETE CASCADE 로 함께 삭제
     db.commit()
     return Response(status_code=204)
 
@@ -137,20 +139,20 @@ def validate_plan(plan_id: int, db: DbSession, user_id: UserId, places: Places) 
 @router.post("/plans/{plan_id}/items", response_model=PlanDetail, status_code=201)
 def add_item(plan_id: int, body: ItemCreate, db: DbSession, user_id: UserId, places: Places) -> PlanDetail:
     op = AddItemOp(op="add_item", **body.model_dump())
-    return _apply(db, _get_plan(db, user_id, plan_id), [op], places)
+    return _apply(db, _get_plan(db, user_id, plan_id, lock=True), [op], places)
 
 
 @router.patch("/plans/{plan_id}/items/{item_id}", response_model=PlanDetail)
 def update_item(plan_id: int, item_id: int, body: ItemUpdate, db: DbSession, user_id: UserId,
                 places: Places) -> PlanDetail:
     op = UpdateItemOp(op="update_item", item_id=item_id, **body.model_dump(exclude_unset=True))
-    return _apply(db, _get_plan(db, user_id, plan_id), [op], places)
+    return _apply(db, _get_plan(db, user_id, plan_id, lock=True), [op], places)
 
 
 @router.delete("/plans/{plan_id}/items/{item_id}", response_model=PlanDetail)
 def delete_item(plan_id: int, item_id: int, db: DbSession, user_id: UserId, places: Places) -> PlanDetail:
     op = RemoveItemOp(op="remove_item", item_id=item_id)
-    return _apply(db, _get_plan(db, user_id, plan_id), [op], places)
+    return _apply(db, _get_plan(db, user_id, plan_id, lock=True), [op], places)
 
 
 @router.get("/plans/{plan_id}/constraints", response_model=list[ConstraintView])
@@ -161,19 +163,19 @@ def list_constraints(plan_id: int, db: DbSession, user_id: UserId) -> list[Const
 @router.post("/plans/{plan_id}/constraints", response_model=PlanDetail, status_code=201)
 def add_constraint(plan_id: int, body: ConstraintCreate, db: DbSession, user_id: UserId, places: Places) -> PlanDetail:
     op = AddConstraintOp(op="add_constraint", **body.model_dump())
-    return _apply(db, _get_plan(db, user_id, plan_id), [op], places)
+    return _apply(db, _get_plan(db, user_id, plan_id, lock=True), [op], places)
 
 
 @router.delete("/plans/{plan_id}/constraints/{constraint_id}", response_model=PlanDetail)
 def delete_constraint(plan_id: int, constraint_id: int, db: DbSession, user_id: UserId, places: Places) -> PlanDetail:
     op = RemoveConstraintOp(op="remove_constraint", constraint_id=constraint_id)
-    return _apply(db, _get_plan(db, user_id, plan_id), [op], places)
+    return _apply(db, _get_plan(db, user_id, plan_id, lock=True), [op], places)
 
 
 @router.post("/plans/{plan_id}/ops", response_model=PlanDetail)
 def apply_ops(plan_id: int, body: OpsRequest, db: DbSession, user_id: UserId, places: Places) -> PlanDetail:
     """여러 변경을 원자적으로 즉시 적용 (사용자 직접 편집용)."""
-    return _apply(db, _get_plan(db, user_id, plan_id), body.ops, places, with_index=True)
+    return _apply(db, _get_plan(db, user_id, plan_id, lock=True), body.ops, places, with_index=True)
 
 
 @router.post("/plans/{plan_id}/preview", response_model=PreviewResult)
@@ -220,7 +222,7 @@ def _decide(prop: PlannerProposal, status: str, decision: str | None = None) -> 
 @router.post("/plans/{plan_id}/proposals", response_model=ProposalDetail, status_code=201)
 def create_proposal(plan_id: int, body: ProposalCreate, db: DbSession, user_id: UserId,
                     places: Places) -> ProposalDetail:
-    plan = _get_plan(db, user_id, plan_id)
+    plan = _get_plan(db, user_id, plan_id, lock=True)
     if body.expected_version is not None and body.expected_version != plan.version:
         raise PlannerError(409, "version_conflict", "그사이 일정이 바뀌었습니다.",
                            expected_version=body.expected_version, current_version=plan.version)
@@ -263,7 +265,7 @@ def get_proposal(plan_id: int, proposal_id: int, db: DbSession, user_id: UserId)
 def accept_proposal(plan_id: int, proposal_id: int, db: DbSession, user_id: UserId, places: Places,
                     body: Annotated[AcceptRequest | None, Body()] = None) -> AcceptResult:
     mode = (body or AcceptRequest()).mode
-    plan = _get_plan(db, user_id, plan_id)
+    plan = _get_plan(db, user_id, plan_id, lock=True)
     prop = _get_proposal(db, plan, proposal_id)
     _require_pending(prop)
     after = PlanDetail.model_validate(prop.after)
@@ -292,7 +294,7 @@ def accept_proposal(plan_id: int, proposal_id: int, db: DbSession, user_id: User
 
 @router.post("/plans/{plan_id}/proposals/{proposal_id}/reject", response_model=ProposalDetail)
 def reject_proposal(plan_id: int, proposal_id: int, db: DbSession, user_id: UserId) -> ProposalDetail:
-    plan = _get_plan(db, user_id, plan_id)
+    plan = _get_plan(db, user_id, plan_id, lock=True)
     prop = _get_proposal(db, plan, proposal_id)
     _require_pending(prop)
     _decide(prop, "rejected")
@@ -357,7 +359,7 @@ def get_recommendation(plan_id: int, recommendation_id: int, db: DbSession, user
              response_model=RecommendationActionResult)
 def add_candidate(plan_id: int, recommendation_id: int, candidate_id: int, db: DbSession, user_id: UserId,
                   places: Places) -> RecommendationActionResult:
-    plan = _get_plan(db, user_id, plan_id)
+    plan = _get_plan(db, user_id, plan_id, lock=True)
     rec = _get_recommendation(db, plan, recommendation_id)
     cand = _get_candidate(rec, candidate_id)
     engine.check_day(plan, cand.day)
@@ -374,7 +376,7 @@ def add_candidate(plan_id: int, recommendation_id: int, candidate_id: int, db: D
              response_model=RecommendationActionResult)
 def remove_candidate(plan_id: int, recommendation_id: int, candidate_id: int, db: DbSession, user_id: UserId,
                      places: Places) -> RecommendationActionResult:
-    plan = _get_plan(db, user_id, plan_id)
+    plan = _get_plan(db, user_id, plan_id, lock=True)
     rec = _get_recommendation(db, plan, recommendation_id)
     cand = _get_candidate(rec, candidate_id)
     matched = recommend.match_item(engine.detail(plan, places), cand)

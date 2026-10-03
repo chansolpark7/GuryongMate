@@ -155,3 +155,8 @@ def test_proposal_and_recommendation_body_rejects(client, pid):
     invalid(client.post(f"{url}/recommendations",
                         json={"title": "t", "candidates": [{"place_id": f"p{i}", "day": 1} for i in range(11)]},
                         headers=H))
+
+
+@pytest.mark.parametrize("place_id", ["../plans", "a/b", "p-food?x=1", "한글"])
+def test_place_id_format(client, pid, place_id):
+    invalid(client.post(f"/planner/plans/{pid}/items", json={"place_id": place_id}, headers=H))
