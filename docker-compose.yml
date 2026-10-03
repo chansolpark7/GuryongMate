@@ -27,6 +27,8 @@ services:
     volumes:
       - ./backend:/srv
       - ./data:/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"  # Linux 에서도 호스트의 Ollama 접속
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
     depends_on:
       db:
