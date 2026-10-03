@@ -163,3 +163,73 @@ def test_delete_plan(client):
     pid = new_plan(client)["id"]
     assert client.delete(f"/planner/plans/{pid}", headers=H).status_code == 204
     assert client.get(f"/planner/plans/{pid}", headers=H).status_code == 404
+
+
+def test_preview_does_not_save_and_supports_temp_ids(client):
+    pid = new_plan(client)["id"]
+    ok(client.post(f"/planner/plans/{pid}/items", json={"place_id": "p-house"}, headers=H), 201)
+    ops = [
+        {"op": "add_item", "place_id": "p-food"},
+        {"op": "add_item", "place_id": "p-museum"},
+        {"op": "update_item", "item_id": -2, "order": 1, "start_time": "13:00"},  # 방금 추가한 항목을 임시 id 로
+    ]
+    r = ok(client.post(f"/planner/plans/{pid}/preview", json={"ops": ops}, headers=H))
+    assert order(r["plan"]) == ["p-museum", "p-house", "p-food"]
+    assert [c["kind"] for c in r["changes"]] == ["added", "moved", "added", "day_end"]
+    assert order(ok(client.get(f"/planner/plans/{pid}", headers=H))) == ["p-house"]  # 저장 안 됨
+
+    bad = client.post(f"/planner/plans/{pid}/preview", json={"ops": [{"op": "remove_item", "item_id": 999}]}, headers=H)
+    assert bad.status_code == 404
+
+
+def test_proposal_accept_reject_supersede(client):
+    pid = new_plan(client)["id"]
+    plan = ok(client.post(f"/planner/plans/{pid}/items", json={"place_id": "p-house"}, headers=H), 201)
+    house = plan["days"][0]["items"][0]["id"]
+    url = f"/planner/plans/{pid}/proposals"
+
+    p1 = ok(client.post(url, json={"ops": [{"op": "add_item", "place_id": "p-food"}], "summary": "점심"}, headers=H), 201)
+    assert p1["status"] == "pending" and p1["applicable"]
+    assert order(p1["before"]) == ["p-house"] and order(p1["after"]) == ["p-house", "p-food"]
+
+    p2 = ok(client.post(url, json={"ops": [{"op": "add_item", "place_id": "p-museum"},
+                                           {"op": "update_item", "item_id": house, "stay_minutes": 30}],
+                                   "supersedes": p1["id"]}, headers=H), 201)
+    assert ok(client.get(f"{url}/{p1['id']}", headers=H))["status"] == "superseded"
+    assert [p["id"] for p in ok(client.get(url, params={"status": "pending"}, headers=H))] == [p2["id"]]
+
+    result = ok(client.post(f"{url}/{p2['id']}/accept", headers=H))
+    assert result["proposal"]["status"] == "accepted"
+    assert order(result["plan"]) == ["p-house", "p-museum"]
+    assert result["plan"]["days"][0]["items"][0]["stay_minutes"] == 30
+    assert client.post(f"{url}/{p2['id']}/accept", headers=H).status_code == 409
+
+    p3 = ok(client.post(url, json={"ops": [{"op": "remove_item", "item_id": house}]}, headers=H), 201)
+    assert ok(client.post(f"{url}/{p3['id']}/reject", headers=H))["status"] == "rejected"
+    assert order(ok(client.get(f"/planner/plans/{pid}", headers=H))) == ["p-house", "p-museum"]
+
+
+def test_stale_proposal_cannot_be_accepted(client):
+    pid = new_plan(client)["id"]
+    plan = ok(client.post(f"/planner/plans/{pid}/items", json={"place_id": "p-house"}, headers=H), 201)
+    house = plan["days"][0]["items"][0]["id"]
+    url = f"/planner/plans/{pid}/proposals"
+    p = ok(client.post(url, json={"ops": [{"op": "update_item", "item_id": house, "stay_minutes": 30}]}, headers=H), 201)
+    ok(client.delete(f"/planner/plans/{pid}/items/{house}", headers=H))  # 사용자가 그사이 직접 삭제
+    detail = ok(client.get(f"{url}/{p['id']}", headers=H))
+    assert detail["applicable"] is False and detail["error"]
+    assert client.post(f"{url}/{p['id']}/accept", headers=H).status_code == 409
+
+
+def test_batch_ops_are_atomic(client):
+    pid = new_plan(client)["id"]
+    url = f"/planner/plans/{pid}/ops"
+    r = client.post(url, json={"ops": [{"op": "add_item", "place_id": "p-house"}, {"op": "add_item", "place_id": "nope"}]},
+                    headers=H)
+    assert r.status_code == 422 and "ops[1]" in r.json()["detail"]
+    assert order(ok(client.get(f"/planner/plans/{pid}", headers=H))) == []
+    plan = ok(client.post(url, json={"ops": [{"op": "add_item", "place_id": "p-house"},
+                                             {"op": "add_constraint", "type": "must_include", "params": {"place_id": "p-food"}},
+                                             {"op": "update_plan", "day_end": "20:00"}]}, headers=H))
+    assert order(plan) == ["p-house"] and plan["day_end"] == "20:00"
+    assert [v["code"] for v in plan["violations"]] == ["must_include"]

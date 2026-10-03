@@ -68,3 +68,19 @@ class PlannerConstraint(Base):
     note: Mapped[str] = mapped_column(Text, default="")
 
     plan: Mapped[PlannerPlan] = relationship(back_populates="constraints")
+
+
+class PlannerProposal(Base):
+    """일정 변경 제안. 사용자가 승인(accept)해야 ops 가 실제 계획에 적용된다."""
+
+    __tablename__ = "planner_proposal"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    plan_id: Mapped[int] = mapped_column(ForeignKey("planner_plan.id", ondelete="CASCADE"), index=True)
+    ops: Mapped[list[dict]] = mapped_column(JSONB)
+    summary: Mapped[str] = mapped_column(Text, default="")
+    source: Mapped[str] = mapped_column(String(10), default="llm")  # llm | user | event
+    origin: Mapped[str] = mapped_column(String(64), default="")  # 예: agent 세션 id
+    status: Mapped[str] = mapped_column(String(12), default="pending")  # pending|accepted|rejected|superseded
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

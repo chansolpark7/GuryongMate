@@ -203,3 +203,95 @@ class PlanDetail(PlanSummary):
 class ValidationResult(BaseModel):
     ok: bool = Field(description="error 수준 위반이 없으면 true")
     violations: list[Violation]
+
+
+# ---------- 변경 연산(ops) · 미리보기 · 제안 ----------
+# 직접 편집 API 와 제안(Proposal)이 같은 연산 엔진(ops.py)을 쓴다.
+# 같은 ops 목록 안에서 새로 추가한 항목/규칙은 음수 임시 id(-1, -2, ... 추가한 순서)로 참조한다.
+
+class AddItemOp(ItemCreate):
+    op: Literal["add_item"]
+
+
+class UpdateItemOp(ItemUpdate):
+    op: Literal["update_item"]
+    item_id: int
+
+
+class RemoveItemOp(BaseModel):
+    op: Literal["remove_item"]
+    item_id: int
+
+
+class UpdatePlanOp(PlanUpdate):
+    op: Literal["update_plan"]
+
+
+class AddConstraintOp(ConstraintCreate):
+    op: Literal["add_constraint"]
+
+
+class RemoveConstraintOp(BaseModel):
+    op: Literal["remove_constraint"]
+    constraint_id: int
+
+
+PlanOp = Annotated[
+    AddItemOp | UpdateItemOp | RemoveItemOp | UpdatePlanOp | AddConstraintOp | RemoveConstraintOp,
+    Field(discriminator="op"),
+]
+
+
+class OpsRequest(BaseModel):
+    ops: list[PlanOp] = Field(min_length=1)
+
+
+class Change(BaseModel):
+    """사람이 읽는 변경 요약 한 줄. 앱의 제안 카드에 그대로 표시한다."""
+
+    kind: Literal["added", "removed", "moved", "updated", "plan", "rule_added", "rule_removed", "day_end"]
+    message: str
+    item_id: int | None = None
+    day: int | None = None
+
+
+class PreviewResult(BaseModel):
+    plan: PlanDetail = Field(description="ops 를 적용했을 때의 계획 (저장 안 됨). 새 항목 id 는 음수 임시값")
+    changes: list[Change]
+
+
+ProposalStatus = Literal["pending", "accepted", "rejected", "superseded"]
+
+
+class ProposalCreate(OpsRequest):
+    summary: str = Field("", description="변경 이유·요약 (Agent 응답 등)")
+    source: Literal["llm", "user", "event"] = "llm"
+    origin: str = Field("", description="출처 식별자 (예: agent 세션 id)")
+    supersedes: int | None = Field(None, description="이 제안으로 대체할 이전 대기 중 제안 id")
+
+
+class ProposalView(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    plan_id: int
+    status: ProposalStatus
+    summary: str
+    source: str
+    origin: str
+    ops: list[PlanOp]
+    created_at: datetime
+    decided_at: datetime | None
+
+
+class ProposalDetail(ProposalView):
+    changes: list[Change] = Field(description="현재 계획 대비 변경 요약 (pending 일 때만)")
+    before: PlanDetail | None = Field(None, description="현재 계획 (pending 일 때만)")
+    after: PlanDetail | None = Field(None, description="승인 시 계획 미리보기 (pending 이고 적용 가능할 때만)")
+    applicable: bool = Field(True, description="현재 계획에 그대로 적용할 수 있는지")
+    error: str | None = None
+
+
+class AcceptResult(BaseModel):
+    proposal: ProposalView
+    plan: PlanDetail
