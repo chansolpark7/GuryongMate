@@ -85,6 +85,8 @@ def test_story_matching():
     assert story["script"] == "옛날\n이야기"
     assert match_story_place(story, [far, place]) == "kto-126128"  # 이름 일치 우선
     assert match_story_place({**story, "lat": 36.5}, [place]) is None  # 너무 멀면 연결 안 함
+    paren = {**story, "odii_theme_title": "일본인가옥거리(근대문화역사거리)", "lat": 35.9895, "lng": 129.5575}  # 약 170m
+    assert match_story_place(paren, [far, place]) == "kto-126128"  # 괄호·띄어쓰기 달라도 연결
 
 
 def test_parse_response_errors():

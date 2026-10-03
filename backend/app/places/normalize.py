@@ -164,16 +164,23 @@ def _norm_name(name: str) -> str:
     return re.sub(r"[\s()\[\]·,.]", "", name)
 
 
-def match_story_place(story: dict[str, Any], places: list[dict[str, Any]], max_m: float = 400) -> str | None:
-    """이야기를 가장 그럴듯한 KTO 장소에 연결. 이름이 겹치면 우선, 아니면 아주 가까운(80m) 장소만."""
-    theme = _norm_name(story["odii_theme_title"] or story["title"])
+def _name_variants(name: str) -> set[str]:
+    """'포항 일본인가옥거리(근대문화역사거리)' -> 전체, 괄호 제거, '포항' 접두어 제거 버전."""
+    base = re.sub(r"\(.*?\)", "", name)
+    variants = {name, base, re.sub(r"^포항\s*", "", base)}
+    return {v for v in map(_norm_name, variants) if len(v) >= 2}
+
+
+def match_story_place(story: dict[str, Any], places: list[dict[str, Any]], max_m: float = 1500) -> str | None:
+    """이야기를 가장 그럴듯한 KTO 장소에 연결. 이름이 겹치면 max_m 이내에서 가장 가까운 곳, 아니면 아주 가까운(80m) 장소만."""
+    names = _name_variants(story["odii_theme_title"] or story["title"])
     best: tuple[float, str] | None = None
     for p in places:
         d = haversine_m(story["lat"], story["lng"], p["lat"], p["lng"])
         if d > max_m:
             continue
-        title = _norm_name(p["title"])
-        name_match = bool(theme) and (theme in title or title in theme)
+        titles = _name_variants(p["title"])
+        name_match = any(n in t or t in n for n in names for t in titles)
         if not name_match and d > 80:
             continue
         score = d - (1000 if name_match else 0)
