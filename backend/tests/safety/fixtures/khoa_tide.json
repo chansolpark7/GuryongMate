@@ -1,0 +1,1 @@
+{"header":{"resultCode":"00","resultMsg":"NORMAL_SERVICE"},"body":{"items":{"item":[{"obsvtrNm":"양포항","lot":129.52750,"lat":35.88138,"predcDt":"2026-10-04 07:38","predcTdlvVl":33.0,"extrSe":"1"},{"obsvtrNm":"양포항","lot":129.52750,"lat":35.88138,"predcDt":"2026-10-04 17:36","predcTdlvVl":15.0,"extrSe":"4"}]},"pageNo":1,"numOfRows":10,"totalCount":2,"type":"json"}}

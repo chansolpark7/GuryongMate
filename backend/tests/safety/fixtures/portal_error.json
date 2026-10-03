@@ -1,0 +1,9 @@
+{
+  "OpenAPI_ServiceResponse": {
+    "cmmMsgHeader": {
+      "errMsg": "SERVICETIMEOUT_ERROR",
+      "returnAuthMsg": "서비스 연결실패 에러",
+      "returnReasonCode": "05"
+    }
+  }
+}

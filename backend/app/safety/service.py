@@ -1,0 +1,286 @@
+"""수집(sources) + 해석(risk) 을 묶어 API 응답을 만든다."""
+from datetime import date, datetime, time, timedelta
+
+from app.safety import geo, risk
+from app.safety.places import PlaceLookup, PlacesUnavailable
+from app.safety.schemas import (
+    AssessRequest, AssessResult, BreakwaterActivity, DaySummary, Hazard, HourForecastView, Outlook, SensorView,
+    SourceStatus, Status, TideView, UvView, VisitAssessment, ZoneStatus,
+)
+from app.safety.sources import KST, Fetched, Forecast, MockSources, Sources, now_kst
+
+SOURCE_LABEL = {"sensors": "침수 센서", "breakwater": "방파제 CCTV", "uv": "자외선", "forecast": "기상 예보",
+                "warnings": "기상특보", "tide": "조위", "places": "장소 좌표"}
+WARNING_WINDOW = timedelta(hours=24)  # 발효 중 특보를 이 안에 시작하는 일정에만 적용
+
+
+def _status(f: Fetched, mock: bool) -> SourceStatus:
+    return SourceStatus(ok=f.ok, fetched_at=f.fetched_at, error=f.error,
+                        note="mock 데이터 (실제 관측·예보 아님)" if mock else None)
+
+
+def _overall(risks: list[str]) -> str:
+    """주의·위험이 있으면 그 등급. 없는데 판단 못 한 항목이 있으면 unknown (전체가 안전하다고 읽히지 않게)."""
+    if any(r in ("caution", "danger") for r in risks):
+        return risk.worst(risks)
+    if "unknown" in risks:
+        return "unknown"
+    return risk.worst(risks)
+
+
+def _scoped(hazards: list[Hazard]) -> list[Hazard]:
+    """방파제·저지대를 가정하고 낸 예보 위험임을 사유에 붙인다 (특정 장소가 아닌 지역 단위 조회용)."""
+    for h in hazards:
+        if h.source == "기상청 단기예보" and "기준)" not in h.reason:
+            h.reason += " (방파제 기준)" if h.type in ("wind", "wave") else " (해안 저지대 기준)"
+    return hazards
+
+
+class SafetyService:
+    def __init__(self, sources: Sources, places: PlaceLookup):
+        self.src = sources
+        self.places = places
+        self.mock = isinstance(sources, MockSources)
+
+    def _forecast(self, now: datetime) -> tuple[Fetched[Forecast], datetime | None]:
+        fc = self.src.forecast(now)
+        return fc, (fc.value.last_hour if fc.ok and fc.value else None)
+
+    @staticmethod
+    def _hours(fc: Fetched[Forecast], start: datetime, end: datetime) -> list:
+        if not fc.ok or not fc.value:
+            return []
+        first = risk.floor_hour(start)
+        return [h for t, h in fc.value.hours.items() if first <= t < end or t == first]
+
+    # ---------- 지금 상태 ----------
+    def status(self, now: datetime | None = None) -> Status:
+        now = (now or now_kst()).astimezone(KST)
+        sensors, bw, uv, warns = self.src.sensors(), self.src.breakwater(), self.src.uv(), self.src.warnings()
+        fc, _ = self._forecast(now)
+        active = warns.value.active if warns.ok and warns.value else []
+        soon = self._hours(fc, now, now + timedelta(hours=3))
+
+        zones: list[ZoneStatus] = []
+        for side, zone in geo.BREAKWATER_SIDE.items():
+            hz = (risk.warning_hazards(active, {"breakwater"}, warns.fetched_at)
+                  + risk.forecast_hazards(soon, {"breakwater"})
+                  + (risk.breakwater_hazards(bw.value, side, now) if bw.ok and bw.value else []))
+            gaps = not (warns.ok and fc.ok)
+            zones.append(ZoneStatus(id=zone.id, name=zone.name, kind="breakwater",
+                                    risk=risk.worst(h.level for h in hz) if hz else ("unknown" if gaps else "none"),
+                                    reasons=[h.reason for h in hz] or (["데이터 일부를 받지 못함"] if gaps else [])))
+
+        flood_common = (risk.warning_hazards(active, {"flood"}, warns.fetched_at)
+                        + risk.forecast_hazards(soon, {"flood"}))
+        sensor_views: list[SensorView] = []
+        if sensors.ok and sensors.value:
+            for r in sensors.value:
+                lv, why = risk.sensor_risk(r)
+                sensor_views.append(SensorView(id=r.id, name=r.name, type=r.type, lat=r.lat, lng=r.lng,
+                                               value=r.value, level=r.level, risk=lv))
+                if r.type in geo.FLOOD_SENSOR_TYPES:
+                    reasons = ([why] if why else []) + [h.reason for h in flood_common]
+                    z = geo.flood_zone(r.id, r.name, r.lat, r.lng)
+                    zones.append(ZoneStatus(id=z.id, name=z.name, kind="flood", reasons=reasons,
+                                            risk=risk.worst([lv, *(h.level for h in flood_common)])))
+        else:
+            for z in geo.STATIC_FLOOD_ZONES:
+                reasons = [h.reason for h in flood_common] or ["침수 센서 데이터를 받지 못함"]
+                zones.append(ZoneStatus(id=z.id, name=z.name, kind="flood", reasons=reasons,
+                                        risk=risk.worst(h.level for h in flood_common) if flood_common else "unknown"))
+
+        activity = []
+        if bw.ok and bw.value:
+            for side in ("north", "south"):
+                mine = [r for r in bw.value if r.side == side]
+                if mine:
+                    r = max(mine, key=lambda x: x.hour)
+                    activity.append(BreakwaterActivity(side=side, name=geo.BREAKWATER_SIDE[side].name, hour=r.hour,
+                                                       fall=r.fall, intrusion=r.intrusion, approach=r.approach,
+                                                       abnormal=r.abnormal))
+
+        overall = _overall([z.risk for z in zones])
+        data = {"sensors": sensors, "breakwater": bw, "uv": uv, "forecast": fc, "warnings": warns}
+        missing = [SOURCE_LABEL[k] for k, f in data.items() if not f.ok]
+        risky = [z.name for z in zones if z.risk in ("caution", "danger")]
+        if risky:
+            guidance = (f"지금 {', '.join(risky[:4])}{' 등' if len(risky) > 4 else ''}에 주의·위험 신호가 있다. "
+                        "이 구역이 포함된 오늘 일정은 시간 조정이나 대안을 고려하라.")
+        elif overall == "unknown":
+            guidance = "확인된 위험 신호는 없지만 판단하지 못한 구역이 있다. 안전하다고 단정하지 마라."
+        else:
+            guidance = "현재 실측·특보·예보상 특별한 위험 신호가 없다."
+        if missing:
+            guidance += f" 일부 데이터({', '.join(missing)})를 받지 못해 관련 판단은 unknown 이다."
+        guidance += " 이 결과는 지금 상태다. 다른 날짜의 일정은 /safety/assess 나 /safety/outlook 으로 판단하라."
+        return Status(
+            now=now, overall_risk=overall, zones=zones, sensors=sensor_views, breakwater_activity=activity,
+            uv=UvView(index=uv.value.index, at=uv.value.at) if uv.ok and uv.value else None,
+            warnings=[f"{w.name} : {w.areas}" for w in active],
+            preliminary_warnings=warns.value.preliminary if warns.ok and warns.value else [],
+            next_hours=_scoped(risk.forecast_hazards(self._hours(fc, now, now + timedelta(hours=12)),
+                                                     {"breakwater", "flood"})),
+            guidance=guidance, data_status={k: _status(f, self.mock) for k, f in data.items()},
+        )
+
+    # ---------- 날짜별 전망 ----------
+    def outlook(self, day: date, now: datetime | None = None, day_start: time = time(9), day_end: time = time(18),
+                detail: bool = False) -> Outlook:
+        now = (now or now_kst()).astimezone(KST)
+        start = datetime.combine(day, day_start, KST)
+        end = datetime.combine(day, day_end, KST)
+        fc, last = self._forecast(now)
+        t = risk.classify(start, end, now, last, fc.ok)
+        data: dict[str, Fetched] = {"forecast": fc}
+
+        hours = self._hours(fc, max(start, now), end) if t.forecast_available else []
+        hazards = _scoped(risk.forecast_hazards(hours, {"breakwater", "flood"}))
+        warnings: list[str] = []
+        if t.horizon != "past" and start - now <= WARNING_WINDOW:
+            warns = self.src.warnings()
+            data["warnings"] = warns
+            if warns.ok and warns.value:
+                warnings = [f"{w.name} : {w.areas}" for w in warns.value.active]
+                hazards = risk.warning_hazards(warns.value.active, {"breakwater", "flood"}, warns.fetched_at) + hazards
+
+        tides: list[TideView] = []
+        if t.horizon != "past":
+            td = self.src.tide(day)
+            data["tide"] = td
+            if td.ok and td.value:
+                tides = [TideView(time=e.time, kind=e.kind, level_cm=e.level_cm) for e in td.value]
+
+        summary = None
+        if hours:
+            skies = [risk.SKY.get(h.sky) for h in hours if h.sky in risk.SKY]
+            vals = lambda attr: [getattr(h, attr) for h in hours if getattr(h, attr) is not None]  # noqa: E731
+            summary = DaySummary(
+                max_pop=max(vals("pop"), default=None), total_pcp_mm=round(sum(vals("pcp_mm")), 1),
+                max_wind_ms=max(vals("wsd"), default=None), max_wave_m=max(vals("wav"), default=None),
+                temp_min=fc.value.tmin.get(day), temp_max=fc.value.tmax.get(day),
+                sky=max(set(skies), key=skies.count) if skies else None)
+
+        days = (day - now.date()).days
+        if t.horizon == "past":
+            guidance = "지난 날짜라 평가하지 않았다."
+        elif t.horizon in ("medium_range", "long_range"):
+            guidance = (f"{days}일 뒤라 " + ("날씨·바다 상태를 예측할 수 없다." if t.horizon == "long_range"
+                                            else "아직 시간별 예보 범위 밖이다.")
+                        + " 날씨를 이유로 일정을 바꾸지 마라. 만조·간조 시각과 계절 경향만 참고로 쓸 수 있다."
+                        f" {t.recheck_from:%Y-%m-%d}부터 다시 확인하라.")
+        elif not t.forecast_available:
+            guidance = "기상 예보를 받지 못해 판단하지 못했다. 안전하다고 말하지 마라."
+        elif any(h.level in ("caution", "danger") for h in hazards):
+            guidance = ("주의·위험 신호가 있다. 방파제·해안 일정은 신호가 없는 시간대로 옮기거나 실내 대안을 고려하라."
+                        + (" 예보는 바뀔 수 있으니 단정하지 마라." if t.horizon == "short_range" else ""))
+        else:
+            guidance = "예보상 특별한 위험 신호가 없다. 예보는 바뀔 수 있다."
+
+        return Outlook(
+            date=day, now=now, horizon=t.horizon, forecast_available=t.forecast_available, confidence=t.confidence,
+            summary=summary, hazards=hazards,
+            hourly=[HourForecastView(time=h.time, pop=h.pop, pcp_mm=h.pcp_mm, sky=risk.SKY.get(h.sky),
+                                     precip=risk.PTY.get(h.pty), wind_ms=h.wsd, wave_m=h.wav, temp=h.tmp)
+                    for h in sorted(hours, key=lambda x: x.time)] if detail else [],
+            tides=tides, warnings=warnings,
+            seasonal_notes=risk.seasonal_notes(day) if t.horizon in ("medium_range", "long_range") else [],
+            guidance=guidance, recheck_from=t.recheck_from,
+            data_status={k: _status(f, self.mock) for k, f in data.items()},
+        )
+
+    # ---------- 일정 항목 평가 ----------
+    def assess(self, req: AssessRequest) -> AssessResult:
+        now = (req.now or now_kst()).astimezone(KST)
+        fc, last = self._forecast(now)
+        data: dict[str, Fetched | SourceStatus] = {"forecast": fc}
+        place_error: str | None = None
+
+        prepared = []
+        for v in req.visits:
+            lat, lng, label, notes = v.lat, v.lng, v.label, []
+            if v.place_id and (lat is None or lng is None):
+                try:
+                    p = self.places.get(v.place_id)
+                except PlacesUnavailable as e:
+                    p, place_error = None, str(e)
+                if p:
+                    lat, lng, label = p.lat, p.lng, label or p.title
+                else:
+                    notes.append("장소 좌표를 알 수 없어 지역 공통 정보로만 판단했다.")
+            start = datetime.combine(v.date, v.start, KST)
+            end = datetime.combine(v.date, v.end, KST) if v.end else start + timedelta(minutes=60)
+            prepared.append((v, lat, lng, label, notes, start, end, risk.classify(start, end, now, last, fc.ok)))
+        if any(v.place_id for v, *_ in prepared):
+            data["places"] = SourceStatus(ok=place_error is None, error=place_error)
+
+        # 필요한 데이터만 부른다 (먼 날짜만 있으면 실측·특보는 부르지 않는다)
+        live_needed = any(t.horizon == "now" for *_, t in prepared)
+        warn_needed = any(t.horizon in ("now", "short_range") and s - now <= WARNING_WINDOW for *_, s, _, t in prepared)
+        sensors = self.src.sensors() if live_needed else None
+        bw = self.src.breakwater() if live_needed else None
+        warns = self.src.warnings() if warn_needed else None
+        for k, f in (("sensors", sensors), ("breakwater", bw), ("warnings", warns)):
+            if f is not None:
+                data[k] = f
+        tides: dict[date, Fetched] = {}
+
+        results = []
+        for v, lat, lng, label, notes, start, end, t in prepared:
+            sens = risk.sensitivity(lat, lng)
+            hazards: list[Hazard] = []
+            missing = False
+            if t.horizon in ("now", "short_range"):
+                if t.forecast_available:
+                    hazards += risk.forecast_hazards(self._hours(fc, max(start, now), end), sens)
+                else:
+                    missing = True
+                if start - now <= WARNING_WINDOW:
+                    if warns is not None and warns.ok and warns.value:
+                        hazards += risk.warning_hazards(warns.value.active, sens, warns.fetched_at)
+                    else:
+                        missing = True
+                if t.horizon == "now" and lat is not None:
+                    if sensors is not None and sensors.ok and sensors.value:
+                        hazards += risk.sensor_hazards(sensors.value, lat, lng, sensors.fetched_at)
+                    elif "flood" in sens:
+                        missing = True
+                    if "breakwater" in sens and bw is not None and bw.ok and bw.value:
+                        hazards += risk.breakwater_hazards(bw.value, risk.nearest_breakwater_side(lat, lng), now)
+            hazards.sort(key=lambda h: -risk.ORDER.index(h.level))
+
+            if t.horizon != "past" and sens:
+                if start.date() not in tides:
+                    tides[start.date()] = self.src.tide(start.date())
+                td = tides[start.date()]
+                if td.ok and td.value:
+                    notes += risk.tide_notes(td.value, start, end)
+            if t.horizon == "long_range":
+                notes += risk.seasonal_notes(start.date())
+
+            if hazards:
+                level = risk.worst(h.level for h in hazards)
+            elif t.horizon in ("past", "medium_range", "long_range") or missing:
+                level = "unknown"
+            else:
+                level = "none"
+            results.append(VisitAssessment(
+                key=v.key, place_id=v.place_id, label=label, start=start, end=end, horizon=t.horizon,
+                forecast_available=t.forecast_available, confidence=t.confidence, risk=level, hazards=hazards,
+                sensitivity=[risk.SENS_LABEL[s] for s in sorted(sens)], notes=notes,
+                advice=risk.visit_advice(t, level, sens, now, start, hazards, missing),
+                recheck_from=t.recheck_from))
+        if tides:
+            data["tide"] = next(iter(tides.values())) if len(tides) == 1 else min(
+                tides.values(), key=lambda f: f.ok)  # 하나라도 실패했으면 그것을 보여준다
+
+        status = {k: (f if isinstance(f, SourceStatus) else _status(f, self.mock)) for k, f in data.items()}
+        future = [r for r in results if r.horizon != "past"]
+        rechecks = [r.recheck_from for r in results if r.recheck_from]
+        return AssessResult(
+            now=now, overall_risk=_overall([r.risk for r in future]),
+            guidance=risk.assess_guidance([r.horizon for r in results], [r.risk for r in results],
+                                          min(rechecks) if rechecks else None,
+                                          [SOURCE_LABEL[k] for k, s in status.items() if not s.ok]),
+            visits=results, data_status=status, assumptions=risk.ASSUMPTIONS,
+        )
