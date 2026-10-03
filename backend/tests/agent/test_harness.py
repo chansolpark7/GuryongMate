@@ -88,7 +88,9 @@ def client():
 
 
 @pytest.fixture(autouse=True)
-def _reset():
+def _reset(monkeypatch):
+    from app.agent.config import settings
+    monkeypatch.setattr(settings, "review_rounds", 0)  # 기본 하네스 테스트는 검토 관문 없이 (검토는 아래 별도 테스트)
     llm.script, llm.calls, llm.tools_seen = [], [], []
     agent_router._active.clear()
     yield
@@ -569,3 +571,61 @@ def test_tool_results_help_model_follow_up(client, session):
     assert "중복" in llm.calls[-1][-1]["content"]
     chat(client, sid, "카페 넣어줘", [[("add_item", {"place_id": "p-cafe"})], ["넣었어요"]])
     assert "중복" not in llm.calls[-1][-1]["content"]
+
+
+# ---------- 검토 관문 ----------
+
+@pytest.fixture()
+def review_on(monkeypatch):
+    from app.agent.config import settings
+    monkeypatch.setattr(settings, "review_rounds", 2)
+
+
+def test_review_tool_and_gate_push_until_fixed(client, session, review_on):
+    sid, pid = session
+    events = chat(client, sid, "가옥거리 또 넣어줘", [
+        [("add_item", {"place_id": "p-house"})],      # 같은 날 중복 -> should
+        ["넣었어요"],                                    # 끝내려 함 -> 관문이 검토 후 되돌려 보냄
+        [("remove_item", {"item_id": -1}), ("add_item", {"place_id": "p-food"})],
+        [("review_plan", {})],
+        ["물회집으로 바꿨어요"],                         # 관문 재검토: 문제 없음 -> 끝
+    ])
+    assert "review_plan" in [t["function"]["name"] for t in llm.tools_seen[0]]
+    push = llm.calls[2][-1]["content"]
+    assert push.startswith("[시스템] 답하기 전에") and "두 번" in push
+    review_steps = [d for e, d in events if e == "step" and d["kind"] == "review" and d["status"] == "done"]
+    assert [s["detail"] for s in review_steps][0] == "문제 1건" and review_steps[-1]["detail"] == "문제 없음"
+    prop = last(events, "proposal")
+    assert [c["kind"] for c in prop["changes"] if c["kind"] == "added"] == ["added"]
+    assert last(events, "done")["text"] == "넣었어요\n\n물회집으로 바꿨어요"
+    assert "review_plan" in llm.calls[0][0]["content"]  # 작업 순서가 프롬프트에 있다
+
+
+def test_gate_gives_up_after_rounds(client, session, review_on):
+    sid, _ = session
+    events = chat(client, sid, "a", [[("add_item", {"place_id": "p-house"})], ["1"], ["2"], ["3"]])
+    pushes = [m for call in llm.calls for m in call[-1:] if m["content"].startswith("[시스템] 답하기 전에")]
+    assert len(pushes) == 2 and len(llm.calls) == 4  # 2번 되돌려 보낸 뒤 그대로 끝
+    assert last(events, "proposal")["status"] == "pending"
+
+
+def test_gate_skipped_without_plan_changes(client, session, review_on):
+    sid, _ = session
+    events = chat(client, sid, "추천", [[("recommend_places", {"title": "t", "candidates": [{"place_id": "p-cafe"}]})],
+                                       ["골라보세요"]])
+    assert not any(e == "step" and d["kind"] == "review" for e, d in events) and len(llm.calls) == 2
+
+
+def test_no_empty_proposal_when_changes_cancel_out(client, session, review_on):
+    sid, pid = session
+    events = chat(client, sid, "a", [[("add_item", {"place_id": "p-food"})], [("remove_item", {"item_id": -1})],
+                                     ["그대로 두는 게 낫겠어요"]])
+    assert "proposal" not in dict(events)
+    assert ok(client.get(f"/planner/plans/{pid}/proposals", headers=H)) == []
+
+
+def test_review_disabled_hides_tool(client, session):
+    sid, _ = session
+    chat(client, sid, "a", [["안녕"]])
+    assert "review_plan" not in [t["function"]["name"] for t in llm.tools_seen[0]]
+    assert "review_plan" not in llm.calls[0][0]["content"]

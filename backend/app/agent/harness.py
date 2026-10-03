@@ -20,7 +20,8 @@ from app.agent.config import settings
 from app.agent.llm import Finish, LLMError, LLMProvider, ReasoningDelta, TextDelta, ToolCall
 from app.agent.models import AgentMessage, AgentSession
 from app.agent.prompts import build_system
-from app.agent.tools import STEP_KIND, TOOL_SPECS, Draft, Toolbox
+from app.agent.review import summarize
+from app.agent.tools import STEP_KIND, Draft, Toolbox, tool_specs
 from app.db import SessionLocal
 
 Event = dict  # {"event": 이름, "data": dict}
@@ -32,11 +33,14 @@ EMPTY_REPLY_NOTE = ("[시스템] 방금 응답이 비어 있었다. 필요한 �
 FINAL_STEP_NOTE = ("[시스템] 이번 턴의 도구 호출 한도에 도달해 더는 도구를 쓸 수 없다. 지금까지 도구로 실제로 한 변경만 "
                    "짧게 정리해 답하라 (그 변경이 제안 카드로 전달된다). 하지 않은 변경을 했다고 말하지 말고, "
                    "남은 일은 다음 요청에서 이어서 하겠다고만 말하라.")
+REVIEW_NOTE = ("[시스템] 답하기 전에 일정을 검토했더니 아래 문제가 남아 있다. must 는 반드시, should 는 가능하면 "
+               "고친 뒤 review_plan 으로 다시 확인하라. 고칠 수 없는 문제는 답변에서 이유를 짧게 말하라. "
+               "앞에 쓴 답변은 이미 사용자에게 보였으니, 다 고친 뒤 무엇을 고쳤는지만 짧게 덧붙여라.\n")
 
 STEP_TITLE = {"search": "장소 찾기", "place": "장소 정보 확인", "plan": "일정 확인", "edit": "일정 조정",
-              "rule": "조건 반영", "recommend": "추천 정리", "proposal": "변경안 만들기"}
+              "rule": "조건 반영", "review": "일정 검토", "recommend": "추천 정리", "proposal": "변경안 만들기"}
 STATUS_TEXT = {"search": "장소를 찾고 있어요.", "place": "장소 정보를 확인하고 있어요.", "plan": "일정을 확인하고 있어요.",
-               "edit": "일정을 조정하고 있어요.", "rule": "조건을 반영하고 있어요.",
+               "edit": "일정을 조정하고 있어요.", "rule": "조건을 반영하고 있어요.", "review": "일정을 검토하고 있어요.",
                "recommend": "추천할 곳을 고르고 있어요.", "proposal": "변경안을 만들고 있어요."}
 
 log = logging.getLogger("app.agent")
@@ -163,7 +167,10 @@ async def run_turn(session_id: str, plan_id: int, user_text: str, llm: LLMProvid
     base_version = toolbox.last_plan["version"]
 
     history = await to_thread.run_sync(_load_history, session_id, settings.history_messages)
-    messages = [{"role": "system", "content": build_system(plan_view, pending, dropped, repropose)},
+    review_on = settings.review_rounds > 0
+    pushes_left = settings.review_rounds
+    specs = tool_specs(review_on)
+    messages = [{"role": "system", "content": build_system(plan_view, pending, dropped, repropose, review_on)},
                 *history, {"role": "user", "content": user_text}]
     new_rows = [AgentMessage(session_id=session_id, role="user", content=user_text)]
     complete = 1  # new_rows[:complete] 는 저장해도 되는 완결된 기록 (도구 호출·결과 짝이 맞음)
@@ -191,7 +198,7 @@ async def run_turn(session_id: str, plan_id: int, user_text: str, llm: LLMProvid
     try:
         for step_no in range(settings.max_steps):
             # 마지막 단계에서는 도구 없이 호출해 반드시 답변으로 끝나게 한다
-            tools = TOOL_SPECS if step_no < settings.max_steps - 1 else []
+            tools = specs if step_no < settings.max_steps - 1 else []
             if not tools and step_no > 0:
                 extra = [{"role": "user", "content": FINAL_STEP_NOTE}]
             for attempt in range(LLM_RETRIES + 1):
@@ -240,6 +247,20 @@ async def run_turn(session_id: str, plan_id: int, user_text: str, llm: LLMProvid
                                          tool_calls=tool_calls or None, hidden=bool(tool_calls) and not text.strip()))
             if not calls:
                 complete = len(new_rows)
+                if review_on and draft.ops and pushes_left > 0 and step_no < settings.max_steps - 2:
+                    # 검토 관문: 일정을 바꾼 턴을 끝내기 전에 검토하고, 문제가 남았으면 다시 고치게 한다
+                    for ev in steps.start("review"):
+                        yield ev
+                    issues = await toolbox.review_now()
+                    yield steps.finish(True, summarize(issues))
+                    blocking = [i for i in issues if i["level"] in ("must", "should")]
+                    if blocking:
+                        pushes_left -= 1
+                        listing = "\n".join(f"- [{i['level']}] {i['message']}" for i in blocking)
+                        extra = [{"role": "user", "content": REVIEW_NOTE + listing}]
+                        if text.strip():
+                            yield _ev("text", delta="\n\n")
+                        continue
                 break
             if text.strip():
                 yield _ev("text", delta="\n\n")  # 도구 호출 앞의 말과 이후 답변을 구분
@@ -266,6 +287,8 @@ async def run_turn(session_id: str, plan_id: int, user_text: str, llm: LLMProvid
         # 초안 -> 변경 제안
         proposal = None
         full_text = "\n\n".join(said)
+        if draft.changed and draft.ops and not (await api.preview(plan_id, draft.ops))["changes"]:
+            draft.ops = []  # 고치다 보니 원래대로 돌아옴 -> 빈 제안을 만들지 않는다
         if draft.changed and draft.ops:
             for ev in steps.start("proposal", "잠시만요..."):
                 yield ev

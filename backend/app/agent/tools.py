@@ -11,6 +11,7 @@ import json
 from dataclasses import dataclass, field
 
 from app.agent.api import ApiError, ServiceApi
+from app.agent.review import review, summarize
 
 CONTENT_TYPES = ["관광지", "음식점", "문화시설", "쇼핑", "레포츠", "숙박", "축제공연행사"]
 RULE_TYPES = ["must_include", "exclude", "end_before", "max_travel_minutes"]
@@ -37,6 +38,9 @@ TOOL_SPECS = [
         "place_id": {"type": "string"},
     }, ["place_id"]),
     _fn("view_plan", "현재 일정(이번 대화에서 제안 중인 변경 포함)을 시간표와 위반 사항과 함께 본다."),
+    _fn("review_plan", "지금 초안 일정을 검토해 문제 목록을 받는다: 운영시간·휴무, 종료 시각 초과, 긴 이동, "
+                       "식사 시간에 식당 없음, 중복, 사용자 규칙 위반. 일정을 바꾼 뒤 답하기 전에 반드시 호출하고, "
+                       "문제를 고친 뒤 다시 호출해 확인한다."),
     _fn("add_item", "일정에 장소를 추가한다 (변경 제안에 포함, 사용자 승인 후 반영). "
                     "시각은 앞 일정에 이어 자동 계산된다. 시각 고정이 꼭 필요하면 추가 후 update_item 으로.", {
         "place_id": {"type": "string", "description": "search_places 로 찾은 id"},
@@ -92,7 +96,7 @@ TOOL_SPECS = [
 
 # 도구 -> 처리 단계 종류
 STEP_KIND = {
-    "search_places": "search", "get_place": "place", "view_plan": "plan",
+    "search_places": "search", "get_place": "place", "view_plan": "plan", "review_plan": "review",
     "add_item": "edit", "update_item": "edit", "remove_item": "edit", "update_plan": "edit", "discard_changes": "edit",
     "add_rule": "rule", "remove_rule": "rule", "recommend_places": "recommend",
 }
@@ -188,6 +192,8 @@ class Toolbox:
         self.draft = draft
         self.session_id = session_id
         self.last_plan: dict | None = None  # 가장 최근의 (초안 적용) 일정 — 단계 문구·이동시간 변화 계산용
+        self.rev = 0  # 초안이 바뀔 때마다 +1
+        self.reviewed_rev = 0  # 마지막으로 검토한 초안의 rev
 
     async def current_view(self) -> dict:
         """초안이 있으면 초안 적용 결과, 없으면 확정 일정 (LLM 용 압축 표현). last_plan 도 갱신한다."""
@@ -251,12 +257,27 @@ class Toolbox:
                            history=_dump({"result": "(당시 일정 조회 결과 생략. 최신 일정은 시스템 프롬프트 참고)"}))
 
     # ----- 변경 (초안에 쌓음) -----
+    async def review_now(self) -> list[dict]:
+        """지금 초안을 검토 (하네스의 검토 관문도 이걸 쓴다)."""
+        await self.current_view()
+        self.reviewed_rev = self.rev
+        return review(self.last_plan)
+
+    async def _t_review_plan(self) -> ToolOutcome:
+        issues = await self.review_now()
+        blocking = [i for i in issues if i["level"] in ("must", "should")]
+        result = ("문제 없음. 답변해도 된다." if not blocking else
+                  "must 는 반드시, should 는 가능하면 고친 뒤 review_plan 으로 다시 확인한다. "
+                  "고칠 수 없는 문제는 답변에서 이유를 짧게 말한다.")
+        return ToolOutcome(True, _dump({"result": result, "issues": issues}), summarize(issues))
+
     async def _stage(self, op: dict, label: str, notice: str = "") -> ToolOutcome:
         candidate = [*self.draft.ops, op]
         r = await self.api.preview(self.plan_id, candidate)  # 적용 불가면 ApiError -> 초안에 넣지 않음
         before_travel = total_travel(self.last_plan) if self.last_plan else None
         self.draft.ops = candidate
         self.draft.changed = True
+        self.rev += 1
         self.last_plan = r["plan"]
         changes = [c["message"] for c in r["changes"]]
         view = compact_plan(r["plan"], changes, len(candidate))
@@ -326,6 +347,7 @@ class Toolbox:
     async def _t_discard_changes(self) -> ToolOutcome:
         self.draft.ops = []
         self.draft.changed = True
+        self.rev += 1
         view = await self.current_view()
         return ToolOutcome(True, _dump({"result": "제안 중인 변경을 모두 취소했습니다.", "plan": view}), "변경 취소",
                            history=_dump({"result": "제안 중인 변경을 모두 취소했습니다."}))
@@ -351,3 +373,7 @@ class Toolbox:
                    "candidates": summary}
         return ToolOutcome(True, _dump(content), f"{len(rec['candidates'])}곳",
                            card={"type": "recommendation", "recommendation": rec})
+
+
+def tool_specs(review_enabled: bool) -> list[dict]:
+    return TOOL_SPECS if review_enabled else [t for t in TOOL_SPECS if t["function"]["name"] != "review_plan"]

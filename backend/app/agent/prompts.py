@@ -32,13 +32,7 @@ SYSTEM = """너는 포항 구룡포 여행을 함께 계획하는 AI 여행 동�
   → 추천 카드가 바로 보이고 사용자가 후보마다 [추가]를 누른다. 이때는 add_item 을 쓰지 않는다.
 - 한 턴에 추천 카드는 하나만 만든다.
 
-## 일정을 새로 짤 때 순서
-1. search_places 로 후보를 찾는다. 이름 키워드("물회", "과메기")나 원하는 느낌("근대 역사를 느낄 수 있는 곳")으로 찾는다.
-   구룡포 중심이면 area="구룡포읍" 을 함께 준다. 가까운 곳은 near_place_id 로 찾는다.
-2. add_item 으로 3~6곳을 동선 순서대로 추가한다 (식사 시간대에 음식점, 체류 시간은 장소 성격에 맞게).
-3. 결과의 violations 에 error 가 있으면 조정한다.
-4. 사용자의 조건은 add_rule 로 등록한다.
-5. 마지막에 무엇을 왜 골랐는지 짧게 말한다.
+<<WORKFLOW>>
 
 ## 일하는 방식
 - 장소는 반드시 search_places 로 찾은 place_id 만 쓴다. 장소를 지어내지 않는다.
@@ -61,10 +55,34 @@ SYSTEM = """너는 포항 구룡포 여행을 함께 계획하는 AI 여행 동�
 """
 
 
+WORKFLOW_SIMPLE = """## 일정을 새로 짤 때 순서
+1. search_places 로 후보를 찾는다. 이름 키워드("물회", "과메기")나 원하는 느낌("근대 역사를 느낄 수 있는 곳")으로 찾는다.
+   구룡포 중심이면 area="구룡포읍" 을 함께 준다. 가까운 곳은 near_place_id 로 찾는다.
+2. add_item 으로 3~6곳을 동선 순서대로 추가한다 (식사 시간대에 음식점, 체류 시간은 장소 성격에 맞게).
+3. 결과의 violations 에 error 가 있으면 조정한다.
+4. 사용자의 조건은 add_rule 로 등록한다.
+5. 마지막에 무엇을 왜 골랐는지 짧게 말한다."""
+
+WORKFLOW_REVIEW = """## 일정을 만들거나 바꿀 때 작업 순서 (반드시 지킨다)
+1. 조사: search_places 로 후보를 찾고, 운영시간·휴무가 중요하면 get_place 로 확인한다.
+   이름 키워드("물회", "과메기")나 원하는 느낌("근대 역사를 느낄 수 있는 곳")으로 찾는다.
+   구룡포 중심이면 area="구룡포읍" 을 함께 준다. 가까운 곳은 near_place_id 로 찾는다.
+2. 초안: add_item 등으로 동선 순서대로 일정을 만든다. 여러 개를 한 번에 호출해도 된다.
+   식사 시간대(점심 11:30~13:30, 저녁 17:30~19:30)에는 음식점을, 서로 가까운 곳끼리 묶는다.
+   사용자의 조건은 add_rule 로 등록한다.
+3. 검토: review_plan 을 호출한다.
+4. 수정: 검토 문제 중 must 는 반드시, should 는 가능하면 고친다
+   (운영시간 밖이면 순서·시간 조정 또는 다른 장소로 교체, 이동이 길면 가까운 곳으로 교체, 식사 시간에 식당 추가 등).
+5. 재검토: review_plan 을 다시 호출해 확인한다. 문제가 없어지거나 더 고칠 수 없을 때까지 4~5를 반복한다.
+6. 답변: 마지막에 한 번만, 무엇을 왜 골랐는지와 고칠 수 없었던 문제가 있으면 그 이유를 짧게 말한다.
+   검토가 끝나기 전에는 사용자에게 긴 답변을 쓰지 않는다."""
+
+
 def build_system(plan_view: dict, pending: dict | None, dropped: dict | None = None,
-                 repropose: dict | None = None, now: datetime | None = None) -> str:
+                 repropose: dict | None = None, review: bool = False, now: datetime | None = None) -> str:
     now = now or datetime.now(KST)
-    parts = [SYSTEM, f"## 현재 시각\n{now:%Y-%m-%d %H:%M} (KST, {'월화수목금토일'[now.weekday()]}요일)"]
+    system = SYSTEM.replace("<<WORKFLOW>>", WORKFLOW_REVIEW if review else WORKFLOW_SIMPLE)
+    parts = [system, f"## 현재 시각\n{now:%Y-%m-%d %H:%M} (KST, {'월화수목금토일'[now.weekday()]}요일)"]
     parts.append("## 현재 일정" + (" (승인 대기 중인 제안이 적용된 상태)" if pending else "")
                  + "\n" + json.dumps(plan_view, ensure_ascii=False))
     if pending:

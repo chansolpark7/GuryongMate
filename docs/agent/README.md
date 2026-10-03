@@ -103,7 +103,8 @@ LLM은 일정을 직접 바꾸지 않는다. 결과는 두 종류의 **카드**�
 | `place` | 장소 정보 확인 | `구룡포과메기문화관` | 장소 정보를 확인하고 있어요. |
 | `plan` | 일정 확인 | `일정 5곳` | 일정을 확인하고 있어요. |
 | `edit` | 일정 조정 | `카페파도 추가 · 총 이동 +8분` | 일정을 조정하고 있어요. |
-| `rule` | 조건 반영 | `end_before 18:00` | 조건을 반영하고 있어요. |
+| `rule` | 조건 반영 | `18:00 전 종료` | 조건을 반영하고 있어요. |
+| `review` | 일정 검토 | `문제 2건` / `문제 없음` | 일정을 검토하고 있어요. |
 | `recommend` | 추천 정리 | `4곳` | 추천할 곳을 고르고 있어요. |
 | `proposal` | 변경안 만들기 | `running`: `잠시만요...` / `done`: `변경 3건` | 변경안을 만들고 있어요. |
 
@@ -170,6 +171,7 @@ LLM은 일정을 직접 바꾸지 않는다. 결과는 두 종류의 **카드**�
 | `add_item` / `update_item` / `remove_item` / `update_plan` | 일정 변경 → **초안** | `edit` |
 | `add_rule` / `remove_rule` | 조건(규칙) → 초안 | `rule` |
 | `discard_changes` | 초안 비우기 | `edit` |
+| `review_plan` | 초안 일정을 검토해 문제 목록을 돌려준다 (`AGENT_REVIEW_ROUNDS` > 0 일 때만) | `review` |
 | `recommend_places` | 추천 카드를 **바로** 만든다 (planner `POST /recommendations`) | `recommend` |
 
 - 변경 도구는 일정을 바로 바꾸지 않고 초안에 쌓는다. 도구마다 planner `preview`로 결과와 위반을 계산해 LLM에 돌려준다.
@@ -177,6 +179,15 @@ LLM은 일정을 직접 바꾸지 않는다. 결과는 두 종류의 **카드**�
 - 이어서 고치기: 이 세션의 최신 대기 제안이 있고 그 `base_version`이 지금 `version`과 같으면, 그 제안의 ops에서 초안을 시작하고 새 제안이 그것을 대체한다. 다르면 빈 초안에서 시작하고(LLM에 알린다), 새 제안이 만들어질 때 그것을 대체한다. `discard_changes`로 초안을 비우고 끝나면 이어받던 제안은 거절된다.
 - 같은 턴에서 새로 추가한 항목은 음수 임시 id로 다시 가리킨다. 제안이 승인되기 전까지 이어지는 턴에서도 같은 번호다.
 - 프롬프트 원칙: "골라 달라·추천해 달라"는 `recommend_places`, "짜 달라·바꿔 달라"는 변경 도구 → 제안.
+
+### 검토 루프 (계획 → 검토 → 수정 → 재검토)
+- `backend/app/agent/review.py`가 초안을 규칙으로 검토한다.
+  - `must`: planner error 위반 (종료 시각 초과, 고정 시각 지각, 사용자 규칙)
+  - `should`: 운영시간 밖·휴무, 이동이 김 (도보 25분·차량 40분 초과), 점심(11:30~13:30)·저녁(17:30~19:30) 시간대에 식당 없음, 같은 날 중복, 그날 일정 없음
+  - `info`: 하루가 2시간 이상 일찍 끝남
+- 프롬프트는 "조사 → 초안 → `review_plan` → 수정 → 재검토 → 답변" 순서를 지키게 한다.
+- **검토 관문**: 일정을 바꾼 턴에서 LLM이 답을 끝내려 하면 하네스가 직접 검토한다(`review` 단계). `must`·`should`가 남아 있으면 목록을 주고 다시 고치게 한다. 최대 `AGENT_REVIEW_ROUNDS`번 되돌려 보내고, 그래도 남으면 그대로 제안을 만든다.
+- 효과 비교: `scripts/planner/eval_agent.py`가 같은 시나리오를 돌려 최종 제안을 같은 규칙으로 채점한다.
 
 ## 6. 대화 기록과 맥락
 
@@ -197,7 +208,8 @@ LLM은 일정을 직접 바꾸지 않는다. 결과는 두 종류의 **카드**�
 | `AGENT_OPENAI_API_KEY` | (`LLM_API_KEY`도 읽음) | ChatGPT |
 | `AGENT_OPENAI_MODEL` | `gpt-5-mini` | |
 | `AGENT_OPENAI_REASONING_EFFORT` | `low` | |
-| `AGENT_MAX_STEPS` | `8` | 한 턴의 LLM 호출 최대 횟수 (마지막 호출은 도구 없이 답변 강제) |
+| `AGENT_MAX_STEPS` | `20` | 한 턴의 LLM 호출 최대 횟수 (마지막 호출은 도구 없이 답변 강제) |
+| `AGENT_REVIEW_ROUNDS` | `2` | 검토 관문이 되돌려 보내는 최대 횟수. `0`이면 `review_plan` 도구와 관문을 끈다 |
 
 새 공급자는 `llm.py`에 같은 이벤트(`TextDelta`, `ReasoningDelta`, `ToolCall`, `Finish`)를 내는 Provider를 추가하면 된다.
 
