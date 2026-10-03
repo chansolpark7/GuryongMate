@@ -21,6 +21,7 @@ class PlannerPlan(Base):
     day_end: Mapped[time] = mapped_column(Time)  # 매일 일정 종료 목표 시각
     travel_mode: Mapped[str] = mapped_column(String(10), default="walk")  # walk | car
     memo: Mapped[str] = mapped_column(Text, default="")
+    version: Mapped[int] = mapped_column(Integer, default=1)  # 일정이 바뀔 때마다 1 오른다 (제안의 기준 비교용)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
@@ -71,16 +72,53 @@ class PlannerConstraint(Base):
 
 
 class PlannerProposal(Base):
-    """일정 변경 제안. 사용자가 승인(accept)해야 ops 가 실제 계획에 적용된다."""
+    """일정 변경 제안. 만들 때의 일정(before)과 승인 시 일정(after)을 기록으로 남긴다 (이후 바뀌지 않음)."""
 
     __tablename__ = "planner_proposal"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     plan_id: Mapped[int] = mapped_column(ForeignKey("planner_plan.id", ondelete="CASCADE"), index=True)
-    ops: Mapped[list[dict]] = mapped_column(JSONB)
+    ops: Mapped[list[dict]] = mapped_column(JSONB)  # 보낸 필드만 (exclude_unset)
     summary: Mapped[str] = mapped_column(Text, default="")
+    request: Mapped[str] = mapped_column(Text, default="")  # 이 제안을 만든 사용자 요청 원문
     source: Mapped[str] = mapped_column(String(10), default="llm")  # llm | user | event
     origin: Mapped[str] = mapped_column(String(64), default="")  # 예: agent 세션 id
     status: Mapped[str] = mapped_column(String(12), default="pending")  # pending|accepted|rejected|superseded
+    decision: Mapped[str | None] = mapped_column(String(12), nullable=True)  # applied | overwritten
+    base_version: Mapped[int] = mapped_column(Integer)
+    before: Mapped[dict] = mapped_column(JSONB)  # PlanDetail
+    after: Mapped[dict] = mapped_column(JSONB)  # PlanDetail
+    changes: Mapped[list[dict]] = mapped_column(JSONB)  # Change[]
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class PlannerRecommendation(Base):
+    """장소 추천 카드. 후보의 상태(일정에 있는지)는 저장하지 않고 조회할 때 지금 일정에서 계산한다."""
+
+    __tablename__ = "planner_recommendation"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    plan_id: Mapped[int] = mapped_column(ForeignKey("planner_plan.id", ondelete="CASCADE"), index=True)
+    title: Mapped[str] = mapped_column(String(100))
+    source: Mapped[str] = mapped_column(String(10), default="llm")
+    origin: Mapped[str] = mapped_column(String(64), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    candidates: Mapped[list["PlannerRecommendationCandidate"]] = relationship(
+        cascade="all, delete-orphan", order_by="PlannerRecommendationCandidate.position"
+    )
+
+
+class PlannerRecommendationCandidate(Base):
+    __tablename__ = "planner_recommendation_candidate"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    recommendation_id: Mapped[int] = mapped_column(
+        ForeignKey("planner_recommendation.id", ondelete="CASCADE"), index=True)
+    position: Mapped[int] = mapped_column(Integer)  # 카드 안 순서
+    place_id: Mapped[str] = mapped_column(String(40))
+    day: Mapped[int] = mapped_column(Integer)
+    time_hint: Mapped[time | None] = mapped_column(Time, nullable=True)
+    stay_minutes: Mapped[int] = mapped_column(Integer, default=60)
+    reason: Mapped[str] = mapped_column(Text, default="")

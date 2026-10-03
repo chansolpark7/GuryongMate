@@ -1,103 +1,112 @@
-"""planner 모듈의 공개 요청/응답 스키마. CLI·앱·LLM tool 이 모두 같은 형태를 쓴다.
+"""planner 공개 요청·응답 스키마. 명세: docs/planner/README.md
 
-시각 입력은 "HH:MM", 출력도 "HH:MM" 이다. 계산된 시각(arrive_at 등)은 자정을 넘으면 "24:30" 처럼 표기한다.
+요청 모델은 모두 엄격하다: 정의되지 않은 필드, 허용되지 않은 null, 바꿀 값이 없는 수정 요청은 422.
+시각 입력·출력은 "HH:MM". 계산된 시각(arrive_at 등)은 자정을 넘으면 "24:30" 처럼 표기한다.
 """
 from datetime import date, datetime, time
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, ClassVar, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, PlainSerializer, field_serializer, model_validator
 
-HHMM = Annotated[time, PlainSerializer(lambda t: t.strftime("%H:%M"), return_type=str)]
+HHMM = Annotated[time, PlainSerializer(lambda t: t.strftime("%H:%M"), return_type=str, when_used="json")]
 
 TravelMode = Literal["walk", "car"]
 ItemStatus = Literal["planned", "visiting", "done", "skipped"]
 RuleType = Literal["must_include", "exclude", "end_before", "max_travel_minutes"]
 Severity = Literal["error", "warning"]
+Source = Literal["llm", "user", "event"]
 
 MAX_DAYS = 14
+MAX_OPS = 100
+MAX_CANDIDATES = 10
+
+Title = Annotated[str, Field(min_length=1, max_length=200)]
+Memo = Annotated[str, Field(max_length=500)]
+Day = Annotated[int, Field(ge=1, le=MAX_DAYS)]
+Order = Annotated[int, Field(ge=1)]
+Stay = Annotated[int, Field(ge=5, le=720)]
+PlaceId = Annotated[str, Field(min_length=1, max_length=40)]
+Id = Annotated[int, Field(description="양수는 실제 id, 음수는 같은 ops 목록에서 새로 만든 항목·규칙의 임시 id")]
 
 
-# ---------- 요청 ----------
+class Strict(BaseModel):
+    model_config = ConfigDict(extra="forbid")
 
-class PlanCreate(BaseModel):
-    title: str = Field(min_length=1, max_length=200)
-    start_date: date
-    end_date: date | None = Field(None, description="생략하면 당일치기 (start_date 와 같음)")
-    day_start: time = Field(time(10, 0), description="매일 일정 시작 시각")
-    day_end: time = Field(time(18, 0), description="매일 일정 종료 목표 시각")
-    travel_mode: TravelMode = "walk"
-    memo: str = ""
+
+class PartialUpdate(Strict):
+    """보낸 필드만 바꾸는 요청. 바꿀 값이 없거나, null 을 허용하지 않는 필드에 null 이 오면 거부한다."""
+
+    NULLABLE: ClassVar[set[str]] = set()
+    KEYS: ClassVar[set[str]] = set()  # 바꿀 값이 아닌 식별 필드 (op, item_id 등)
 
     @model_validator(mode="after")
-    def _check(self):
-        if self.end_date is None:
-            self.end_date = self.start_date
-        _check_range(self.start_date, self.end_date, self.day_start, self.day_end)
+    def _check_partial(self):
+        sent = self.model_fields_set - self.KEYS
+        if not sent:
+            raise ValueError("바꿀 값을 하나 이상 보내야 합니다.")
+        nulls = sorted(f for f in sent if getattr(self, f) is None and f not in self.NULLABLE)
+        if nulls:
+            raise ValueError(f"null 일 수 없는 필드: {nulls}")
         return self
 
 
-class PlanUpdate(BaseModel):
-    title: str | None = Field(None, min_length=1, max_length=200)
+# ---------- 계획 ----------
+
+class PlanCreate(Strict):
+    title: Title
+    start_date: date
+    end_date: date | None = Field(None, description="생략하면 당일치기 (start_date 와 같음)")
+    day_start: HHMM = Field(time(10, 0), description="매일 일정 시작 시각")
+    day_end: HHMM = Field(time(18, 0), description="매일 일정 종료 목표 시각")
+    travel_mode: TravelMode = "walk"
+    memo: Memo = ""
+
+
+class PlanUpdate(PartialUpdate):
+    title: Title | None = None
     start_date: date | None = None
     end_date: date | None = None
-    day_start: time | None = None
-    day_end: time | None = None
+    day_start: HHMM | None = None
+    day_end: HHMM | None = None
     travel_mode: TravelMode | None = None
-    memo: str | None = None
+    memo: Memo | None = None
 
 
-class ItemCreate(BaseModel):
-    place_id: str = Field(description="places 모듈의 장소 ID (예: kto-126128)")
-    day: int = Field(1, ge=1, description="여행 n일차 (1부터)")
-    order: int | None = Field(None, ge=1, description="그날 안에서의 순서 (1부터). 생략하면 맨 뒤")
-    stay_minutes: int = Field(60, ge=5, le=720)
-    start_time: time | None = Field(None, description="이 시각에 시작하도록 고정 (생략하면 앞 일정에 이어서 자동 계산)")
-    memo: str = ""
+# ---------- 항목·규칙 ----------
+
+class ItemCreate(Strict):
+    place_id: PlaceId = Field(description="places 의 장소 ID (예: kto-126128)")
+    day: Day = Field(1, description="n일차 (1부터)")
+    order: Order | None = Field(None, description="그날 순서 (1부터). 생략하거나 항목 수보다 크면 맨 뒤")
+    stay_minutes: Stay = 60
+    start_time: HHMM | None = Field(None, description="이 시각에 시작하도록 고정 (생략하면 자동 계산)")
+    memo: Memo = ""
 
 
-class ItemUpdate(BaseModel):
-    """보낸 필드만 바꾼다. start_time 에 null 을 보내면 시각 고정을 해제한다."""
+class ItemUpdate(PartialUpdate):
+    """보낸 필드만 바꾼다. start_time 에 null 을 보내면 시각 고정을 해제한다 (null 이 허용되는 유일한 필드)."""
 
-    day: int | None = Field(None, ge=1, description="다른 날로 이동")
-    order: int | None = Field(None, ge=1, description="순서 변경 (day 와 함께 주면 그 날의 해당 순서로)")
-    stay_minutes: int | None = Field(None, ge=5, le=720)
-    start_time: time | None = None
-    memo: str | None = None
+    NULLABLE: ClassVar[set[str]] = {"start_time"}
+
+    day: Day | None = Field(None, description="다른 날로 이동")
+    order: Order | None = Field(None, description="순서 변경 (day 와 함께 주면 그 날의 해당 순서)")
+    stay_minutes: Stay | None = None
+    start_time: HHMM | None = None
+    memo: Memo | None = None
     status: ItemStatus | None = None
 
 
-class ConstraintCreate(BaseModel):
-    """규칙 종류별 params
-
-    - must_include: {"place_id": "kto-..."} 해당 장소를 반드시 포함
-    - exclude: {"place_id": "kto-..."} 해당 장소를 포함하지 않음
-    - end_before: {"time": "18:00", "day": 1(생략 시 모든 날)} 그날 일정이 이 시각 전에 끝남
-    - max_travel_minutes: {"minutes": 20} 장소 간 이동시간 상한
-    """
-
-    type: RuleType
-    params: dict[str, Any] = {}
-    hard: bool = Field(True, description="true 면 위반 시 error, false 면 warning")
-    source: Literal["user", "llm"] = "user"
-    note: str = ""
-
-    @model_validator(mode="after")
-    def _check_params(self):
-        self.params = RULE_PARAMS[self.type].model_validate(self.params).model_dump(mode="json", exclude_none=True)
-        return self
+class _PlaceRule(Strict):
+    place_id: PlaceId
 
 
-class _PlaceRule(BaseModel):
-    place_id: str
-
-
-class _EndBefore(BaseModel):
+class _EndBefore(Strict):
     time: HHMM
-    day: int | None = Field(None, ge=1)
+    day: Day | None = None
 
 
-class _MaxTravel(BaseModel):
-    minutes: int = Field(ge=1)
+class _MaxTravel(Strict):
+    minutes: int = Field(ge=1, le=720)
 
 
 RULE_PARAMS: dict[str, type[BaseModel]] = {
@@ -108,16 +117,70 @@ RULE_PARAMS: dict[str, type[BaseModel]] = {
 }
 
 
-def _check_range(start_date: date, end_date: date, day_start: time, day_end: time) -> None:
-    if end_date < start_date:
-        raise ValueError("end_date 는 start_date 이후여야 합니다.")
-    if (end_date - start_date).days + 1 > MAX_DAYS:
-        raise ValueError(f"여행 기간은 최대 {MAX_DAYS}일입니다.")
-    if day_end <= day_start:
-        raise ValueError("day_end 는 day_start 보다 늦어야 합니다.")
+class ConstraintCreate(Strict):
+    """규칙 종류별 params (정의되지 않은 키는 422)
+
+    - must_include / exclude: {"place_id": "kto-..."}
+    - end_before: {"time": "18:00", "day": 1 (생략 시 매일)}
+    - max_travel_minutes: {"minutes": 20}
+    """
+
+    type: RuleType
+    params: dict[str, Any] = {}
+    hard: bool = Field(True, description="true 면 위반 시 error, false 면 warning")
+    source: Literal["user", "llm"] = "user"
+    note: str = Field("", max_length=300)
+
+    @model_validator(mode="after")
+    def _check_params(self):
+        self.params = RULE_PARAMS[self.type].model_validate(self.params).model_dump(mode="json", exclude_none=True)
+        return self
 
 
-# ---------- 응답 ----------
+# ---------- 변경 연산 ----------
+
+class AddItemOp(ItemCreate):
+    op: Literal["add_item"]
+
+
+class UpdateItemOp(ItemUpdate):
+    KEYS: ClassVar[set[str]] = {"op", "item_id"}
+
+    op: Literal["update_item"]
+    item_id: Id
+
+
+class RemoveItemOp(Strict):
+    op: Literal["remove_item"]
+    item_id: Id
+
+
+class UpdatePlanOp(PlanUpdate):
+    KEYS: ClassVar[set[str]] = {"op"}
+
+    op: Literal["update_plan"]
+
+
+class AddConstraintOp(ConstraintCreate):
+    op: Literal["add_constraint"]
+
+
+class RemoveConstraintOp(Strict):
+    op: Literal["remove_constraint"]
+    constraint_id: Id
+
+
+PlanOp = Annotated[
+    AddItemOp | UpdateItemOp | RemoveItemOp | UpdatePlanOp | AddConstraintOp | RemoveConstraintOp,
+    Field(discriminator="op"),
+]
+
+
+class OpsRequest(Strict):
+    ops: list[PlanOp] = Field(min_length=1, max_length=MAX_OPS)
+
+
+# ---------- 응답: 계획 ----------
 
 class PlaceInfo(BaseModel):
     """일정 계산에 필요한 장소 정보 (places API 응답의 일부)."""
@@ -153,7 +216,7 @@ class ItemView(BaseModel):
     status: ItemStatus
     travel_minutes: int | None = Field(description="직전 장소에서 이동시간 (첫 일정·건너뜀은 null)")
     travel_distance_m: int | None
-    arrive_at: str | None = Field(description="계산된 도착 시각 HH:MM (skipped 는 null)")
+    arrive_at: str | None = Field(description="계산된 도착 시각 HH:MM (건너뜀은 null)")
     start_at: str | None
     end_at: str | None
 
@@ -189,9 +252,10 @@ class PlanSummary(BaseModel):
     day_end: HHMM
     travel_mode: TravelMode
     memo: str
+    version: int = Field(description="일정이 바뀔 때마다 1 오른다")
+    item_count: int = 0
     created_at: datetime
     updated_at: datetime
-    item_count: int = 0
 
 
 class PlanDetail(PlanSummary):
@@ -205,49 +269,8 @@ class ValidationResult(BaseModel):
     violations: list[Violation]
 
 
-# ---------- 변경 연산(ops) · 미리보기 · 제안 ----------
-# 직접 편집 API 와 제안(Proposal)이 같은 연산 엔진(ops.py)을 쓴다.
-# 같은 ops 목록 안에서 새로 추가한 항목/규칙은 음수 임시 id(-1, -2, ... 추가한 순서)로 참조한다.
-
-class AddItemOp(ItemCreate):
-    op: Literal["add_item"]
-
-
-class UpdateItemOp(ItemUpdate):
-    op: Literal["update_item"]
-    item_id: int
-
-
-class RemoveItemOp(BaseModel):
-    op: Literal["remove_item"]
-    item_id: int
-
-
-class UpdatePlanOp(PlanUpdate):
-    op: Literal["update_plan"]
-
-
-class AddConstraintOp(ConstraintCreate):
-    op: Literal["add_constraint"]
-
-
-class RemoveConstraintOp(BaseModel):
-    op: Literal["remove_constraint"]
-    constraint_id: int
-
-
-PlanOp = Annotated[
-    AddItemOp | UpdateItemOp | RemoveItemOp | UpdatePlanOp | AddConstraintOp | RemoveConstraintOp,
-    Field(discriminator="op"),
-]
-
-
-class OpsRequest(BaseModel):
-    ops: list[PlanOp] = Field(min_length=1)
-
-
 class Change(BaseModel):
-    """사람이 읽는 변경 요약 한 줄. 앱의 제안 카드에 그대로 표시한다."""
+    """사람이 읽는 변경 요약 한 줄."""
 
     kind: Literal["added", "removed", "moved", "updated", "plan", "rule_added", "rule_removed", "day_end"]
     message: str
@@ -260,28 +283,48 @@ class PreviewResult(BaseModel):
     changes: list[Change]
 
 
+# ---------- 변경 제안 ----------
+
 ProposalStatus = Literal["pending", "accepted", "rejected", "superseded"]
 
 
 class ProposalCreate(OpsRequest):
-    summary: str = Field("", description="변경 이유·요약 (Agent 응답 등)")
-    source: Literal["llm", "user", "event"] = "llm"
-    origin: str = Field("", description="출처 식별자 (예: agent 세션 id)")
-    supersedes: int | None = Field(None, description="이 제안으로 대체할 이전 대기 중 제안 id")
+    summary: str = Field("", max_length=2000, description="카드 설명")
+    request: str = Field("", max_length=4000, description="이 제안을 만든 사용자 요청 원문")
+    source: Source = "llm"
+    origin: str = Field("", max_length=64, description="출처 식별자 (예: agent 세션 id)")
+    supersedes: int | None = Field(None, description="이 제안으로 대체할 대기 중 제안 id")
+    expected_version: int | None = Field(None, description="현재 version 과 다르면 409 version_conflict")
 
 
-class ProposalView(BaseModel):
+class AcceptRequest(Strict):
+    mode: Literal["auto", "overwrite"] = Field(
+        "auto", description="auto: 제안 이후 일정이 바뀌었으면 409 base_changed. overwrite: 카드의 after 일정 그대로 반영")
+
+
+class ProposalSummary(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
     plan_id: int
     status: ProposalStatus
+    decision: Literal["applied", "overwritten"] | None
     summary: str
     source: str
     origin: str
-    ops: list[PlanOp]
+    base_version: int
+    changes: list[Change]
     created_at: datetime
     decided_at: datetime | None
+
+
+class ProposalDetail(ProposalSummary):
+    request: str
+    ops: list[PlanOp]
+    before: PlanDetail = Field(description="제안 당시 일정 (기록, 바뀌지 않음)")
+    after: PlanDetail = Field(description="승인하면 될 일정 (기록, 새 항목 id 는 음수)")
+    current_version: int
+    base_changed: bool = Field(description="제안 이후 일정이 바뀌었는지 (current_version != base_version)")
 
     @field_serializer("ops")
     def _ops_as_sent(self, ops: list) -> list[dict]:
@@ -290,14 +333,60 @@ class ProposalView(BaseModel):
         return [op.model_dump(mode="json", exclude_unset=True) for op in ops]
 
 
-class ProposalDetail(ProposalView):
-    changes: list[Change] = Field(description="현재 계획 대비 변경 요약 (pending 일 때만)")
-    before: PlanDetail | None = Field(None, description="현재 계획 (pending 일 때만)")
-    after: PlanDetail | None = Field(None, description="승인 시 계획 미리보기 (pending 이고 적용 가능할 때만)")
-    applicable: bool = Field(True, description="현재 계획에 그대로 적용할 수 있는지")
-    error: str | None = None
-
-
 class AcceptResult(BaseModel):
-    proposal: ProposalView
+    proposal: ProposalDetail
+    plan: PlanDetail
+
+
+# ---------- 장소 추천 ----------
+
+class CandidateCreate(Strict):
+    place_id: PlaceId
+    day: Day
+    time_hint: HHMM | None = Field(None, description="이 시각 무렵에 넣고 싶음 (위치 계산·같은 날 중복 구분에만 사용)")
+    stay_minutes: Stay = 60
+    reason: str = Field("", max_length=300)
+
+
+class RecommendationCreate(Strict):
+    title: str = Field(min_length=1, max_length=100)
+    source: Source = "llm"
+    origin: str = Field("", max_length=64)
+    candidates: list[CandidateCreate] = Field(min_length=1, max_length=MAX_CANDIDATES)
+
+
+class CandidateItem(BaseModel):
+    item_id: int
+    day: int
+    order: int
+    start_at: str | None
+    end_at: str | None
+
+
+class CandidateView(BaseModel):
+    id: int
+    place_id: str
+    place: PlaceInfo | None
+    day: int
+    time_hint: HHMM | None
+    stay_minutes: int
+    reason: str
+    state: Literal["in_plan", "not_in_plan", "day_out_of_range"] = Field(
+        description="지금 일정 기준: 그날 같은 장소가 있으면 in_plan")
+    item: CandidateItem | None = Field(description="in_plan 일 때 이 후보에 해당하는 항목")
+    other_days: list[int] = Field(description="같은 장소가 있는 다른 날 (참고)")
+
+
+class RecommendationView(BaseModel):
+    id: int
+    plan_id: int
+    title: str
+    source: str
+    origin: str
+    created_at: datetime
+    candidates: list[CandidateView]
+
+
+class RecommendationActionResult(BaseModel):
+    recommendation: RecommendationView
     plan: PlanDetail
