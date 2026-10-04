@@ -11,8 +11,10 @@ Flutter 앱 ──► gateway (:API_PORT, 기본 8000)   Caddy. URL 앞부분으
                 ├─ /planner*  ──► planner     일정·검증·변경 제안
                 ├─ /agent*    ──► agent       LLM 채팅 (SSE) · 도구 실행
                 ├─ /safety*   ──► safety      구룡포 안전 정보 (디지털트윈 실측 + 기상 예보·특보)
+                ├─ /routing*  ──► routing     길찾기 (이동시간·경로선·한국어 안내·위험 구역 우회)
                 └─ /auth* /users* ──► account   로그인 (Google·ID/비밀번호)·사용자 정보
                embedding   임베딩 모델 서버 (내부 전용, places 가 호출)
+               valhalla    길찾기 엔진, OSM 포항 데이터 (내부 전용, routing 이 호출)
                places-init 시작 시 장소 데이터·임베딩이 비어 있으면 채우고 종료
                db          Postgres + pgvector (모든 서비스 공용, 테이블 접두사로 구분)
 LLM: 호스트의 Ollama(host.docker.internal:11434) 또는 OpenAI API — Docker 밖
@@ -25,6 +27,8 @@ LLM: 호스트의 Ollama(host.docker.internal:11434) 또는 OpenAI API — Docke
 | planner | 플래너 담당 | `backend/app/planner/` | `backend/app/planner/`, `backend/requirements/planner.txt`, `backend/tests/planner/`, `scripts/planner/`, `docs/planner/` | `planner_*` | `/planner/docs` |
 | agent | Agent 담당 | `backend/app/agent/` | `backend/app/agent/`, `backend/tests/agent/`, `docs/agent/` | `agent_*` | `/agent/docs` |
 | safety | 안전 정보 담당 | `backend/app/safety/` | `backend/app/safety/`, `backend/tests/safety/`, `docs/safety/`, `docs/dt/`, `docs/external/` | 없음 | `/safety/docs` |
+| routing | 길찾기 담당 | `backend/app/routing/` | `backend/app/routing/`, `backend/tests/routing/`, `scripts/routing/`, `docs/routing/` | 없음 | `/routing/docs` |
+| valhalla | 길찾기 담당 | `services/valhalla/` | `services/valhalla/` | 없음 (볼륨 `guryongmate-valhalla`) | 내부 `http://valhalla:8002/status` |
 | account | 계정 담당 | `backend/app/account/` | `backend/app/account/`, `backend/requirements/account.txt`, `backend/tests/account/`, `docs/account/` | `account_*` | `/account/docs` |
 | gateway·db·공용 | 공용 | — | 아래 "공용 파일" | — | — |
 
@@ -105,16 +109,18 @@ docker compose run --rm planner pytest tests/planner   # 테스트 (어느 백�
 | 컨테이너 | 상주 메모리 |
 |---|---|
 | embedding | 약 1.0GB |
-| places · planner · agent · safety | 각 약 110MB |
+| places · planner · agent · safety · routing · account | 각 약 100MB |
+| valhalla | 약 60~100MB (포항 영역 타일 18MB) |
 | db | 약 50MB |
 | gateway | 약 15MB |
-| **합계** | **약 1.6GB** |
+| **합계** | **약 1.8GB** |
 
 여러 worktree에서 전체 스택을 동시에 띄우면 그만큼 늘어난다. 필요한 서비스만 띄우는 것을 권장한다.
 
 ### worktree 동시 실행
 
-worktree마다 compose 프로젝트(컨테이너·DB 볼륨)가 따로 생긴다. 임베딩 모델 파일만 이름이 고정된 볼륨(`guryongmate-hf-models`)으로 공유해서 한 번만 내려받는다.
+worktree마다 compose 프로젝트(컨테이너·DB 볼륨)가 따로 생긴다. 임베딩 모델 파일(`guryongmate-hf-models`)과 길찾기 OSM·타일(`guryongmate-valhalla`)만 이름이 고정된 볼륨으로 공유해서 한 번만 내려받는다.
+길찾기 타일이 아직 없을 때(처음 한 번) 여러 worktree에서 `valhalla`를 동시에 띄우지 않는다. 같은 볼륨에 동시에 빌드한다.
 동시에 띄울 때는 worktree 루트에 `.env`(커밋 안 됨)를 만들어 포트를 바꾼다.
 
 | worktree | `.env` |
@@ -125,6 +131,7 @@ worktree마다 compose 프로젝트(컨테이너·DB 볼륨)가 따로 생긴다
 | `GuryongMate-wt/service-split` | `API_PORT=8003`, `DB_PORT=5435` |
 | `GuryongMate-wt/safety` | `API_PORT=8004`, `DB_PORT=5436` |
 | `GuryongMate-wt/account` | `API_PORT=8005`, `DB_PORT=5437` |
+| `GuryongMate-wt/routing` | `API_PORT=8006`, `DB_PORT=5438` |
 
 API 키는 각 worktree의 `backend/.env`에 둔다 (`backend/.env.example` 참고).
 

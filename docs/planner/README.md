@@ -73,7 +73,12 @@
 - **시각은 자동 계산한다.** 하루는 `day_start`에 시작하고, 각 항목은 `직전 항목 종료 + 이동시간`에 도착한다.
   - `start_time`이 있는 항목은 그 시각에 고정된다. 일찍 도착하면 기다리고, 늦으면 `fixed_time_missed` 위반이다.
   - `status=skipped` 항목은 타임라인에서 빠진다(시각 `null`).
-- 이동시간은 `직선거리 × 1.3`을 도보 70m/분, 차량 500m/분 + 5분으로 나눠 계산한다.
+- 이동시간은 **routing 서비스**(OSM 포항 데이터로 직접 띄운 길찾기, `docs/routing/README.md`)로 실제 길을 따라 계산한다.
+  - 도보는 4.2km/h(70m/분). 차량은 엔진의 주행 시간에 주차·승하차 5분을 더한다.
+  - 일정을 계산할 때 필요한 구간(그날 직전에 알려진 장소 → 다음 장소)을 모아 **한 번에** 묻고, 결과는 하루 동안 캐시한다.
+  - routing이 응답하지 않거나 그 구간의 길을 못 찾으면 이전 방식으로 근사한다: `직선거리 × 1.3`을 도보 70m/분, 차량 500m/분 + 5분으로 나눈 값. 이때 항목의 `travel_source`가 `estimate`다.
+  - routing이 죽었을 때는 20초 동안 묻지 않고 바로 근사한다 (요청마다 타임아웃을 기다리지 않도록).
+  - 위험 구역 우회는 일정 시간에 넣지 않는다. 우회는 여행 중 경로 안내(`/routing/route`)에서만 쓴다.
 
 ### 2.2 `version`
 - 계획을 만들면 `1`이다. **일정을 바꾸는 요청이 성공할 때마다 1 오른다**(직접 편집, `ops`, 제안 승인, 추천 추가·빼기).
@@ -100,7 +105,8 @@
  "place": {"id": "kto-2660046", "title": "구룡포과메기문화관", "content_type": "문화시설", "lat": 35.99, "lng": 129.55,
            "addr": "...", "open_hours": "09:00~18:00", "rest_date": "매주 월요일"},   // 못 불러오면 null
  "stay_minutes": 60, "start_time": null, "memo": "", "status": "planned",
- "travel_minutes": 6, "travel_distance_m": 344,                                      // 첫 항목·건너뜀은 null
+ "travel_minutes": 10, "travel_distance_m": 584,                                     // 첫 항목·건너뜀은 null
+ "travel_source": "road",                     // road: 실제 길 / estimate: 직선거리 근사 (앱은 "약 10분") / 첫 항목·건너뜀은 null
  "arrive_at": "14:43", "start_at": "15:00", "end_at": "16:00"}                      // 건너뜀은 null
 
 // ConstraintView
@@ -466,7 +472,7 @@ planner 가 `PLANNER_SAFETY_WATCH_SEC`(compose 기본 60초)마다 `GET /safety/
 | `backend/app/planner/ops.py` | 변경 연산 엔진, 스냅샷 덮어쓰기, 변경 요약(diff) |
 | `backend/app/planner/recommend.py` | 추천 후보 상태 계산, [추가] 위치 계산 |
 | `backend/app/planner/validation.py` | 타임라인 계산·위반 검사 (순수 함수) |
-| `backend/app/planner/travel.py` | 이동시간 추정 |
+| `backend/app/planner/travel.py` | 이동시간 조회 (routing HTTP API, 캐시 하루) + 직선거리 근사 |
 | `backend/app/planner/places.py` | places HTTP API 조회 (캐시 5분), planner 설정 |
 | `backend/app/planner/safety.py` | 안전 점검: 방문 목록 만들기, 결과 정리, 지난 점검과 비교 (순수 함수) |
 | `backend/app/planner/safety_client.py` | safety HTTP API (`assess`, `situation`) |
@@ -481,7 +487,9 @@ docker compose up -d --build                       # 장소 데이터·임베딩
 docker compose run --rm planner pytest tests/planner
 ```
 
-`PLANNER_PLACES_BASE_URL`·`PLANNER_SAFETY_BASE_URL`로 places·safety 주소를 바꿀 수 있다. compose에서는 게이트웨이(`http://gateway`), 단독 실행(`SERVICE=all`) 기본값은 `http://127.0.0.1:8000`이다.
+`PLANNER_PLACES_BASE_URL`·`PLANNER_ROUTING_BASE_URL`·`PLANNER_SAFETY_BASE_URL`로 places·routing·safety 주소를 바꿀 수 있다. compose에서는 게이트웨이(`http://gateway`), 단독 실행(`SERVICE=all`) 기본값은 `http://127.0.0.1:8000`이다.
+
+테스트는 이동시간 기대값을 고정하려고 routing 대신 직선거리 근사를 쓴다 (`tests/planner/conftest.py`). routing 클라이언트 자체는 `tests/planner/test_travel.py`가 가짜 응답으로 확인한다.
 
 ## 10. CLI
 
@@ -509,6 +517,7 @@ chat 1                                          Planner Agent 와 대화 (docs/a
 
 ## 11. 다음 단계
 - 운영시간·휴무 구조화: places가 파싱해 제공하면 `validation.py`를 그 값으로 바꾼다.
-- 이동시간: Kakao 경로 API로 `travel.estimate_minutes`를 바꾼다.
+- 구간별 이동 수단: 지금은 계획 하나에 `walk` 또는 `car`. "걷기 상한(예: 15분)"을 두고 먼 구간만 차량으로 계산하려면 `travel_mode`를 "쓸 수 있는 수단 + 상한"으로 바꾸고 `ItemView`에 구간 수단을 더한다.
+- 걷기 편한 길: routing의 `easy_walk`(계단·언덕 회피, 3.6km/h)를 계획 설정으로 노출한다 ("오래 걷기 부담" 사용자).
 - 안전 점검에 이동 경로 추가: 경로가 침수 감시 구역을 지나는지 (경로 API 이후).
 - 경고 → Guide Agent 호출 (`needs_action` 경고), Planning Agent 도구 `check_safety` (§7.2 를 그대로 부름).

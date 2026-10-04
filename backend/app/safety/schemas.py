@@ -207,6 +207,23 @@ class Status(BaseModel):
     data_status: dict[str, SourceStatus]
 
 
+class AvoidZone(BaseModel):
+    id: str
+    name: str
+    kind: Literal["breakwater", "flood"]
+    risk: Literal["caution", "danger"]
+    reason: str
+    polygon: list[tuple[float, float]] = Field(description="닫힌 다각형 [lng, lat] (GeoJSON 순서, 첫 점 = 끝 점)")
+
+
+class AvoidResult(BaseModel):
+    now: datetime
+    min_risk: Literal["caution", "danger"]
+    zones: list[AvoidZone] = Field(description="길찾기에서 피할 구역. 비어 있으면 우회할 필요 없음")
+    guidance: str
+    data_status: dict[str, SourceStatus]
+
+
 class ZoneView(BaseModel):
     id: str
     name: str

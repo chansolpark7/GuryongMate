@@ -6,20 +6,23 @@
 - GET  /safety/zones           방파제·침수 감시 구역 위치 (지도 표시용)
 - GET  /safety/situation       지금 상황 요약 + fingerprint (planner 가 바뀌었을 때만 일정을 다시 점검)
 - GET/PUT /safety/sim          가상 상황 (SAFETY_SOURCE=mock 일 때만): 시나리오·가상 시각 바꾸기
+- GET  /safety/avoid           지금 길찾기에서 피할 구역 다각형 (routing 서비스가 우회에 사용)
 
 위험 단계는 safe / caution / danger 3단계. 여행일까지 많이 남았으면 판단하지 않고(risk=null) '바꾸지 말라'는 지침을
 돌려준다 (risk.py).
 """
 from datetime import date, datetime, time, timedelta
 from functools import lru_cache
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.safety import geo
 from app.safety.config import settings
 from app.safety.places import PlaceLookup, get_place_lookup
-from app.safety.schemas import AssessRequest, AssessResult, Outlook, SimState, SimUpdate, Situation, Status, ZoneView
+from app.safety.schemas import (
+    AssessRequest, AssessResult, AvoidResult, Outlook, SimState, SimUpdate, Situation, Status, ZoneView,
+)
 from app.safety.service import SafetyService
 from app.safety.sources import KST, MOCK_SCENARIOS, MockSources, Sources, build_sources
 
@@ -67,6 +70,15 @@ def outlook(
 @router.post("/assess", response_model=AssessResult)
 def assess(body: AssessRequest, svc: Service) -> AssessResult:
     return svc.assess(body)
+
+
+@router.get("/avoid", response_model=AvoidResult)
+def avoid(
+    svc: Service,
+    min_risk: Annotated[Literal["caution", "danger"], Query(description="이 등급 이상인 구역을 피한다")] = "caution",
+    now: NowParam = None,
+) -> AvoidResult:
+    return svc.avoid(now, min_risk)
 
 
 @router.get("/zones", response_model=list[ZoneView])

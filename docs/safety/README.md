@@ -21,6 +21,7 @@
 | `GET` | `/safety/zones` | 방파제·침수 감시 구역 위치 | 앱 지도 |
 | `GET` | `/safety/situation` | 지금 상황 요약 + `fingerprint` (상황이 바뀌면 달라짐) | planner 주기 점검 |
 | `GET`·`PUT` | `/safety/sim` | 가상 상황: 시나리오·가상 시각 바꾸기 (`SAFETY_SOURCE=mock` 일 때만) | 시연·테스트 |
+| `GET` | `/safety/avoid?min_risk=caution` | 지금 길찾기에서 피할 구역 다각형 | routing (위험 구역 우회) |
 
 모든 조회에 `now`(기준 시각 덮어쓰기)를 줄 수 있다. 주지 않으면 지금 시각이고, mock 에서 가상 시각을 설정했으면 그 시각이다 (§1.6).
 
@@ -134,6 +135,28 @@ PUT /safety/sim
 | `wind_tomorrow` | 내일 12~18시 풍속 15m/s·파고 3.2m (특보 없음) | 방파제 danger, 그 밖의 야외 caution, 실내 safe+info |
 | `flood` | 지금 침수 센서 상승 (수협 맨홀 등급 3, 파출소 지표면 등급 2) + 약한 비 | 센서 반경 200m 안 방문(3시간 안)만 caution·danger |
 | `storm` | 호우·강풍·풍랑 특보 + 센서 상승 + 30시간 악천후 | 방파제·침수 구역 danger, 야외 caution, 실내 safe+info |
+
+### GET /safety/avoid
+지금 길찾기에서 피할 구역. routing 서비스가 `hazards: "avoid"|"report"` 경로를 계산할 때 부른다 (`docs/routing/README.md` §2).
+**그 구역에만 해당하는 근거가 있을 때만** 넣는다.
+
+| 구역 | 넣는 조건 (`min_risk` 이상, 기본 `caution`) | 다각형 |
+|---|---|---|
+| 침수 | 그 센서 자신의 실측 수위 등급 (2 주의, 3 이상 위험) | 센서 중심 반경 `SAFETY_AVOID_FLOOD_RADIUS_M`(기본 80m) |
+| 방파제 | `/status`의 구역 위험도 (특보·예보·CCTV) | 방파제 선 + 60m 버퍼 |
+
+- 호우 예보·특보처럼 **모든 침수 구역에 같은 값**인 신호로는 넣지 않는다. 넣으면 센서가 몰린 중심가 도로가 전부 막혀 길을 찾을 수 없다.
+- 판단용 반경(200m)이 아니라 80m를 쓰는 것도 같은 이유다. 200m는 "이 장소가 영향권인가"를 넉넉히 보는 값이다.
+- 센서 데이터를 못 받으면 침수 구역은 넣지 않고 `data_status`·`guidance`에 알린다 (피할 곳이 없다는 뜻이 아니다).
+
+```json
+{"now": "2026-10-04T10:00:00+09:00", "min_risk": "caution",
+ "zones": [{"id": "flood_4", "name": "구룡포수협_스마트맨홀 주변", "kind": "flood", "risk": "danger",
+            "reason": "구룡포수협_스마트맨홀 수위 등급 3 (위험)", "polygon": [[129.556439, 35.991235], …, [129.556439, 35.991235]]}],
+ "guidance": "구룡포수협_스마트맨홀 주변을(를) 지나지 않는 길로 안내하라.",
+ "data_status": {"sensors": {"ok": true, …}, "breakwater": {…}, "forecast": {…}, "warnings": {…}}}
+```
+`polygon`은 닫힌 고리 `[lng, lat]` (GeoJSON 순서)다. 앱 지도에 그대로 그려도 된다.
 
 ## 2. 시점 정책 — 먼 날짜는 판단하지 않는다
 
@@ -293,6 +316,6 @@ curl "localhost:${API_PORT:-8000}/safety/status"           # gateway 까지 띄�
 - [ ] 수집 스냅샷 저장 (리플레이 시연, 방파제 CCTV 시간대별 평소값 계산) — 지금은 메모리 캐시만
 - [ ] 중기예보(3~10일) 연동 — `medium_range` 에 일 단위 강수 확률
 - [ ] 재난문자 (재난안전데이터공유플랫폼 승인 대기)
-- [ ] 이동 경로 평가 (도보 경로가 침수 감시 구역을 지나는지)
+- [x] 이동 경로 평가 (도보 경로가 침수 감시 구역을 지나는지) — `/safety/avoid` + routing `hazards` (`docs/routing/README.md`)
 - [ ] 동행자 특성·기온 반영 (어르신 동행 시 폭염·한파·자외선)
 - [ ] 실내 판정 보강 — 장소 종류만으로 추정한다 (관광지 중 실내, 음식점 야외석 등은 `indoor` 로 직접 지정)

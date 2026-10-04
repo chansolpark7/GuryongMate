@@ -75,7 +75,8 @@
   └─ Data Adapters ◄───────────────────────┘
         ├─ Digital Twin (침수예측, 방파제 보행자 안전)
         ├─ 한국관광공사 TourAPI (KorService2)
-        ├─ Kakao Map (장소 검색, 도보 경로)
+        ├─ Kakao Map (지도 화면, 장소 검색)
+        ├─ 길찾기: 직접 띄운 Valhalla + OSM 포항 (도보·차량 이동시간, 경로선, 위험 구역 우회)
         └─ 기상(포항시), 파고(해수부)
 [PostgreSQL]  사용자 조건 · 일정 · 방문 상태 · 대화 기록
 ```
@@ -122,8 +123,11 @@
 ### M2. Map (지도)
 - 현재 위치, 오늘 일정 장소 마커, 이동 경로(Polyline) 표시
 - 마커 탭 → 장소 텍스트 설명
-- 경로·이동시간 계산은 Kakao 도보 경로 API (편안한 길 옵션 검토)
-- 정밀 turn-by-turn 길안내는 **Kakao Navi 앱으로 위임** (자체 내비 구현 X)
+- 경로·이동시간 계산은 **routing 서비스** (OSM 포항 데이터로 직접 띄운 Valhalla, `docs/routing/README.md`)
+  - 도보·차량. 경로선(GeoJSON)·한국어 회전 안내, 걷기 편한 길(계단·언덕 회피)
+  - DT 위험 구역(침수 센서) 우회 경로와 원래 경로 비교 ("우회하면 4분 더")
+  - 외부 지도 API는 지도 화면·장소 검색에만 쓴다 (Kakao·Naver 공개 API에는 도보 길찾기가 없는 것으로 파악)
+- 정밀 turn-by-turn 차량 길안내는 **Kakao Navi 앱으로 위임** (도보는 경로선 + 다음 안내 한 줄)
 - 지도 제공자(Kakao/Google/Naver) 최종 결정 필요
 
 ### M3. Chat / Voice (대화 인터페이스)
@@ -152,7 +156,8 @@
 ### M7. Data Adapters (외부 데이터)
 - **Digital Twin**: 침수예측(강우+월파 통합 예측), 방파제 보행자 이동 예측·안전경보 → 실제 명세 확보 전 Mock
 - TourAPI(KorService2), 오디오 가이드/연관 관광지 API
-- Kakao Map REST (장소·카테고리 검색, 도보 경로)
+- Kakao Map REST (장소·카테고리 검색)
+- OpenStreetMap (Geofabrik 대한민국 추출본 → 포항 영역) — 길찾기 그래프
 - 포항시 지역별 기상, 해수부 파고 예측
 - 모든 어댑터는 동일 인터페이스 + Mock 구현 제공 → 키 없이도 다른 모듈 개발 가능
 

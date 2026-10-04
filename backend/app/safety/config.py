@@ -28,6 +28,10 @@ class SafetySettings(BaseSettings):
     # 장소 좌표 조회 (places 서비스 HTTP API)
     places_base_url: str = "http://127.0.0.1:8000"
 
+    # 길찾기 우회 구역 (/safety/avoid). 침수는 센서 주변 이 반경만 피한다.
+    # 판단용 반경(geo.FLOOD_RADIUS_M=200m)을 그대로 쓰면 센서가 몰린 중심가 도로가 전부 막힌다
+    avoid_flood_radius_m: float = 80
+
     timeout_sec: float = 10
     # 캐시 (초). 외부 API 호출 한도(개발계정 하루 10,000건)와 센서 갱신 간격을 고려
     ttl_sensors: float = 120

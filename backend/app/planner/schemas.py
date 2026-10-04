@@ -216,6 +216,8 @@ class ItemView(BaseModel):
     status: ItemStatus
     travel_minutes: int | None = Field(description="직전 장소에서 이동시간 (첫 일정·건너뜀은 null)")
     travel_distance_m: int | None
+    travel_source: Literal["road", "estimate"] | None = Field(
+        None, description="road: 실제 길로 계산 / estimate: 길찾기를 못 써서 직선거리로 근사 (앱은 '약'으로 표시)")
     arrive_at: str | None = Field(description="계산된 도착 시각 HH:MM (건너뜀은 null)")
     start_at: str | None
     end_at: str | None

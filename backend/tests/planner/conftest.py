@@ -1,4 +1,4 @@
-"""planner 테스트 공용 fixture. 실제 DB 를 쓰고, places 조회는 가짜 구현으로 바꾼다.
+"""planner 테스트 공용 fixture. 실제 DB 를 쓰고, places 조회는 가짜 구현으로, 이동시간은 직선거리 근사로 바꾼다.
 
     docker compose run --rm planner pytest tests/planner
 """
@@ -9,6 +9,7 @@ from sqlalchemy import delete
 from app.db import SessionLocal, init_db
 from app.main import app
 from app.planner.models import PlannerPlan
+from app.planner import travel
 from app.planner.places import PlacesUnavailable, get_place_lookup
 from app.planner.schemas import PlaceInfo
 
@@ -35,6 +36,14 @@ class FakeLookup:
 
 
 fake = FakeLookup()
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _estimate_travel():
+    """이동시간 기대값을 고정하기 위해 routing 대신 직선거리 근사를 쓴다 (routing 연동은 tests/routing)."""
+    saved, travel._lookup = travel._lookup, travel.EstimateTravel()
+    yield
+    travel._lookup = saved
 
 
 @pytest.fixture(scope="module")

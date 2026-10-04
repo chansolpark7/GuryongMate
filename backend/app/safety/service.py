@@ -4,11 +4,12 @@ import json
 from datetime import date, datetime, time, timedelta
 
 from app.safety import geo, risk
+from app.safety.config import settings
 from app.safety.places import PlaceLookup, PlacesUnavailable
 from app.safety.schemas import (
-    AssessRequest, AssessResult, BreakwaterActivity, DaySummary, Hazard, HourForecastView, Level, Outlook,
-    SafeWindow, SensorView, Situation, SituationHour, SourceStatus, Status, TideView, TimeWindow, UvView,
-    VisitAssessment, ZoneStatus,
+    AssessRequest, AssessResult, AvoidResult, AvoidZone, BreakwaterActivity, DaySummary, Hazard, HourForecastView,
+    Level, Outlook, SafeWindow, SensorView, Situation, SituationHour, SourceStatus, Status, TideView, TimeWindow,
+    UvView, VisitAssessment, ZoneStatus,
 )
 from app.safety.sources import KST, ActiveWarning, Fetched, Forecast, MockSources, Sources
 
@@ -168,6 +169,37 @@ class SafetyService:
                                                      {"breakwater", "flood"})),
             guidance=guidance, data_status={k: _status(f, self.mock) for k, f in data.items()},
         )
+
+    # ---------- 길찾기 우회 구역 ----------
+    def avoid(self, now: datetime | None = None, min_risk: str = "caution") -> AvoidResult:
+        """지금 길찾기에서 피할 구역. 그 구역에 해당하는 근거가 있을 때만 넣는다.
+        - 침수: 그 센서 자신의 실측 등급. 지역 전체에 같은 값인 예보·특보로는 넣지 않는다 (넣으면 중심가가 전부 막힌다)
+        - 방파제: /status 의 구역 위험도 (특보·예보·CCTV)
+        """
+        st = self.status(now)
+        floor = risk.ORDER.index(min_risk)
+        hit = lambda lv: lv in risk.ORDER and risk.ORDER.index(lv) >= floor  # noqa: E731
+
+        breakwaters = {z.id: z for z in geo.BREAKWATERS}
+        zones = [AvoidZone(id=z.id, name=z.name, kind="breakwater", risk=z.risk, reason="; ".join(z.reasons),
+                           polygon=geo.zone_polygon(breakwaters[z.id]))
+                 for z in st.zones if z.kind == "breakwater" and hit(z.risk)]
+        for s in st.sensors:
+            if s.type in geo.FLOOD_SENSOR_TYPES and hit(s.risk):
+                z = geo.flood_zone(s.id, s.name, s.lat, s.lng)
+                zones.append(AvoidZone(id=z.id, name=z.name, kind="flood", risk=s.risk,
+                                       reason=f"{s.name} 수위 등급 {s.level} ({'위험' if s.risk == 'danger' else '주의'})",
+                                       polygon=geo.zone_polygon(z, settings.avoid_flood_radius_m)))
+
+        data = {k: st.data_status[k] for k in ("sensors", "breakwater", "forecast", "warnings")}
+        missing = [SOURCE_LABEL[k] for k, s in data.items() if not s.ok]
+        if zones:
+            guidance = f"{', '.join(z.name for z in zones)}을(를) 지나지 않는 길로 안내하라."
+        else:
+            guidance = "지금 길찾기에서 피해야 할 구역은 없다."
+        if missing:
+            guidance += f" 일부 데이터({', '.join(missing)})를 받지 못해 그 구역은 판단하지 못했다."
+        return AvoidResult(now=st.now, min_risk=min_risk, zones=zones, guidance=guidance, data_status=data)
 
     # ---------- 날짜별 전망 ----------
     def outlook(self, day: date, now: datetime | None = None, day_start: time = time(9), day_end: time = time(18),
