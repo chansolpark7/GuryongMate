@@ -119,3 +119,35 @@ def test_travel_estimated_when_routing_unavailable(client):
     finally:
         travel._lookup = saved
     assert "travel_estimated" not in codes(get_plan(client, p["id"]))
+
+
+def test_done_legs_not_checked(client):
+    p = far_trip(client)
+    for pid in ("p-house", "p-far"):
+        p = ok(client.patch(f"/planner/plans/{p['id']}/items/{item_id(p, pid)}", json={"status": "done"}, headers=H))
+    assert codes(p) == []  # 이미 다녀온 구간의 긴 도보는 경고하지 않는다
+
+
+def test_route_lookup_errors(monkeypatch):
+    """한 구간의 4xx 는 그 구간만 실패, 연결 장애·5xx 는 잠시 묻지 않음. 엔진이 길을 못 찾은 구간은 캐시."""
+    import httpx
+
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        n = len(calls)
+        if n == 1:
+            return httpx.Response(422, json={"detail": "bad"})
+        if n == 2:
+            return httpx.Response(200, json={"source": "estimate", "engine": {"ok": True}, "geometry": {}})
+        return httpx.Response(503)
+
+    lk = travel.HttpRouteLookup("http://routing", 1, 60, 100, 3600)
+    lk._client = httpx.Client(base_url="http://routing", transport=httpx.MockTransport(handler))
+    from app.planner.schemas import PlaceInfo
+    a, b, c = (PlaceInfo(id=k, title=k, lat=35.98 + i / 1000, lng=129.55) for i, k in enumerate("abc"))
+    assert lk.path(a, b, "walk") is None and lk._down_until == 0  # 4xx: 다운으로 보지 않음
+    assert lk.path(a, c, "walk") is None and lk.path(a, c, "walk") is None and len(calls) == 2  # 길 없음은 캐시
+    assert lk.path(b, c, "walk") is None and lk._down_until > 0  # 5xx: 잠시 묻지 않음
+    assert lk.detour(b, c, "walk") is None and len(calls) == 3

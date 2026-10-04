@@ -161,7 +161,7 @@ class HttpRouteLookup:
         self._client = httpx.Client(base_url=base_url, timeout=timeout)
         self._retry, self._size, self._ttl = retry_sec, cache_size, ttl_sec
         self._down_until = 0.0
-        self._cache: dict[tuple, tuple[float, list[tuple[float, float]]]] = {}
+        self._cache: dict[tuple, tuple[float, list[tuple[float, float]] | None]] = {}
 
     def _route(self, a: PlaceInfo, b: PlaceInfo, mode: str, hazards: str) -> dict | None:
         if _time.monotonic() < self._down_until:
@@ -170,10 +170,17 @@ class HttpRouteLookup:
                 "hazards": hazards, "steps": False}
         try:
             resp = self._client.post("/routing/route", json=body)
-            resp.raise_for_status()
-            return resp.json()
-        except (httpx.HTTPError, ValueError):
+        except httpx.HTTPError:
             self._down_until = _time.monotonic() + self._retry
+            return None
+        if resp.status_code >= 500:
+            self._down_until = _time.monotonic() + self._retry
+            return None
+        if resp.is_error:  # 이 구간 요청만 문제 (다른 구간은 계속 묻는다)
+            return None
+        try:
+            return resp.json()
+        except ValueError:
             return None
 
     def path(self, a, b, mode):
@@ -183,7 +190,11 @@ class HttpRouteLookup:
         if hit and now - hit[0] < self._ttl:
             return hit[1]
         r = self._route(a, b, mode, "ignore")
-        if not r or r.get("source") != "road":
+        if not r:
+            return None
+        if r.get("source") != "road":
+            if (r.get("engine") or {}).get("ok"):  # 엔진은 살아 있는데 길이 없음 -> 다시 물어도 같다
+                self._cache[key] = (now, None)
             return None
         coords = [(lat, lng) for lng, lat in r["geometry"]["coordinates"]]
         if len(coords) > MAX_PATH_POINTS:

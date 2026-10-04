@@ -10,6 +10,7 @@ from app.core.config import settings as core_settings
 from app.main import app
 from app.planner import safety
 from app.planner.safety_client import SafetyUnavailable, get_safety_client
+from app.planner import safety_watch
 from app.planner.safety_watch import SafetyWatcher, get_watcher
 from app.planner.travel import StraightRoutes, get_route_lookup
 from app.planner.schemas import PlaceInfo, PlanDetail, SafetyCheck, SafetyItem
@@ -74,6 +75,12 @@ class FakeRoutes(StraightRoutes):
 class ForecastDown(MockSources):
     def forecast(self, now):
         return Fetched(None, NOW, "SourceError: down")
+
+
+@pytest.fixture(autouse=True)
+def _today(monkeypatch):
+    """경로선을 받는 날짜 범위의 기준을 테스트 시각(NOW)에 맞춘다."""
+    monkeypatch.setattr(safety_watch, "_today", lambda: NOW.date())
 
 
 @pytest.fixture
@@ -484,3 +491,16 @@ def test_travel_leg_alerts(client, sc, watcher):
     # 구간 수단을 차량으로 바꾸면 새 구간으로 보고 다시 판단한다 (차량은 안전 -> 경고 없음, 도보 상태는 지운다)
     ok(client.patch(f"/planner/plans/{p['id']}/items/{item_id(p, 's-museum')}", json={"travel_mode": "car"}, headers=H))
     assert not [x for x in watcher.tick(force=True).alerts if x.plan_id == p["id"]]
+
+
+def test_far_legs_do_not_fetch_route_lines(client, sc):
+    """예보로 판단하지 못하는 먼 날짜 이동은 경로선을 받지 않는다 (직선으로 충분, 요청이 길어지지 않게)."""
+    asked = []
+    sc.routes.path = lambda a, b, mode: asked.append((a.id, b.id)) or None
+    trip(client, start="2027-01-15")
+    check(client, trip(client)["id"])
+    assert len(asked) == 2  # 내일 일정 2구간만 (먼 계획은 만들기만 하고 점검하지 않음)
+    asked.clear()
+    far = trip(client, start="2027-01-15")
+    check(client, far["id"])
+    assert asked == []

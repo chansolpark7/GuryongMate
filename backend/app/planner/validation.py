@@ -170,8 +170,9 @@ def build_schedule(
 
 
 def _check_travel(plan: PlannerPlan, legs: list[Leg]) -> list[Violation]:
-    """이동 기본 검사: 긴 도보 구간, 하루 도보 합계, 직선거리로 추정한 구간."""
+    """이동 기본 검사: 긴 도보 구간, 하루 도보 합계, 직선거리로 추정한 구간. 이미 다녀온 항목으로 간 이동은 뺀다."""
     out: list[Violation] = []
+    legs = [g for g in legs if g.item.status != "done"]
     rules = {c.type for c in plan.constraints}
     if "max_walk_minutes" not in rules:
         for g in legs:
@@ -256,10 +257,12 @@ def _check_constraint(
                   day=g.day, item_id=g.item.id)
                 for g in legs if g.leg.minutes > p["minutes"]]
     elif c.type == "max_walk_minutes":
+        legs = [g for g in legs if g.item.status != "done"]
         return [v(f"'{g.name}' 까지 도보 {g.leg.minutes}분으로 도보 상한 {p['minutes']}분을 넘습니다. "
                   f"차량이면 약 {g.options['car'].minutes}분입니다.", day=g.day, item_id=g.item.id)
                 for g in legs if g.mode == "walk" and g.leg.minutes > p["minutes"]]
     elif c.type == "max_daily_walk_minutes":
+        legs = [g for g in legs if g.item.status != "done"]
         return [v(f"{d}일차 도보 이동이 모두 {total}분으로 하루 도보 상한 {p['minutes']}분을 넘습니다.", day=d)
                 for d, total in _daily_walk(legs).items() if total > p["minutes"]]
     return []

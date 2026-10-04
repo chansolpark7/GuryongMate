@@ -136,6 +136,8 @@
 | `long_walk` | warning | 도보 구간 하나가 30분 초과. 메시지에 차량 시간을 함께 준다 (`max_walk_minutes` 규칙이 있으면 그 규칙으로만 본다) |
 | `daily_walk_total` | warning | 그날 도보 이동 합계가 90분 초과 (`max_daily_walk_minutes` 규칙이 있으면 그 규칙으로만 본다) |
 | `travel_estimated` | warning | 길찾기를 쓰지 못해 직선거리로 추정한 구간이 있음 (그날 하나로 묶음, 시간이 실제와 다를 수 있음) |
+
+이동 검사(`long_walk`·`daily_walk_total`·`travel_estimated`·도보 규칙)는 이미 다녀온(`done`) 항목으로 간 이동을 빼고 본다.
 | 규칙 `type` | hard→error, soft→warning | 아래 규칙 위반 |
 
 | 규칙 type | params | 의미 |
@@ -361,6 +363,8 @@ planner ── GET /safety/situation (fingerprint) ──▶ safety      바뀌�
 - 도보: 야외 기준. 경로가 지나는 방파제·침수 감시 구역을 그대로 적용한다.
 - 차량: 차 안이라 비·바람·특보는 참고(`info`)까지. 침수 감시 구역(잠긴 길)은 그대로, 방파제는 차가 들어가지 않으므로 보지 않는다.
 - 경로선을 못 받으면(routing 장애) 두 장소를 잇는 직선으로 대신한다.
+- 경로선은 **오늘~4일 뒤 이동만** 받는다 (그 뒤는 예보가 없어 판단하지 않으므로 직선으로 충분). 하루 캐시하고,
+  엔진이 길을 못 찾은 구간도 캐시한다. 연결 장애·5xx 면 20초 동안 묻지 않고, 한 구간의 4xx 는 그 구간만 직선으로 대신한다.
 - 3시간 안의 이동이 주의·위험이면 routing 의 우회(`hazards=avoid`)를 물어 `detour`(피한 구역, 늘어나는 시간)를 붙인다.
   routing 은 실측이 오른 센서 주변 80m 만 막으므로, 그 안을 지나지 않으면 `detour` 는 없다 (판단 반경 200m 와 다름).
 

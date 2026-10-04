@@ -9,7 +9,7 @@
 import logging
 import threading
 import time as _time
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 from sqlalchemy import delete, select
 
@@ -24,6 +24,13 @@ from app.planner.travel import RouteLookup, get_route_lookup
 
 log = logging.getLogger("uvicorn.error")
 LOOKAHEAD = timedelta(days=3)  # 예보 마지막 시각을 모를 때 점검할 기간
+PATH_DAYS = timedelta(days=4)  # 이 안의 이동만 길찾기 경로선을 받는다 (그 뒤는 예보가 없어 판단하지 않음)
+KST = timezone(timedelta(hours=9))
+
+
+def _today() -> date:
+    """경로선을 받을 날짜 범위의 기준 (테스트에서 바꾼다)."""
+    return datetime.now(KST).date()
 
 
 def assess_plan(detail: PlanDetail, client: SafetyClient, routes: RouteLookup,
@@ -32,7 +39,9 @@ def assess_plan(detail: PlanDetail, client: SafetyClient, routes: RouteLookup,
     이동 구간은 routing 경로선으로 보내고(못 구하면 직선), 3시간 안 이동이 주의·위험이면 우회 정보를 붙인다.
     safety 에 접근할 수 없으면 SafetyUnavailable."""
     legs = safety.travel_legs(detail, start, end)
-    paths = {g.item_id: routes.path(g.origin, g.dest, g.mode) for g in legs}
+    today = _today()
+    near = (today - timedelta(days=1), today + PATH_DAYS)  # 하루 여유: safety 가상 시각과 날짜가 조금 달라도
+    paths = {g.item_id: routes.path(g.origin, g.dest, g.mode) for g in legs if near[0] <= g.date <= near[1]}
     vs = safety.visits(detail, start, end, paths)
     if not vs:
         return None

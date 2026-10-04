@@ -309,7 +309,7 @@ class Toolbox:
         # 모델이 없는 인자(start_time, near_place_id 등)를 붙여도 실패시키지 않되, 무시했다고 알려준다
         op = {"op": "add_item", "place_id": place_id, "day": day, "order": order, "stay_minutes": stay_minutes,
               "memo": memo}
-        if travel_mode:
+        if travel_mode and not _blank(travel_mode) and travel_mode != "default":
             op["travel_mode"] = travel_mode
         notice = ""
         if self.last_plan and 1 <= day <= len(self.last_plan["days"]) and any(
