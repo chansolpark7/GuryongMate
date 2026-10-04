@@ -738,8 +738,22 @@ def test_review_gate_pushes_safety_danger(client, session, safety_on, review_on)
 
 def test_review_plan_reports_safety_unavailable(client, session, review_on):
     """safety 를 부를 수 없으면 검토는 계속하되 '확인하지 못했다'(info) 를 알린다 (안전하다고 하지 않게)."""
+    from app.planner.safety_client import SafetyUnavailable
+
+    class Down:
+        def assess(self, visits):
+            raise SafetyUnavailable("down")
+
+        situation = assess
+
     sid, _ = session
-    chat(client, sid, "물회", [[("add_item", {"place_id": "p-food"})], [("review_plan", {})], ["끝"]])
+    app.dependency_overrides[get_safety_client] = Down
+    app.dependency_overrides[get_route_lookup] = StraightRoutes
+    try:
+        chat(client, sid, "물회", [[("add_item", {"place_id": "p-food"})], [("review_plan", {})], ["끝"]])
+    finally:
+        app.dependency_overrides.pop(get_safety_client, None)
+        app.dependency_overrides.pop(get_route_lookup, None)
     out = tool_result(llm.calls[2], "issues")
     assert any(i.get("kind") == "safety" and "확인하지 못했다" in i["message"] and i["level"] == "info"
                for i in out["issues"])
