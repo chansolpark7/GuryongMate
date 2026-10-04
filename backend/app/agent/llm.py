@@ -1,7 +1,8 @@
 """LLM 공급자 추상화.
 
 - OllamaProvider: Ollama 네이티브 /api/chat (요청마다 컨텍스트 길이 지정). 로컬 기본값
-- OpenAICompatProvider: OpenAI 호환 Chat Completions. ChatGPT, LM Studio, vLLM 등
+- OpenAIResponsesProvider: OpenAI Responses API. ChatGPT 기본값 (GPT-5.x 의 추론 + 도구)
+- OpenAICompatProvider: OpenAI 호환 Chat Completions. LM Studio, vLLM 등 (ChatGPT 도 추론 없이 가능)
 하네스는 LLMProvider 인터페이스만 알고, 어떤 모델인지는 설정(config.py)에서만 정해진다.
 다른 형식의 API(예: Responses API, Anthropic)를 붙이려면 같은 이벤트를 내는 Provider 를 하나 더 만들면 된다.
 """
@@ -190,10 +191,88 @@ class OllamaProvider:
         yield Finish(finish)
 
 
+class OpenAIResponsesProvider:
+    """OpenAI Responses API (/v1/responses). GPT-5.x 는 추론(reasoning)과 도구를 함께 쓰려면 이 API 가 필요하다.
+    하네스는 Chat Completions 형식 메시지를 쓰므로 여기서 Responses 입력 형식으로 바꾼다."""
+
+    def __init__(self, name: str, base_url: str, api_key: str, model: str, reasoning_effort: str | None = None,
+                 timeout: float = 300, transport: httpx.AsyncBaseTransport | None = None):
+        self.name = name
+        self.model = model
+        self._url = base_url.rstrip("/") + "/responses"
+        self._headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+        self._reasoning_effort = reasoning_effort
+        self._timeout = timeout
+        self._transport = transport
+
+    @staticmethod
+    def _to_input(messages: list[dict]) -> list[dict]:
+        items: list[dict] = []
+        for m in messages:
+            if m["role"] == "tool":
+                items.append({"type": "function_call_output", "call_id": m["tool_call_id"], "output": m["content"]})
+                continue
+            if m.get("content"):
+                items.append({"role": m["role"], "content": m["content"]})
+            for c in m.get("tool_calls") or []:
+                items.append({"type": "function_call", "call_id": c["id"], "name": c["function"]["name"],
+                              "arguments": c["function"]["arguments"] or "{}"})
+        return items
+
+    @staticmethod
+    def _to_tools(tools: list[dict]) -> list[dict]:
+        return [{"type": "function", "name": t["function"]["name"], "description": t["function"]["description"],
+                 "parameters": t["function"]["parameters"], "strict": False} for t in tools]
+
+    async def stream(self, messages: list[dict], tools: list[dict]) -> AsyncIterator[LLMEvent]:
+        body: dict = {"model": self.model, "input": self._to_input(messages), "stream": True, "store": False}
+        if tools:
+            body["tools"] = self._to_tools(tools)
+        if self._reasoning_effort:
+            body["reasoning"] = {"effort": self._reasoning_effort, "summary": "auto"}
+
+        calls: list[ToolCall] = []
+        finish = "stop"
+        try:
+            async with httpx.AsyncClient(timeout=self._timeout, transport=self._transport) as client:
+                async with client.stream("POST", self._url, json=body, headers=self._headers) as resp:
+                    if resp.status_code >= 400:
+                        raise LLMError(f"{self.name} HTTP {resp.status_code}: {(await resp.aread()).decode(errors='replace')[:500]}")
+                    async for line in resp.aiter_lines():
+                        if not line.startswith("data:"):
+                            continue
+                        data = line[5:].strip()
+                        if not data or data == "[DONE]":
+                            continue
+                        ev = json.loads(data)
+                        kind = ev.get("type", "")
+                        if kind == "response.output_text.delta":
+                            yield TextDelta(ev["delta"])
+                        elif kind == "response.reasoning_summary_text.delta":
+                            yield ReasoningDelta(ev["delta"])
+                        elif kind == "response.output_item.done" and ev.get("item", {}).get("type") == "function_call":
+                            item = ev["item"]
+                            calls.append(ToolCall(id=item.get("call_id") or f"call_{uuid.uuid4().hex[:8]}",
+                                                  name=item.get("name", ""), arguments=item.get("arguments") or "{}"))
+                        elif kind == "response.incomplete":
+                            finish = "length"
+                        elif kind in ("error", "response.failed"):
+                            err = ev.get("error") or ev.get("response", {}).get("error")
+                            raise LLMError(f"{self.name}: {err}")
+        except httpx.HTTPError as e:
+            raise LLMError(f"{self.name} 연결 실패: {e!r}") from e
+        for c in calls:
+            yield c
+        yield Finish(finish)
+
+
 @lru_cache
 def get_llm() -> LLMProvider:
     """FastAPI 의존성. 테스트에서는 가짜 Provider 로 바꾼다."""
     s = settings
+    if s.provider == "openai" and s.openai_api == "responses":
+        return OpenAIResponsesProvider(f"openai:{s.openai_model}", s.openai_base_url, s.openai_api_key, s.openai_model,
+                                       s.openai_reasoning_effort, s.request_timeout_sec)
     if s.provider == "openai":
         return OpenAICompatProvider(f"openai:{s.openai_model}", s.openai_base_url, s.openai_api_key, s.openai_model,
                                     s.openai_reasoning_effort, s.temperature, s.request_timeout_sec)

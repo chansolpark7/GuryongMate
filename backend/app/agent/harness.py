@@ -33,9 +33,9 @@ EMPTY_REPLY_NOTE = ("[시스템] 방금 응답이 비어 있었다. 필요한 �
 FINAL_STEP_NOTE = ("[시스템] 이번 턴의 도구 호출 한도에 도달해 더는 도구를 쓸 수 없다. 지금까지 도구로 실제로 한 변경만 "
                    "짧게 정리해 답하라 (그 변경이 제안 카드로 전달된다). 하지 않은 변경을 했다고 말하지 말고, "
                    "남은 일은 다음 요청에서 이어서 하겠다고만 말하라.")
-REVIEW_NOTE = ("[시스템] 답하기 전에 일정을 검토했더니 아래 문제가 남아 있다. must 는 반드시, should 는 가능하면 "
-               "고친 뒤 review_plan 으로 다시 확인하라. 고칠 수 없는 문제는 답변에서 이유를 짧게 말하라. "
-               "앞에 쓴 답변은 이미 사용자에게 보였으니, 다 고친 뒤 무엇을 고쳤는지만 짧게 덧붙여라.\n")
+REVIEW_NOTE = ("[시스템] 방금 쓴 답변은 아직 사용자에게 보내지 않았다. 일정을 검토했더니 아래 문제가 남아 있다. "
+               "must 는 반드시, should 는 가능하면 고친 뒤 review_plan 으로 다시 확인하라. 다 고친 뒤 최종 답변을 처음부터 "
+               "다시 써라. 고칠 수 없는 문제는 최종 답변에서 이유를 짧게 말하라.\n")
 
 STEP_TITLE = {"search": "장소 찾기", "place": "장소 정보 확인", "plan": "일정 확인", "edit": "일정 조정",
               "rule": "조건 반영", "review": "일정 검토", "recommend": "추천 정리", "proposal": "변경안 만들기"}
@@ -201,6 +201,9 @@ async def run_turn(session_id: str, plan_id: int, user_text: str, llm: LLMProvid
             tools = specs if step_no < settings.max_steps - 1 else []
             if not tools and step_no > 0:
                 extra = [{"role": "user", "content": FINAL_STEP_NOTE}]
+            # 일정을 바꾼 턴에서 검토 관문이 남아 있으면, 이 단계의 텍스트는 바로 내보내지 않고 보관한다.
+            # 끝내려는 답변이 검토에서 되돌려지면 그 답변은 사용자에게 보이지 않은 채 버려진다.
+            gated = review_on and bool(draft.ops) and pushes_left > 0 and step_no < settings.max_steps - 2
             for attempt in range(LLM_RETRIES + 1):
                 text, calls, finish, reasoning_len = "", [], "", 0
                 try:
@@ -208,7 +211,8 @@ async def run_turn(session_id: str, plan_id: int, user_text: str, llm: LLMProvid
                         match ev:
                             case TextDelta(text=t):
                                 text += t
-                                yield _ev("text", delta=t)
+                                if not gated:
+                                    yield _ev("text", delta=t)
                             case ReasoningDelta(text=t):
                                 reasoning_len += len(t)
                                 yield _ev("thinking", delta=t)
@@ -221,7 +225,7 @@ async def run_turn(session_id: str, plan_id: int, user_text: str, llm: LLMProvid
                     # 로컬 모델은 가끔 형식이 깨진 도구 호출을 내서 서버 파서가 실패한다.
                     # 아직 답변 텍스트를 내보내지 않았으면 같은 단계를 다시 시도한다.
                     log.warning("session=%s step=%d attempt=%d LLM 오류: %s", sid, step_no, attempt, e)
-                    if text or attempt == LLM_RETRIES:
+                    if (text and not gated) or attempt == LLM_RETRIES:
                         message = f"LLM 호출 실패: {e}"
                         await save(message)
                         yield _error("llm_failed", message)
@@ -237,6 +241,20 @@ async def run_turn(session_id: str, plan_id: int, user_text: str, llm: LLMProvid
                 nudged = True
                 extra = [{"role": "user", "content": EMPTY_REPLY_NOTE}]
                 continue
+            if gated and not calls:
+                # 검토 관문: 일정을 바꾼 턴을 끝내기 전에 검토하고, 문제가 남았으면 답변을 보내지 않고 다시 고치게 한다
+                for ev in steps.start("review"):
+                    yield ev
+                issues = await toolbox.review_now()
+                yield steps.finish(True, summarize(issues))
+                blocking = [i for i in issues if i["level"] in ("must", "should")]
+                if blocking:
+                    pushes_left -= 1
+                    listing = "\n".join(f"- [{i['level']}] {i['message']}" for i in blocking)
+                    extra = [{"role": "user", "content": REVIEW_NOTE + listing}]
+                    continue
+            if gated and text:  # 보관했던 텍스트를 이제 내보낸다
+                yield _ev("text", delta=text)
             if text.strip():
                 said.append(text.strip())
             tool_calls = [{"id": c.id, "type": "function", "function": {"name": c.name, "arguments": c.arguments}}
@@ -247,20 +265,6 @@ async def run_turn(session_id: str, plan_id: int, user_text: str, llm: LLMProvid
                                          tool_calls=tool_calls or None, hidden=bool(tool_calls) and not text.strip()))
             if not calls:
                 complete = len(new_rows)
-                if review_on and draft.ops and pushes_left > 0 and step_no < settings.max_steps - 2:
-                    # 검토 관문: 일정을 바꾼 턴을 끝내기 전에 검토하고, 문제가 남았으면 다시 고치게 한다
-                    for ev in steps.start("review"):
-                        yield ev
-                    issues = await toolbox.review_now()
-                    yield steps.finish(True, summarize(issues))
-                    blocking = [i for i in issues if i["level"] in ("must", "should")]
-                    if blocking:
-                        pushes_left -= 1
-                        listing = "\n".join(f"- [{i['level']}] {i['message']}" for i in blocking)
-                        extra = [{"role": "user", "content": REVIEW_NOTE + listing}]
-                        if text.strip():
-                            yield _ev("text", delta="\n\n")
-                        continue
                 break
             if text.strip():
                 yield _ev("text", delta="\n\n")  # 도구 호출 앞의 말과 이후 답변을 구분

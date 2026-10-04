@@ -592,20 +592,23 @@ def test_review_tool_and_gate_push_until_fixed(client, session, review_on):
     ])
     assert "review_plan" in [t["function"]["name"] for t in llm.tools_seen[0]]
     push = llm.calls[2][-1]["content"]
-    assert push.startswith("[시스템] 답하기 전에") and "두 번" in push
+    assert push.startswith("[시스템] 방금 쓴 답변은 아직") and "두 번" in push
     review_steps = [d for e, d in events if e == "step" and d["kind"] == "review" and d["status"] == "done"]
     assert [s["detail"] for s in review_steps][0] == "문제 1건" and review_steps[-1]["detail"] == "문제 없음"
     prop = last(events, "proposal")
     assert [c["kind"] for c in prop["changes"] if c["kind"] == "added"] == ["added"]
-    assert last(events, "done")["text"] == "넣었어요\n\n물회집으로 바꿨어요"
+    # 되돌려진 답변("넣었어요")은 사용자에게 보내지 않는다
+    assert last(events, "done")["text"] == "물회집으로 바꿨어요"
+    assert "".join(d["delta"] for e, d in events if e == "text") == "물회집으로 바꿨어요"
     assert "review_plan" in llm.calls[0][0]["content"]  # 작업 순서가 프롬프트에 있다
 
 
 def test_gate_gives_up_after_rounds(client, session, review_on):
     sid, _ = session
     events = chat(client, sid, "a", [[("add_item", {"place_id": "p-house"})], ["1"], ["2"], ["3"]])
-    pushes = [m for call in llm.calls for m in call[-1:] if m["content"].startswith("[시스템] 답하기 전에")]
+    pushes = [m for call in llm.calls for m in call[-1:] if m["content"].startswith("[시스템] 방금 쓴 답변은 아직")]
     assert len(pushes) == 2 and len(llm.calls) == 4  # 2번 되돌려 보낸 뒤 그대로 끝
+    assert last(events, "done")["text"] == "3"  # 되돌려진 답변 "1", "2" 는 보이지 않는다
     assert last(events, "proposal")["status"] == "pending"
 
 

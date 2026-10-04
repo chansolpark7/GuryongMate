@@ -206,12 +206,27 @@ LLM은 일정을 직접 바꾸지 않는다. 결과는 두 종류의 **카드**�
 | `AGENT_LOCAL_NUM_CTX` | `16384` | Ollama 컨텍스트 길이 (기본 4096이면 프롬프트가 잘린다) |
 | `AGENT_LOCAL_THINK` | `false` | 추론 사용. **qwen3.6은 `true`여야 도구를 제대로 쓴다** |
 | `AGENT_OPENAI_API_KEY` | (`LLM_API_KEY`도 읽음) | ChatGPT |
-| `AGENT_OPENAI_MODEL` | `gpt-5-mini` | |
+| `AGENT_OPENAI_API` | `responses` | `responses`(Responses API, GPT-5.x에서 추론과 도구를 함께 쓰려면 필수) 또는 `chat`(Chat Completions) |
+| `AGENT_OPENAI_MODEL` | `gpt-5.4-mini` | |
 | `AGENT_OPENAI_REASONING_EFFORT` | `low` | |
 | `AGENT_MAX_STEPS` | `20` | 한 턴의 LLM 호출 최대 횟수 (마지막 호출은 도구 없이 답변 강제) |
 | `AGENT_REVIEW_ROUNDS` | `2` | 검토 관문이 되돌려 보내는 최대 횟수. `0`이면 `review_plan` 도구와 관문을 끈다 |
 
 새 공급자는 `llm.py`에 같은 이벤트(`TextDelta`, `ReasoningDelta`, `ToolCall`, `Finish`)를 내는 Provider를 추가하면 된다.
+
+### 모델·구조 비교 (2026-10-04, `scripts/planner/eval_agent.py`, 시나리오 3개 × 2회)
+
+남은 문제는 최종 제안을 `review.py` 규칙으로 채점한 수의 평균이다(must / should).
+
+| 모델 | 검토 루프 | 제안 생성 | 남은 문제 | 턴 평균 시간 |
+|---|---|---|---|---|
+| qwen3.6:35b (로컬) | 없음 | 4/6 | 0 / 3.0 | 약 3분 |
+| qwen3.6:35b (로컬) | 있음 | 4/6 (1회 15분 초과) | 0.25 / 1.25 | 3~10분 |
+| gpt-5.4-mini | 없음 | 6/6 | 0 / 0.8 | 13초 |
+| gpt-5.4-mini | 있음 | 6/6 | **0 / 0** | 18초 |
+
+- 검토 루프는 지적을 고칠 수 있는 모델에서 효과가 크다. qwen3.6은 지적을 받아도 고치지 못하는 경우가 많고(같은 장소 유지, 고치다 다른 문제 생김), 생각이 길어져 매우 느려진다.
+- 검토에서 되돌려진 답변은 사용자에게 보내지 않는다(일정을 바꾼 턴의 마지막 답변은 검토를 통과한 뒤 내보낸다).
 
 ## 8. 로컬 LLM 메모 (qwen3.6:35b-a3b Q4, RTX 5070 12GB)
 

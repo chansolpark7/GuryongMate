@@ -19,8 +19,9 @@ class AgentSettings(BaseSettings):
     local_think: bool = False  # 추론(thinking) 사용. 켜면 도구 사용이 신중해지지만 느려진다
 
     # ChatGPT (OpenAI API)
+    openai_api: str = Field("responses", description="responses (GPT-5.x 추론+도구) | chat (Chat Completions)")
     openai_base_url: str = "https://api.openai.com/v1"
-    openai_model: str = "gpt-5-mini"
+    openai_model: str = "gpt-5.4-mini"
     openai_api_key: str = Field("", validation_alias=AliasChoices("AGENT_OPENAI_API_KEY", "OPENAI_API_KEY", "LLM_API_KEY"))
     openai_reasoning_effort: str | None = "low"
 
