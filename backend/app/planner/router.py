@@ -3,11 +3,12 @@
 - 직접 편집(사용자): items / constraints / PATCH / ops -> 즉시 반영
 - 변경 제안(LLM·이벤트): proposals -> 사용자가 accept 해야 반영 (auto / overwrite)
 - 장소 추천: recommendations -> 후보마다 add / remove 로 즉시 반영
+- 안전 점검: safety -> 방문 장소·시각의 위험 단계 (safety 서비스 판단). 상황이 바뀌면 주기 점검이 경고(alerts)를 남긴다
 일정을 바꾸는 요청은 모두 바뀐 뒤의 전체 계획(PlanDetail)을 돌려주고, 계획의 version 을 1 올린다.
 오류는 {"detail": {"code", "message", ...}} 형식이다 (errors.py).
 """
 from datetime import datetime, timezone
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Body, Depends, Query, Response
 from pydantic import TypeAdapter
@@ -15,9 +16,11 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.auth import CurrentUser
+from app.core.config import settings as core_settings
 from app.db import get_db
 from app.planner import ops as engine
 from app.planner import recommend
+from app.planner import safety as safety_check
 from app.planner.errors import PlannerError, PlannerRoute, not_found
 from app.planner.models import (
     PlannerItem,
@@ -25,8 +28,11 @@ from app.planner.models import (
     PlannerProposal,
     PlannerRecommendation,
     PlannerRecommendationCandidate,
+    PlannerSafetyAlert,
 )
 from app.planner.places import PlaceLookup, get_place_lookup
+from app.planner.safety_client import SafetyClient, SafetyUnavailable, get_safety_client
+from app.planner.safety_watch import SafetyWatcher, alert_view, get_watcher
 from app.planner.schemas import (
     AcceptRequest,
     AcceptResult,
@@ -52,6 +58,9 @@ from app.planner.schemas import (
     RecommendationView,
     RemoveConstraintOp,
     RemoveItemOp,
+    SafetyAlertView,
+    SafetyCheck,
+    SafetyScanReport,
     UpdateItemOp,
     UpdatePlanOp,
     ValidationResult,
@@ -61,6 +70,7 @@ router = APIRouter(prefix="/planner", tags=["planner"], route_class=PlannerRoute
 
 DbSession = Annotated[Session, Depends(get_db)]
 Places = Annotated[PlaceLookup, Depends(get_place_lookup)]
+Safety = Annotated[SafetyClient, Depends(get_safety_client)]
 # 사용자: Authorization: Bearer <access 토큰> (개발 모드 AUTH_REQUIRED=false 면 X-User-Id 헤더). app.core.auth
 UserId = CurrentUser
 
@@ -385,6 +395,72 @@ def remove_candidate(plan_id: int, recommendation_id: int, candidate_id: int, db
         raise PlannerError(409, "not_in_plan", f"{cand.day}일차 일정에 이 장소가 없습니다.")
     detail = _apply(db, plan, [RemoveItemOp(op="remove_item", item_id=matched.id)], places)
     return RecommendationActionResult(recommendation=recommend.recommendation_view(detail, rec, places), plan=detail)
+
+
+# ---------- 안전 점검 ----------
+
+def _safety_check(detail: PlanDetail, client: SafetyClient) -> SafetyCheck:
+    vs = safety_check.visits(detail)
+    if not vs:
+        return safety_check.check(detail, {"visits": [], "data_status": {}, "now": datetime.now(timezone.utc)})
+    try:
+        return safety_check.check(detail, client.assess(vs))
+    except SafetyUnavailable as e:
+        raise PlannerError(503, "safety_unavailable", "안전 정보 서비스에 접근할 수 없습니다. 잠시 후 다시 시도하세요.",
+                           reason=str(e)[:200]) from e
+
+
+@router.get("/plans/{plan_id}/safety", response_model=SafetyCheck)
+def check_safety(plan_id: int, db: DbSession, user_id: UserId, places: Places, client: Safety) -> SafetyCheck:
+    """지금 일정의 방문 장소·시각별 위험 단계 (safe / caution / danger, 판단 불가는 null). 저장하지 않는다."""
+    plan = _get_plan(db, user_id, plan_id)
+    detail = engine.detail(plan, places)
+    db.rollback()  # safety 호출 동안 DB 연결을 잡고 있지 않게
+    return _safety_check(detail, client)
+
+
+@router.post("/plans/{plan_id}/safety/preview", response_model=SafetyCheck)
+def preview_safety(plan_id: int, body: OpsRequest, db: DbSession, user_id: UserId, places: Places,
+                   client: Safety) -> SafetyCheck:
+    """ops 를 적용했다고 치고 안전 점검 (저장 안 함). 변경안을 만들 때 쓴다. 새 항목 item_id 는 음수 임시값."""
+    after = engine.simulate(_get_plan(db, user_id, plan_id), body.ops, places, with_index=True)
+    db.rollback()
+    return _safety_check(after, client)
+
+
+@router.get("/plans/{plan_id}/safety/alerts", response_model=list[SafetyAlertView])
+def list_safety_alerts(plan_id: int, db: DbSession, user_id: UserId,
+                       status: Annotated[Literal["new", "seen"] | None, Query()] = None) -> list[SafetyAlertView]:
+    """주기 점검이 남긴 경고 (최신순)."""
+    _get_plan(db, user_id, plan_id)
+    q = select(PlannerSafetyAlert).where(PlannerSafetyAlert.plan_id == plan_id)
+    if status:
+        q = q.where(PlannerSafetyAlert.status == status)
+    return [alert_view(a) for a in db.scalars(q.order_by(PlannerSafetyAlert.id.desc()))]
+
+
+@router.post("/plans/{plan_id}/safety/alerts/{alert_id}/seen", response_model=SafetyAlertView)
+def mark_safety_alert_seen(plan_id: int, alert_id: int, db: DbSession, user_id: UserId) -> SafetyAlertView:
+    _get_plan(db, user_id, plan_id)
+    alert = db.get(PlannerSafetyAlert, alert_id)
+    if alert is None or alert.plan_id != plan_id:
+        raise not_found("alert_not_found", f"경고 {alert_id}")
+    alert.status = "seen"
+    db.commit()
+    return alert_view(alert)
+
+
+@router.post("/safety/scan", response_model=SafetyScanReport)
+def scan_safety(watcher: Annotated[SafetyWatcher, Depends(get_watcher)],
+                force: Annotated[bool, Query(description="상황이 같아도 점검")] = False) -> SafetyScanReport:
+    """주기 점검을 지금 한 번 돌린다 (개발·시연용, AUTH_REQUIRED=false 일 때만). 모든 사용자의 계획이 대상이다."""
+    if core_settings.auth_required:
+        raise PlannerError(404, "not_available", "개발 모드(AUTH_REQUIRED=false)에서만 쓸 수 있습니다.")
+    try:
+        return watcher.tick(force=force)
+    except SafetyUnavailable as e:
+        raise PlannerError(503, "safety_unavailable", "안전 정보 서비스에 접근할 수 없습니다.",
+                           reason=str(e)[:200]) from e
 
 
 # ---------- 탈퇴 ----------

@@ -16,6 +16,12 @@ class PlannerSettings(BaseSettings):
     places_base_url: str = "http://127.0.0.1:8000"
     places_cache_ttl_sec: float = 300
 
+    # 안전 점검 (safety 서비스 HTTP API). docs/planner/README.md "안전 점검"
+    safety_base_url: str = "http://127.0.0.1:8000"
+    safety_timeout_sec: float = 15
+    safety_watch_sec: float = 0  # 상황 확인 주기(초). 0 이면 주기 점검을 하지 않는다 (compose 의 planner 서비스만 켠다)
+    safety_recheck_min: float = 10  # 상황이 그대로여도 이 주기마다 다시 점검 (일정 수정, 방문 3시간 전 실측 적용 대비)
+
 
 settings = PlannerSettings()
 

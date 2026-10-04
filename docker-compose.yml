@@ -22,6 +22,7 @@ x-backend-env: &backend-env
   DATABASE_URL: postgresql+psycopg://guryong:guryong@db:5432/guryongmate
   EMBEDDING_URL: http://embedding:80
   PLANNER_PLACES_BASE_URL: http://gateway   # 서비스끼리도 게이트웨이를 통해 호출
+  PLANNER_SAFETY_BASE_URL: http://gateway
   SAFETY_PLACES_BASE_URL: http://gateway
   AGENT_API_BASE_URL: http://gateway
   ACCOUNT_API_BASE_URL: http://gateway
@@ -103,6 +104,8 @@ services:
     environment:
       <<: *backend-env
       SERVICE: planner
+      # 안전 상황 확인 주기(초). 바뀌었을 때만 일정을 다시 점검하고 경고를 남긴다. 0 이면 끔
+      PLANNER_SAFETY_WATCH_SEC: ${PLANNER_SAFETY_WATCH_SEC:-60}
     depends_on:
       db:
         condition: service_healthy

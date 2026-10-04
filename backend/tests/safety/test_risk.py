@@ -69,7 +69,10 @@ def test_heavy_rain_is_flood_hazard_in_flood_zone():
     assert [(h.type, h.level) for h in hz] == [("flood", "danger")]
     assert [(h.type, h.level) for h in risk.forecast_hazards([hour(14, pcp_mm=35.0)], set())] == [("rain", "caution")]
     # 강수량은 적어도 비 예보가 확실하면 참고로 알린다
-    assert [h.level for h in risk.forecast_hazards([hour(14, pcp_mm=0.5, pty=1, pop=80)], {"flood"})] == ["low"]
+    assert [h.level for h in risk.forecast_hazards([hour(14, pcp_mm=0.5, pty=1, pop=80)], {"flood"})] == ["info"]
+    # 방파제·침수 구역이 아닌 야외도 비는 낮춰서라도 참고(info)로 남긴다 (일정 조정에 참고)
+    assert [(h.type, h.level) for h in risk.forecast_hazards([hour(14, pcp_mm=5.0, pty=1, pop=80)], set())] == [
+        ("rain", "info")]
 
 
 def test_warning_impact_depends_on_place():
@@ -79,18 +82,18 @@ def test_warning_impact_depends_on_place():
     hw = [ActiveWarning("호우경보", "경상북도(포항)")]
     assert [h.level for h in risk.warning_hazards(hw, {"flood"})] == ["danger"]
     assert [h.level for h in risk.warning_hazards(hw, set())] == ["caution"]
-    assert [h.level for h in risk.warning_hazards([ActiveWarning("건조주의보", "포항")], set())] == ["low"]
+    assert [h.level for h in risk.warning_hazards([ActiveWarning("건조주의보", "포항")], set())] == ["info"]
 
 
 def test_indoor_caps_weather_but_not_flood_zone():
     storm = [hour(15, pcp_mm=35.0, pty=1, pop=90, wsd=16.0)]
     indoor = risk.forecast_hazards(storm, set(), indoor=True)
-    assert {(h.type, h.level) for h in indoor} == {("rain", "low"), ("wind", "low")}
+    assert {(h.type, h.level) for h in indoor} == {("rain", "info"), ("wind", "info")}
     assert all(risk.INDOOR_NOTE in h.reason for h in indoor)
     # 침수 감시 구역 안의 실내(식당 등)는 앞길이 잠길 수 있어 그대로 본다
     assert ("flood", "danger") in {(h.type, h.level) for h in risk.forecast_hazards(storm, {"flood"}, indoor=True)}
     hw = [ActiveWarning("호우경보", "경상북도(포항)")]
-    assert [h.level for h in risk.warning_hazards(hw, set(), indoor=True)] == ["low"]
+    assert [h.level for h in risk.warning_hazards(hw, set(), indoor=True)] == ["info"]
     assert [h.level for h in risk.warning_hazards(hw, {"flood"}, indoor=True)] == ["danger"]
 
 
@@ -98,21 +101,21 @@ def test_warnings_weighted_by_time():
     ws = [ActiveWarning("풍랑주의보", "경북남부앞바다")]
     assert [h.level for h in risk.timed_warning_hazards(ws, {"breakwater"}, NOW + timedelta(hours=5), NOW)] == ["danger"]
     later = risk.timed_warning_hazards(ws, {"breakwater"}, NOW + timedelta(hours=20), NOW)
-    assert [h.level for h in later] == ["low"] and "현재 발효 중" in later[0].reason and "해제될 수 있음" in later[0].reason
+    assert [h.level for h in later] == ["info"] and "현재 발효 중" in later[0].reason and "해제될 수 있음" in later[0].reason
     assert risk.timed_warning_hazards(ws, {"breakwater"}, NOW + timedelta(hours=30), NOW) == []
 
 
 def test_safe_windows_merge_contiguous_ok_hours():
     t = lambda h: datetime(2026, 10, 5, h, tzinfo=KST)  # noqa: E731
-    levels = {t(9): "danger", t(10): "none", t(11): "low", t(12): "caution", t(13): "none", t(15): "none"}
+    levels = {t(9): "danger", t(10): "none", t(11): "info", t(12): "caution", t(13): "none", t(15): "none"}
     wins = risk.safe_windows(levels, timedelta(hours=1))
-    assert wins == [(t(10), t(12), "low"), (t(13), t(14), "none"), (t(15), t(16), "none")]
+    assert wins == [(t(10), t(12), True), (t(13), t(14), False), (t(15), t(16), False)]  # (시작, 끝, 참고 신호 있음)
 
 
 def test_sensor_levels():
     r = SensorReading(8, "ROAD", "구룡포파출소_지표면 수위계", *FLOOD, 0.0, 1)
     assert risk.sensor_risk(r) == ("none", None)
-    assert risk.sensor_risk(SensorReading(8, "ROAD", "x", *FLOOD, 12.0, 1))[0] == "low"
+    assert risk.sensor_risk(SensorReading(8, "ROAD", "x", *FLOOD, 12.0, 1))[0] == "info"
     assert risk.sensor_risk(SensorReading(8, "ROAD", "x", *FLOOD, 12.0, 2))[0] == "caution"
     assert risk.sensor_risk(SensorReading(4, "HOLE", "x", *FLOOD, 1650.0, 3))[0] == "danger"
     assert risk.sensor_risk(SensorReading(5, "RAIN", "x", *FLOOD, 40.0, 3))[0] == "none"  # 강우량계는 구역이 아님
@@ -123,10 +126,15 @@ def test_sensor_levels():
 
 def test_far_future_advice_says_do_not_change():
     t = risk.classify(*at(datetime(2027, 1, 15, 13, tzinfo=KST)), NOW, FC_LAST, True)
-    text = risk.visit_advice(t, "unknown", {"breakwater"}, NOW, datetime(2027, 1, 15, 13, tzinfo=KST), [], False)
+    text = risk.visit_advice(t, None, {"breakwater"}, NOW, datetime(2027, 1, 15, 13, tzinfo=KST), [], False)
     assert "예측할 수 없다" in text and "바꾸거나 빼지 마라" in text and "2027-01-12" in text and "방파제" in text
 
 
 def test_seasonal_notes_are_marked_as_tendency():
     assert all("예보가 아님" in n for n in risk.seasonal_notes(date(2027, 8, 1)))
     assert risk.seasonal_notes(date(2027, 5, 1)) == []
+
+
+def test_public_levels_are_three():
+    assert [risk.public(x) for x in ("none", "info", "caution", "danger")] == ["safe", "safe", "caution", "danger"]
+    assert risk.worst_public(["safe", "danger", "caution"]) == "danger" and risk.worst_public([]) == "safe"

@@ -48,6 +48,9 @@ LLM: 호스트의 Ollama(host.docker.internal:11434) 또는 OpenAI API — Docke
 - **라우터 자동 등록**: `backend/app/<module>/router.py`에 `router = APIRouter(prefix="/<module>")`만 만들면 된다.
 - **테이블 자동 생성**: `backend/app/<module>/models.py`에 `app.db.Base`를 상속한 모델을 두면 해당 서비스가 시작할 때 `create_all` 된다. 해커톤 기간에는 Alembic을 쓰지 않는다. 테이블 이름은 반드시 모듈 접두사로 시작한다.
 - **의존성 분리**: 모듈 전용 패키지는 `backend/requirements/<module>.txt`에 추가한다. Dockerfile이 `requirements/*.txt`를 모두 설치한다.
+- **백그라운드 작업**: 서버가 떠 있는 동안 돌아야 하는 작업(주기 점검 등)은 `backend/app/<module>/background.py`에
+  `running()`(contextmanager)으로 둔다. 그 모듈을 맡은 서비스에서만 열리고, 테스트(`tests/conftest.py`)에서는 환경변수로 끈다.
+  예: planner 안전 주기 점검 (`PLANNER_SAFETY_WATCH_SEC`, `docs/planner/README.md` §7.4).
 
 ## 2. 서비스 간 연결 규칙
 
