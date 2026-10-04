@@ -13,7 +13,7 @@ from typing import Annotated
 
 import httpx
 from anyio import to_thread
-from fastapi import APIRouter, Body, Depends, Header, Query, Response
+from fastapi import APIRouter, Body, Depends, Query, Response
 from fastapi.responses import StreamingResponse
 from starlette.background import BackgroundTask
 from sqlalchemy import select
@@ -35,12 +35,15 @@ from app.agent.schemas import (
     SessionView,
     Step,
 )
+from app.core.auth import CurrentUser, ForwardAuth
 from app.db import get_db
 
 router = APIRouter(prefix="/agent", tags=["agent"], route_class=AgentRoute)
 
 DbSession = Annotated[Session, Depends(get_db)]
-UserId = Annotated[str, Header(alias="X-User-Id", min_length=1, max_length=64)]
+# 사용자: Authorization: Bearer <access 토큰> (개발 모드면 X-User-Id). planner 등은 받은 인증을 그대로 전달해 부른다
+UserId = CurrentUser
+Auth = ForwardAuth
 Http = Annotated[httpx.AsyncClient, Depends(get_http)]
 Llm = Annotated[LLMProvider, Depends(get_llm)]
 
@@ -107,8 +110,8 @@ def info(llm: Llm) -> AgentInfo:
 
 
 @router.post("/sessions", response_model=SessionView, status_code=201)
-async def create_session(body: SessionCreate, db: DbSession, user_id: UserId, http: Http) -> SessionView:
-    await ServiceApi(http, user_id).get_plan(body.plan_id)  # 존재·소유 확인 (없으면 404 plan_not_found 전달)
+async def create_session(body: SessionCreate, db: DbSession, user_id: UserId, auth: Auth, http: Http) -> SessionView:
+    await ServiceApi(http, auth).get_plan(body.plan_id)  # 존재·소유 확인 (없으면 404 plan_not_found 전달)
     s = AgentSession(id=uuid.uuid4().hex, user_id=user_id, plan_id=body.plan_id)
     db.add(s)
     db.commit()
@@ -136,12 +139,12 @@ async def _resolve_card(api: ServiceApi, plan_id: int, ref: dict) -> dict | None
 
 
 @router.get("/sessions/{session_id}", response_model=SessionDetail)
-async def get_session(session_id: str, db: DbSession, user_id: UserId, http: Http) -> SessionDetail:
+async def get_session(session_id: str, db: DbSession, user_id: UserId, auth: Auth, http: Http) -> SessionDetail:
     s = _get_session(db, user_id, session_id)
     rows = db.scalars(select(AgentMessage).where(AgentMessage.session_id == s.id, AgentMessage.hidden.is_(False),
                                                  AgentMessage.role.in_(("user", "assistant")))
                       .order_by(AgentMessage.id))
-    api = ServiceApi(http, user_id)
+    api = ServiceApi(http, auth)
     messages: list[MessageView] = []
     for m in rows:
         if not m.content.strip() and not m.cards and not m.steps:
@@ -175,13 +178,13 @@ def _sse(ev: dict) -> str:
     return f"event: {ev['event']}\ndata: {json.dumps(ev['data'], ensure_ascii=False, default=str)}\n\n"
 
 
-async def _turn_response(session_id: str, plan_id: int, text: str, user_id: str, http: httpx.AsyncClient,
+async def _turn_response(session_id: str, plan_id: int, text: str, auth: dict[str, str], http: httpx.AsyncClient,
                          llm: LLMProvider, stream: bool, repropose: dict | None = None):
     token = _acquire(session_id)
 
     async def events() -> AsyncIterator[dict]:
         try:
-            async for ev in run_turn(session_id, plan_id, text, llm, ServiceApi(http, user_id), repropose=repropose):
+            async for ev in run_turn(session_id, plan_id, text, llm, ServiceApi(http, auth), repropose=repropose):
                 yield ev
         except ApiError as e:
             yield {"event": "error", "data": {"code": e.code, "message": e.message}}
@@ -222,10 +225,10 @@ StreamFlag = Annotated[bool, Query(description="true: SSE 실시간 스트림, f
 
 
 @router.post("/sessions/{session_id}/chat", response_model=ChatResult, responses=_STREAM_DOC)
-async def chat(session_id: str, body: ChatRequest, db: DbSession, user_id: UserId, http: Http, llm: Llm,
+async def chat(session_id: str, body: ChatRequest, db: DbSession, user_id: UserId, auth: Auth, http: Http, llm: Llm,
                stream: StreamFlag = True):
     s = _get_session(db, user_id, session_id)  # 존재 확인은 스트림 시작 전에 (404 를 바로 돌려주기 위해)
-    return await _turn_response(session_id, s.plan_id, body.message, user_id, http, llm, stream)
+    return await _turn_response(session_id, s.plan_id, body.message, auth, http, llm, stream)
 
 
 # ---------- 카드 동작 ----------
@@ -258,12 +261,12 @@ async def _own_recommendation(api: ServiceApi, s: AgentSession, rec_id: int, can
 
 
 @router.post("/sessions/{session_id}/proposals/{proposal_id}/accept")
-async def accept(session_id: str, proposal_id: int, db: DbSession, user_id: UserId, http: Http,
+async def accept(session_id: str, proposal_id: int, db: DbSession, user_id: UserId, auth: Auth, http: Http,
                  body: Annotated[AcceptRequest | None, Body()] = None) -> dict:
     """제안 승인. 응답은 planner {proposal, plan}. 제안 이후 일정이 바뀌었으면 409 base_changed 를 그대로 전달."""
     s = _get_session(db, user_id, session_id)
     async with _hold(session_id):
-        api = ServiceApi(http, user_id)
+        api = ServiceApi(http, auth)
         await _own_proposal(api, s, proposal_id)
         mode = (body or AcceptRequest()).mode
         result = await api.accept_proposal(s.plan_id, proposal_id, mode)
@@ -273,11 +276,11 @@ async def accept(session_id: str, proposal_id: int, db: DbSession, user_id: User
 
 
 @router.post("/sessions/{session_id}/proposals/{proposal_id}/reject")
-async def reject(session_id: str, proposal_id: int, db: DbSession, user_id: UserId, http: Http) -> dict:
+async def reject(session_id: str, proposal_id: int, db: DbSession, user_id: UserId, auth: Auth, http: Http) -> dict:
     """제안 거절. 응답은 planner ProposalDetail."""
     s = _get_session(db, user_id, session_id)
     async with _hold(session_id):
-        api = ServiceApi(http, user_id)
+        api = ServiceApi(http, auth)
         await _own_proposal(api, s, proposal_id)
         result = await api.reject_proposal(s.plan_id, proposal_id)
         await to_thread.run_sync(add_note, session_id, f"사용자가 제안 #{proposal_id} 을 거절했습니다. 일정은 그대로입니다.")
@@ -286,23 +289,23 @@ async def reject(session_id: str, proposal_id: int, db: DbSession, user_id: User
 
 @router.post("/sessions/{session_id}/proposals/{proposal_id}/repropose", response_model=ChatResult,
              responses=_STREAM_DOC)
-async def repropose(session_id: str, proposal_id: int, db: DbSession, user_id: UserId, http: Http, llm: Llm,
+async def repropose(session_id: str, proposal_id: int, db: DbSession, user_id: UserId, auth: Auth, http: Http, llm: Llm,
                     stream: StreamFlag = True):
     """제안을 지금 일정 기준으로 다시 만든다 (chat 과 같은 스트림). 새 제안이 원래 제안을 대체한다."""
     s = _get_session(db, user_id, session_id)
     _check_idle(session_id)
-    prop = await _own_proposal(ServiceApi(http, user_id), s, proposal_id)
+    prop = await _own_proposal(ServiceApi(http, auth), s, proposal_id)
     if prop["status"] != "pending":
         raise AgentError(409, "proposal_not_pending", f"제안 {proposal_id} 은 이미 {prop['status']} 상태입니다.",
                          status=prop["status"])
-    return await _turn_response(session_id, s.plan_id, REPROPOSE_TEXT, user_id, http, llm, stream, repropose=prop)
+    return await _turn_response(session_id, s.plan_id, REPROPOSE_TEXT, auth, http, llm, stream, repropose=prop)
 
 
 async def _candidate(session_id: str, rec_id: int, cand_id: int, action: str, db: Session, user_id: str,
-                     http: httpx.AsyncClient) -> dict:
+                     auth: dict[str, str], http: httpx.AsyncClient) -> dict:
     s = _get_session(db, user_id, session_id)
     async with _hold(session_id):
-        api = ServiceApi(http, user_id)
+        api = ServiceApi(http, auth)
         cand = await _own_recommendation(api, s, rec_id, cand_id)
         result = await api.candidate_action(s.plan_id, rec_id, cand_id, action)
         title = (cand.get("place") or {}).get("title", cand["place_id"])
@@ -313,13 +316,24 @@ async def _candidate(session_id: str, rec_id: int, cand_id: int, action: str, db
 
 @router.post("/sessions/{session_id}/recommendations/{recommendation_id}/candidates/{candidate_id}/add")
 async def add_candidate(session_id: str, recommendation_id: int, candidate_id: int, db: DbSession, user_id: UserId,
-                        http: Http) -> dict:
+                        auth: Auth, http: Http) -> dict:
     """추천 후보를 일정에 추가. 응답은 planner {recommendation, plan}."""
-    return await _candidate(session_id, recommendation_id, candidate_id, "add", db, user_id, http)
+    return await _candidate(session_id, recommendation_id, candidate_id, "add", db, user_id, auth, http)
 
 
 @router.post("/sessions/{session_id}/recommendations/{recommendation_id}/candidates/{candidate_id}/remove")
 async def remove_candidate(session_id: str, recommendation_id: int, candidate_id: int, db: DbSession,
-                           user_id: UserId, http: Http) -> dict:
+                           user_id: UserId, auth: Auth, http: Http) -> dict:
     """추천 후보를 일정에서 뺀다. 응답은 planner {recommendation, plan}."""
-    return await _candidate(session_id, recommendation_id, candidate_id, "remove", db, user_id, http)
+    return await _candidate(session_id, recommendation_id, candidate_id, "remove", db, user_id, auth, http)
+
+
+# ---------- 탈퇴 ----------
+
+@router.delete("/me", status_code=204)
+def delete_my_data(db: DbSession, user_id: UserId) -> Response:
+    """이 사용자의 대화 세션·메시지를 모두 지운다. account 탈퇴가 부른다."""
+    for s in db.scalars(select(AgentSession).where(AgentSession.user_id == user_id)):
+        db.delete(s)
+    db.commit()
+    return Response(status_code=204)

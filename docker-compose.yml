@@ -24,6 +24,7 @@ x-backend-env: &backend-env
   PLANNER_PLACES_BASE_URL: http://gateway   # 서비스끼리도 게이트웨이를 통해 호출
   SAFETY_PLACES_BASE_URL: http://gateway
   AGENT_API_BASE_URL: http://gateway
+  ACCOUNT_API_BASE_URL: http://gateway
 
 services:
   gateway:
@@ -37,6 +38,7 @@ services:
       - planner
       - agent
       - safety
+      - account
 
   db:
     image: pgvector/pgvector:pg16
@@ -107,6 +109,16 @@ services:
     environment:
       <<: *backend-env
       SERVICE: safety
+    depends_on:
+      db:
+        condition: service_healthy
+
+  # 로그인 (Google·ID/비밀번호), JWT 발급. 다른 서비스는 토큰 서명만 확인한다 (app.core.auth)
+  account:
+    <<: *backend
+    environment:
+      <<: *backend-env
+      SERVICE: account
     depends_on:
       db:
         condition: service_healthy

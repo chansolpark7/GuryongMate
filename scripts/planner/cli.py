@@ -3,10 +3,12 @@
     python scripts/planner/cli.py --url http://127.0.0.1:8002 plans
     python scripts/planner/cli.py shell          # 대화형 (명령을 한 줄씩 입력)
     python scripts/planner/cli.py chat 1         # Planner Agent 와 대화 (응답 실시간 스트리밍)
+    python scripts/planner/cli.py login seoyun   # 로그인 (이후 요청은 토큰으로). 로그인 안 했으면 --user 가 X-User-Id
 
 환경변수 GURYONG_API_URL, GURYONG_USER 로 기본값을 바꿀 수 있다. 명령 목록은 -h 참고.
 """
 import argparse
+import getpass
 import json
 import os
 import shlex
@@ -523,10 +525,54 @@ def cmd_chat(c, a):
             print_error(e)
 
 
+# ---------- 계정 ----------
+
+def _password(a, prompt: str = "비밀번호: ") -> str:
+    return a.password if getattr(a, "password", None) else getpass.getpass(prompt)
+
+
+def _print_login(tokens: dict, verb: str) -> None:
+    u = tokens["user"]
+    print(f"{verb}: {u['display_name']} ({u['login_id'] or u['email']}, {u['provider']}) · user id {u['id']}")
+
+
+def cmd_signup(c, a):
+    pw = _password(a)
+    if not a.password and getpass.getpass("비밀번호 확인: ") != pw:
+        raise SystemExit("비밀번호가 서로 다릅니다.")
+    _print_login(c.signup(a.login_id, pw, a.name), "가입하고 로그인했습니다")
+
+
+def cmd_login(c, a):
+    _print_login(c.login(a.login_id, _password(a)), "로그인했습니다")
+
+
+def cmd_logout(c, a):
+    c.logout()
+    print("로그아웃했습니다. (이제 요청은 --user 의 X-User-Id 로 보냅니다)")
+
+
+def cmd_whoami(c, a):
+    if not c.logged_in:
+        print(f"로그인하지 않았습니다. 개발 모드 사용자: {a.user} (X-User-Id)")
+        return
+    u = c.me()
+    print(f"{u['display_name']} ({u['login_id'] or u['email']}, {u['provider']}) · user id {u['id']}")
+
+
+def cmd_passwd(c, a):
+    current = getpass.getpass("현재 비밀번호: ")
+    new = getpass.getpass("새 비밀번호: ")
+    if getpass.getpass("새 비밀번호 확인: ") != new:
+        raise SystemExit("새 비밀번호가 서로 다릅니다.")
+    c.change_password(current, new)
+    print("비밀번호를 바꿨습니다. 다른 기기는 로그아웃됩니다.")
+
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(prog="planner", description="GuryongMate Planner CLI")
     ap.add_argument("--url", default=os.getenv("GURYONG_API_URL", "http://127.0.0.1:8000"), help="API 주소")
-    ap.add_argument("--user", default=os.getenv("GURYONG_USER", "demo"), help="사용자 ID (X-User-Id)")
+    ap.add_argument("--user", default=os.getenv("GURYONG_USER", "demo"),
+                    help="로그인하지 않았을 때 쓸 사용자 ID (개발 모드 X-User-Id)")
     sub = ap.add_subparsers(dest="cmd", required=True, metavar="명령")
 
     def add(name, fn, help_):
@@ -648,6 +694,19 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("plan", type=int)
     p.add_argument("rec", type=int)
     p.add_argument("candidate", type=int, help="후보 id")
+
+    p = add("signup", cmd_signup, "회원가입 (ID/비밀번호) 후 로그인")
+    p.add_argument("login_id")
+    p.add_argument("--name", help="표시 이름 (생략 시 아이디)")
+    p.add_argument("--password", help="스크립트용. 생략하면 입력받는다")
+
+    p = add("login", cmd_login, "로그인 (토큰을 ~/.guryongmate/session.json 에 저장)")
+    p.add_argument("login_id")
+    p.add_argument("--password", help="스크립트용. 생략하면 입력받는다")
+
+    add("logout", cmd_logout, "로그아웃")
+    add("whoami", cmd_whoami, "지금 사용자")
+    add("passwd", cmd_passwd, "비밀번호 변경")
 
     p = add("chat", cmd_chat, "Planner Agent 와 대화 (계획의 최근 세션을 이어서)")
     p.add_argument("plan", type=int)

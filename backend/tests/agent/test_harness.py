@@ -469,7 +469,7 @@ def test_chat_body_validation(client, session, body):
 def test_session_create_errors(client):
     err(client.post("/agent/sessions", json={"plan_id": 999999}, headers=H), 404, "plan_not_found")
     err(client.post("/agent/sessions", json={"plan_id": "x"}, headers=H), 422, "invalid_request")
-    err(client.post("/agent/sessions", json={"plan_id": 1}), 422, "invalid_request")  # 헤더 없음
+    err(client.post("/agent/sessions", json={"plan_id": 1}), 404, "plan_not_found")  # 헤더 없음 = anonymous 의 계획 아님
     err(client.post("/agent/sessions/nope/chat", json={"message": "a"}, headers=H), 404, "session_not_found")
 
 
@@ -634,3 +634,31 @@ def test_review_disabled_hides_tool(client, session):
     chat(client, sid, "a", [["안녕"]])
     assert "review_plan" not in [t["function"]["name"] for t in llm.tools_seen[0]]
     assert "review_plan" not in llm.calls[0][0]["content"]
+
+
+# ---------- 인증 ----------
+
+def test_agent_forwards_token_to_planner(client, monkeypatch):
+    """토큰으로 부르면 Agent 가 같은 토큰으로 planner 를 부른다 (로그인 필수 모드에서도 동작)."""
+    from app.core import auth
+    monkeypatch.setattr(auth.settings, "auth_required", True)
+    token = {"Authorization": f"Bearer {auth.issue_token('test-agent-tokenuser')}"}
+    plan = ok(client.post("/planner/plans", json={"title": "t", "start_date": "2026-10-10"}, headers=token), 201)
+    s = ok(client.post("/agent/sessions", json={"plan_id": plan["id"]}, headers=token), 201)
+    events = chat_with(client, s["id"], token, [[("add_item", {"place_id": "p-food"})], ["추가"]])
+    assert last(events, "proposal")["plan_id"] == plan["id"]
+    err(client.post("/agent/sessions", json={"plan_id": plan["id"]}), 401, "unauthorized")
+    other = {"Authorization": f"Bearer {auth.issue_token('test-agent-someone')}"}
+    err(client.get(f"/agent/sessions/{s['id']}", headers=other), 404, "session_not_found")
+
+
+def chat_with(client, sid, headers, script):
+    llm.script = script
+    return sse(client.post(f"/agent/sessions/{sid}/chat", json={"message": "m"}, headers=headers))
+
+
+def test_delete_my_data(client, session):
+    sid, _ = session
+    assert client.delete("/agent/me", headers=H).status_code == 204
+    assert ok(client.get("/agent/sessions", headers=H)) == []
+    err(client.get(f"/agent/sessions/{sid}", headers=H), 404, "session_not_found")

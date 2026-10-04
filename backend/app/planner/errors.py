@@ -11,6 +11,7 @@ from fastapi import Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
+from starlette.exceptions import HTTPException
 
 
 class PlannerError(Exception):
@@ -59,5 +60,11 @@ class PlannerRoute(APIRoute):
                 return JSONResponse(validation_body(e), status_code=422)
             except PlannerError as e:
                 return JSONResponse(e.body(), status_code=e.status)
+            except HTTPException as e:
+                if e.status_code != 400:
+                    raise
+                # 본문을 읽을 수 없음 (UTF-8 이 아닌 인코딩 등) -> 같은 오류 형식으로
+                return JSONResponse({"detail": {"code": "invalid_request", "message": f"요청 본문을 읽을 수 없습니다: {e.detail}",
+                                                "errors": []}}, status_code=422)
 
         return route
