@@ -253,7 +253,8 @@ PUT /safety/sim
 
 Agent 는 아래 방식으로 연결돼 있다 (`docs/agent/README.md` §5). 일정 단위 점검은 planner 가 제공한다:
 `GET /planner/plans/{id}/safety` (지금 일정), `POST /planner/plans/{id}/safety/preview` (변경안 초안).
-Agent 도구는 이 둘을 부른다 ([`docs/planner/README.md` §7](../planner/README.md)). 처음 설계한 방식 (참고):
+Agent 도구는 이 둘을 부른다 ([`docs/planner/README.md` §7](../planner/README.md)). 실제 도구 정의·프롬프트는
+`backend/app/agent/tools.py`·`prompts.py` 이고, 아래는 처음 설계할 때의 초안이다 (참고용, 실제와 문구가 다를 수 있다):
 
 **도구 2개**
 ```python
