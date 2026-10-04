@@ -370,7 +370,8 @@ planner ── GET /safety/situation (fingerprint) ──▶ safety      바뀌�
   "guidance": "주의·위험 2곳: 1일차 13:07 구룡포항(주의), … 항목별 advice 를 따르고 …",
   "items": [
     {"item_id": 1201, "day": 1, "date": "2026-10-05", "place_id": "kto-2610501", "title": "구룡포항",
-     "start_at": "13:07", "end_at": "14:07", "risk": "caution", "unassessed_reason": null, "horizon": "short_range",
+     "start_at": "13:07", "end_at": "14:07", "risk": "caution", "unassessed_reason": null, "data_missing": false,
+     "horizon": "short_range",
      "hazards": [{"type": "wind", "level": "caution", "reason": "10/05 13~15시 풍속 최대 15m/s 예보", "source": "기상청 단기예보"}],
      "advice": "주의: … 시간 조정이나 대안을 함께 제시하라. 이 장소에 주의·위험 신호가 없는 시간대: …",
      "better_times": [{"start": "2026-10-05T08:00:00+09:00", "end": "2026-10-05T12:00:00+09:00", "has_info": false}],
@@ -396,7 +397,9 @@ planner ── GET /safety/situation (fingerprint) ──▶ safety      바뀌�
 | `cleared` | `safe` 로 돌아옴 |
 
 - 판단하지 않은 항목(`risk=null`, 데이터 장애 등)은 **지난 단계를 유지**한다. 장애를 '해제'로 오인하지 않는다.
-- 항목은 `item_id@날짜 시작시각` 으로 구분한다. 사용자가 시각을 옮기면 새 방문으로 보고 다시 판단한다.
+- 근거 일부가 빠진 결과(`data_missing: true`)로는 단계를 **내리지 않는다** (올리는 것만 반영).
+- 항목은 `item_id@날짜` 로 구분한다. 앞 항목을 고쳐 시작 시각이 밀려도 같은 방문이라, 단계가 같으면 다시 경고하지 않는다.
+  다른 날로 옮기면 새 방문으로 본다. 점검할 방문이 없어지면(모두 건너뜀·완료) 지난 상태를 지운다.
 - 한 번의 점검에서 바뀐 항목을 계획별로 묶어 경고 하나를 만든다. 바뀐 게 없으면 경고도 없다.
 
 | 메서드 | 경로 | 설명 |
@@ -422,7 +425,7 @@ planner 가 `PLANNER_SAFETY_WATCH_SEC`(compose 기본 60초)마다 `GET /safety/
 |---|---|
 | 첫 점검 | 서비스 시작 후 처음 |
 | 안전 상황이 바뀜 | `fingerprint` 가 지난번과 다름 (특보·센서·예보 신호·데이터 장애, 새 예보 발표) |
-| 재점검 주기 | 상황이 그대로여도 `PLANNER_SAFETY_RECHECK_MIN`(기본 30분)이 지남 — 일정 수정, 실측 센서 적용 시간대(방문 3시간 전) 진입 대비 |
+| 재점검 주기 | 상황이 그대로여도 `PLANNER_SAFETY_RECHECK_MIN`(기본 10분)이 지남 — 일정 수정, 실측 센서·CCTV 적용 시간대(방문 3시간 전) 진입은 fingerprint 로 알 수 없어서 |
 
 - 대상: 시작일 ≤ 예보 마지막 날, 종료일 ≥ 오늘인 계획의, **오늘 ~ 예보 마지막 날** 사이 방문. 먼 일정은 부르지도 않는다.
 - safety 를 부르는 동안에는 DB 연결·잠금을 잡지 않는다. 그 사이 일정이 바뀌면(`version` 다름) 그 계획은 건너뛰고 다음 점검에서 본다.

@@ -195,6 +195,7 @@ def test_visits_handles_midnight_and_window(client, sc):
     ok(client.post(f"/planner/plans/{p['id']}/items", json={"place_id": "s-street", "day": 2}, headers=H), 201)
     detail = PlanDetail.model_validate(get_plan(client, p["id"]))
     vs = safety.visits(detail)
+    assert vs[0]["lat"] == SPOTS["s-street"][1] and vs[0]["content_type"] == "관광지"  # safety 가 places 를 다시 묻지 않게
     assert [(v["place_id"], v["date"], v["start"], v.get("end")) for v in vs] == [
         ("s-street", "2026-10-05", "22:00", "23:30"), ("s-street", "2026-10-05", "23:30", None),  # 종료가 자정 넘음
         ("s-street", "2026-10-06", "22:00", "23:00")]
@@ -213,7 +214,7 @@ def _result(*items):
 
 
 def test_diff_rules():
-    k = lambda i, start="14:00": f"{i}@2026-10-05 {start}"  # noqa: E731
+    k = lambda i: f"{i}@2026-10-05"  # noqa: E731
     changes, state = safety.diff({}, _result(_item(1, "danger"), _item(2, "safe"), _item(3, None, "beyond_forecast")))
     assert [(c.kind, c.from_risk, c.to_risk, c.item.item_id) for c in changes] == [("raised", "safe", "danger", 1)]
     assert state == {k(1): "danger", k(2): "safe"}  # 판단하지 않은 처음 항목은 상태에 넣지 않는다
@@ -221,12 +222,17 @@ def test_diff_rules():
     changes, state = safety.diff(prev, _result(_item(1, None, "data_missing"), _item(2, "safe"), _item(5, "caution")))
     assert [(c.kind, c.item.item_id) for c in changes] == [("cleared", 2), ("raised", 5)]
     assert state == {k(1): "danger", k(2): "safe", k(5): "caution"}  # 장애 중엔 지난 단계 유지, 없어진 4 는 뺀다
+    # 근거 일부가 빠진 결과로는 내리지 않는다
+    partial = _item(1, "caution")
+    partial.data_missing = True
+    changes, state = safety.diff({k(1): "danger"}, _result(partial))
+    assert changes == [] and state == {k(1): "danger"}
     changes, _ = safety.diff({k(1): "danger"}, _result(_item(1, "caution")))
     assert [(c.kind, c.to_risk) for c in changes] == [("lowered", "caution")]
     assert safety.alert_level(changes) == "caution"
-    # 시각이 바뀌면 다른 방문으로 본다
+    # 앞 항목 수정으로 시작 시각이 밀려도 같은 방문 (단계가 같으면 다시 경고하지 않음)
     changes, _ = safety.diff({k(1): "danger"}, _result(_item(1, "danger", start="16:00")))
-    assert [c.kind for c in changes] == ["raised"]
+    assert changes == []
 
 
 # ---------- 주기 점검 + 경고 ----------
@@ -366,3 +372,30 @@ def test_delete_me_removes_alerts(client, sc, watcher):
     with SessionLocal() as db:
         assert db.query(PlannerSafetyAlert).filter_by(plan_id=p["id"]).count() == 0
         assert db.query(PlannerSafetyState).filter_by(plan_id=p["id"]).count() == 0
+
+
+def test_shifted_times_do_not_realert(client, sc, watcher):
+    """앞 항목 체류를 늘려 뒤 항목 시각이 밀려도, 단계가 같으면 경고하지 않는다."""
+    sc.src.scenario = "wind_tomorrow"
+    p = trip(client)
+    watcher.tick()
+    assert len(alerts(client, p["id"])) == 1
+    ok(client.patch(f"/planner/plans/{p['id']}/items/{item_id(p, 's-museum')}", json={"stay_minutes": 70}, headers=H))
+    assert not [x for x in watcher.tick(force=True).alerts if x.plan_id == p["id"]]
+
+
+def test_all_skipped_clears_state(client, sc, watcher):
+    sc.src.scenario = "wind_tomorrow"
+    p = trip(client)
+    watcher.tick()
+    for pid in ("s-breakwater", "s-museum", "s-street"):
+        ok(client.patch(f"/planner/plans/{p['id']}/items/{item_id(p, pid)}", json={"status": "skipped"}, headers=H))
+    watcher.tick(force=True)
+    from app.db import SessionLocal
+    from app.planner.models import PlannerSafetyState
+    with SessionLocal() as db:
+        assert db.query(PlannerSafetyState).filter_by(plan_id=p["id"]).count() == 0
+    # 되살리면 다시 경고한다
+    ok(client.patch(f"/planner/plans/{p['id']}/items/{item_id(p, 's-breakwater')}", json={"status": "planned"},
+                    headers=H))
+    assert [x for x in watcher.tick(force=True).alerts if x.plan_id == p["id"]]

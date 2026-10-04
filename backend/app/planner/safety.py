@@ -41,7 +41,9 @@ def visits(plan: PlanDetail, start: date | None = None, end: date | None = None)
             if e < DAY_MIN:
                 v["end"] = it.end_at
             if it.place is not None:
-                v["label"] = it.place.title
+                v |= {"label": it.place.title, "lat": it.place.lat, "lng": it.place.lng}
+                if it.place.content_type:
+                    v["content_type"] = it.place.content_type
             out.append(v)
     return out
 
@@ -54,7 +56,8 @@ def _item(plan: PlanDetail, v: dict) -> SafetyItem | None:
                     item_id=it.id, day=d.day, date=d.date, place_id=it.place_id,
                     title=it.place.title if it.place else (v.get("label") or it.place_id),
                     start_at=it.start_at, end_at=it.end_at, risk=v["risk"],
-                    unassessed_reason=v.get("unassessed_reason"), horizon=v["horizon"],
+                    unassessed_reason=v.get("unassessed_reason"), data_missing=v.get("data_missing", False),
+                    horizon=v["horizon"],
                     hazards=[SafetyHazard(type=h["type"], level=h["level"], reason=h["reason"], source=h["source"])
                              for h in v["hazards"]],
                     advice=v["advice"],
@@ -127,14 +130,16 @@ def check(plan: PlanDetail, assessed: dict) -> SafetyCheck:
 # ---------- 주기 점검: 지난번과 비교 ----------
 
 def state_key(item: SafetyItem) -> str:
-    """같은 항목이라도 날짜·시작 시각이 바뀌면 다른 방문으로 본다."""
-    return f"{item.item_id}@{item.date.isoformat()} {item.start_at}"
+    """항목·날짜로 구분한다. 앞 항목을 고쳐 시작 시각이 밀려도 같은 방문이다 (단계가 같으면 다시 경고하지 않음).
+    다른 날로 옮기면 새 방문으로 본다."""
+    return f"{item.item_id}@{item.date.isoformat()}"
 
 
 def diff(prev: dict[str, str], result: SafetyCheck) -> tuple[list[SafetyChange], dict[str, str]]:
     """지난 단계(prev: key -> risk)와 비교해 바뀐 항목과 새 상태를 돌려준다.
     - 처음 보는 항목은 지난 단계를 safe 로 본다 (주의·위험이면 바로 경고).
     - 판단하지 않은 항목(risk=None)은 지난 단계를 그대로 둔다 (데이터 장애로 '해제'되지 않게).
+    - 근거 일부가 빠진 결과(data_missing)로는 단계를 내리지 않는다 (올리는 것만 반영).
     - 이번 결과에 없는 항목(삭제·점검 범위 밖)은 상태에서 뺀다."""
     changes: list[SafetyChange] = []
     state: dict[str, str] = {}
@@ -145,8 +150,11 @@ def diff(prev: dict[str, str], result: SafetyCheck) -> tuple[list[SafetyChange],
             if before is not None:
                 state[k] = before
             continue
-        state[k] = it.risk
         old = before or "safe"
+        if it.data_missing and RANK[it.risk] < RANK[old]:
+            state[k] = old
+            continue
+        state[k] = it.risk
         if RANK[it.risk] > RANK[old]:
             kind = "raised"
         elif RANK[it.risk] < RANK[old]:

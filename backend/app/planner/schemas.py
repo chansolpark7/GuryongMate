@@ -424,6 +424,7 @@ class SafetyItem(BaseModel):
     end_at: str
     risk: SafetyLevel | None = Field(description=SAFETY_LEVEL_DOC)
     unassessed_reason: Literal["past", "beyond_forecast", "data_missing"] | None = None
+    data_missing: bool = Field(False, description="근거 일부를 받지 못함. risk 가 있으면 실제로는 더 높을 수 있다")
     horizon: str = Field(description="now | short_range | medium_range | long_range | past")
     hazards: list[SafetyHazard] = Field(description="근거. safe 여도 참고(info) 신호가 있으면 들어 있다")
     advice: str

@@ -90,6 +90,8 @@ class SafetyWatcher:
             detail = engine.detail(plan, self.places)
         vs = safety.visits(detail, now.date(), until.date())
         if not vs:
+            with self.sessions.begin() as db:  # 모두 건너뜀·완료 등: 지난 상태를 남기지 않는다
+                db.execute(delete(PlannerSafetyState).where(PlannerSafetyState.plan_id == plan_id))
             return False, None
         result = safety.check(detail, self.client.assess(vs))
 
