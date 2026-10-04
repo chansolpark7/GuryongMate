@@ -1,10 +1,12 @@
 """GuryongMate API 클라이언트 (planner·places·agent). CLI 가 쓰고, 다른 Python 도구에서도 재사용할 수 있다.
 
 메서드는 API 응답 JSON(dict)을 그대로 돌려준다. 오류는 PlannerApiError (code·message·detail).
-명세: docs/planner/README.md, docs/agent/README.md
+명세: docs/planner/README.md, docs/agent/README.md, docs/account/README.md
 """
 import json
+import os
 from collections.abc import Iterator
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -25,9 +27,66 @@ class PlannerApiError(RuntimeError):
         return self.detail.get("message", "")
 
 
+SESSION_FILE = Path.home() / ".guryongmate" / "session.json"
+
+
+class Session:
+    """서버 주소별 로그인 토큰 저장 (~/.guryongmate/session.json)."""
+
+    def __init__(self, base_url: str, path: Path = SESSION_FILE):
+        self.base_url, self.path = base_url.rstrip("/"), path
+
+    def _all(self) -> dict:
+        try:
+            return json.loads(self.path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {}
+
+    def load(self) -> dict | None:
+        return self._all().get(self.base_url)
+
+    def save(self, tokens: dict | None) -> None:
+        data = self._all()
+        if tokens is None:
+            data.pop(self.base_url, None)
+        else:
+            data[self.base_url] = {k: tokens[k] for k in ("access_token", "refresh_token", "user")}
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        try:
+            os.chmod(self.path, 0o600)
+        except OSError:
+            pass
+
+
 class PlannerClient:
-    def __init__(self, base_url: str = "http://127.0.0.1:8000", user_id: str = "demo", timeout: float = 10):
-        self._http = httpx.Client(base_url=base_url, headers={"X-User-Id": user_id}, timeout=timeout)
+    """로그인했으면(세션 파일) Authorization: Bearer 로, 아니면 개발 모드처럼 X-User-Id 로 부른다.
+    access 토큰이 만료돼 401 이 오면 refresh 로 한 번 갱신하고 다시 보낸다."""
+
+    def __init__(self, base_url: str = "http://127.0.0.1:8000", user_id: str = "demo", timeout: float = 10,
+                 session: Session | None = None):
+        self._http = httpx.Client(base_url=base_url, timeout=timeout)
+        self._user_id = user_id
+        self.session = session or Session(base_url)
+
+    @property
+    def logged_in(self) -> dict | None:
+        return self.session.load()
+
+    def _auth(self) -> dict[str, str]:
+        s = self.session.load()
+        return {"Authorization": f"Bearer {s['access_token']}"} if s else {"X-User-Id": self._user_id}
+
+    def _try_refresh(self) -> bool:
+        s = self.session.load()
+        if not s:
+            return False
+        resp = self._http.post("/auth/refresh", json={"refresh_token": s["refresh_token"]})
+        if resp.is_error:
+            self.session.save(None)  # refresh 도 실패 -> 다시 로그인해야 함
+            return False
+        self.session.save(resp.json())
+        return True
 
     @staticmethod
     def _detail(resp: httpx.Response) -> Any:
@@ -37,27 +96,72 @@ class PlannerClient:
             return resp.text
         return body.get("detail", body) if isinstance(body, dict) else body
 
+    def _expired(self, resp: httpx.Response) -> bool:
+        return resp.status_code == 401 and self.session.load() is not None
+
     def _req(self, method: str, path: str, **kw) -> Any:
-        resp = self._http.request(method, path, **kw)
+        resp = self._http.request(method, path, headers=self._auth(), **kw)
+        if self._expired(resp) and self._try_refresh():
+            resp = self._http.request(method, path, headers=self._auth(), **kw)
         if resp.is_error:
             raise PlannerApiError(resp.status_code, self._detail(resp))
         return None if resp.status_code == 204 else resp.json()
 
     def _stream(self, path: str, body: dict | None = None) -> Iterator[tuple[str, dict]]:
         """SSE 이벤트를 (이름, 데이터) 로 오는 대로 내준다."""
-        with self._http.stream("POST", path, json=body, timeout=httpx.Timeout(10, read=None)) as resp:
-            if resp.is_error:
-                resp.read()
-                raise PlannerApiError(resp.status_code, self._detail(resp))
-            event, data = "message", []
-            for line in resp.iter_lines():
-                if line.startswith("event:"):
-                    event = line[6:].strip()
-                elif line.startswith("data:"):
-                    data.append(line[5:].strip())
-                elif not line and data:
-                    yield event, json.loads("\n".join(data))
-                    event, data = "message", []
+        for attempt in range(2):
+            with self._http.stream("POST", path, json=body, headers=self._auth(),
+                                   timeout=httpx.Timeout(10, read=None)) as resp:
+                if attempt == 0 and self._expired(resp) and self._try_refresh():
+                    continue
+                yield from self._sse(resp)
+                return
+
+    def _sse(self, resp: httpx.Response) -> Iterator[tuple[str, dict]]:
+        if resp.is_error:
+            resp.read()
+            raise PlannerApiError(resp.status_code, self._detail(resp))
+        event, data = "message", []
+        for line in resp.iter_lines():
+            if line.startswith("event:"):
+                event = line[6:].strip()
+            elif line.startswith("data:"):
+                data.append(line[5:].strip())
+            elif not line and data:
+                yield event, json.loads("\n".join(data))
+                event, data = "message", []
+
+    # ----- 계정 (account) -----
+    def _auth_flow(self, path: str, body: dict) -> dict:
+        resp = self._http.post(path, json=body)
+        if resp.is_error:
+            raise PlannerApiError(resp.status_code, self._detail(resp))
+        tokens = resp.json()
+        self.session.save(tokens)
+        return tokens
+
+    def signup(self, login_id: str, password: str, display_name: str | None = None) -> dict:
+        body = {"login_id": login_id, "password": password}
+        if display_name:
+            body["display_name"] = display_name
+        return self._auth_flow("/auth/signup", body)
+
+    def login(self, login_id: str, password: str) -> dict:
+        return self._auth_flow("/auth/login", {"login_id": login_id, "password": password})
+
+    def logout(self) -> None:
+        s = self.session.load()
+        if s:
+            self._http.post("/auth/logout", json={"refresh_token": s["refresh_token"]})
+        self.session.save(None)
+
+    def me(self) -> dict:
+        return self._req("GET", "/users/me")
+
+    def change_password(self, current: str, new: str) -> dict:
+        tokens = self._req("PUT", "/users/me/password", json={"current_password": current, "new_password": new})
+        self.session.save(tokens)
+        return tokens
 
     # ----- 장소 (places) -----
     def search_places(self, q: str | None = None, tags: list[str] | None = None, content_type: str | None = None,

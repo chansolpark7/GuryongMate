@@ -343,10 +343,11 @@ docker compose run --rm planner pytest tests/planner
 
 ## 9. CLI
 
-호스트 Python에 `httpx`가 있으면 된다. Windows에서는 `localhost` 대신 `127.0.0.1`을 쓴다(`localhost`는 요청마다 약 10초 지연).
+호스트 Python에 `httpx`가 있으면 된다. 로그인하지 않았으면 개발 모드처럼 `--user`(`X-User-Id`)로 보낸다(서버가 `AUTH_REQUIRED=false`일 때만 동작). Windows에서는 `localhost` 대신 `127.0.0.1`을 쓴다(`localhost`는 요청마다 약 10초 지연).
 
 ```bash
-export GURYONG_API_URL=http://127.0.0.1:8002 GURYONG_USER=seoyun
+export GURYONG_API_URL=http://127.0.0.1:8000 GURYONG_USER=seoyun
+python scripts/planner/cli.py login seoyun          # 로그인하면 이후 요청은 토큰으로 (signup / logout / whoami / passwd)
 python scripts/planner/cli.py -h
 python scripts/planner/cli.py shell
 ```
