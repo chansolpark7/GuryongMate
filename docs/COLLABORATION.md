@@ -92,6 +92,8 @@ docker compose run --rm planner pytest tests/planner   # 테스트 (어느 백�
 - 백엔드 코드는 볼륨으로 마운트되고 `--reload`로 실행된다. 저장하면 각 서비스가 재시작된다. 임베딩 모델은 별도 컨테이너라 영향이 없다.
 - `places-init`은 비어 있는 것만 채운다. 장소 데이터를 다시 적재하려면 `docker compose run --rm places python -m app.places.ingest load --embed`를 실행한다.
 - DB를 완전히 초기화하려면 `docker compose down -v` 후 `up`.
+- **게이트웨이 설정(`infra/gateway/Caddyfile`)은 자동으로 다시 읽히지 않는다.** 바뀌면 `docker compose restart gateway`.
+  `up -d --build`만으로는 게이트웨이 컨테이너가 재시작되지 않아, 새 경로(예: `/safety`)가 `{"detail":"Not Found"}`로 나온다.
 
 ### 메모리 (Docker Desktop 한도 약 3.8GB)
 
@@ -125,3 +127,5 @@ API 키는 각 worktree의 `backend/.env`에 둔다 (`backend/.env.example` 참�
 1. 작업 전 `git merge dev`로 최신 공용 파일을 반영한다.
 2. 기능 브랜치를 `dev`에 머지한다. 공용 파일 충돌이 나면 양쪽 변경을 모두 살리는 방향으로 해결한다.
 3. `docker compose up -d --build` 후 `curl :8000/health`와 `docker compose run --rm places pytest tests`(전체 테스트) 통과를 확인한다.
+   - 머지로 `Caddyfile`이 바뀌었으면 `docker compose restart gateway` 후 새 경로가 열리는지(`curl :8000/<서비스>/docs`)도 확인한다.
+   - `backend/.env.example`에 새 항목이 생겼으면 자기 `backend/.env`에도 추가한다 (예: safety 의 `DT_SERVICE_KEY`).
