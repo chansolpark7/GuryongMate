@@ -281,3 +281,61 @@ def test_overall_is_unknown_when_some_visits_not_assessed(use):
 def test_dates_are_kst(use):
     v = assess(use(CountingMock()), visit("p-street", "2026-10-05", "14:00"))["visits"][0]
     assert v["start"].endswith("+09:00") and date.fromisoformat(v["start"][:10]) == date(2026, 10, 5)
+
+
+# ---------- 길찾기 우회 구역 ----------
+
+def avoid(client, **params):
+    return ok(client.get("/safety/avoid", params={"now": NOW.isoformat()} | params))
+
+
+def test_avoid_calm_has_no_zones(use):
+    r = avoid(use(CountingMock()))
+    assert r["zones"] == [] and "없다" in r["guidance"]
+
+
+def test_avoid_storm_uses_each_sensor_not_regional_forecast(use):
+    r = avoid(use(CountingMock("storm")))
+    flood = {z["id"]: z for z in r["zones"] if z["kind"] == "flood"}
+    # 호우 예보·특보는 모든 침수 구역에 같으므로 넣지 않는다. 실측 등급이 오른 센서(4 위험, 8 주의, 1 주의)만
+    assert set(flood) == {"flood_4", "flood_8", "flood_1"}
+    assert flood["flood_4"]["risk"] == "danger" and "등급 3" in flood["flood_4"]["reason"]
+    assert any(z["kind"] == "breakwater" for z in r["zones"])  # 특보·강풍 예보로 방파제 위험
+
+    only_danger = avoid(use(CountingMock("storm")), min_risk="danger")
+    assert {z["id"] for z in only_danger["zones"] if z["kind"] == "flood"} == {"flood_4"}
+
+
+def test_avoid_polygon_is_closed_ring_around_sensor(use):
+    from app.safety import geo
+    z = next(z for z in avoid(use(CountingMock("storm")))["zones"] if z["id"] == "flood_4")
+    ring = z["polygon"]
+    assert ring[0] == ring[-1] and len(ring) == 17
+    lat, lng = 35.991235, 129.557327  # 구룡포수협 스마트맨홀
+    radii = [geo.distance_m((lat, lng), (p[1], p[0])) for p in ring]
+    assert all(75 < r < 85 for r in radii)  # 반경 80m (판단용 200m 가 아님)
+
+
+def test_avoid_breakwater_polygon_covers_the_line(use):
+    from app.safety import geo
+
+    def inside(ring, x, y):
+        hit = False
+        for (x1, y1), (x2, y2) in zip(ring, ring[1:]):
+            if (y1 > y) != (y2 > y) and x < (x2 - x1) * (y - y1) / (y2 - y1) + x1:
+                hit = not hit
+        return hit
+
+    ring = geo.zone_polygon(geo.BREAKWATER_NORTH)
+    assert ring[0] == ring[-1]
+    assert all(inside(ring, lng, lat) for lat, lng in geo.BREAKWATER_NORTH.path)
+
+
+def test_avoid_sensor_failure_is_reported(use):
+    class SensorsDown(CountingMock):
+        def sensors(self):
+            return Fetched(None, NOW, "SourceError: 40104")
+
+    r = avoid(use(SensorsDown("storm")))
+    assert not any(z["kind"] == "flood" for z in r["zones"])
+    assert r["data_status"]["sensors"]["ok"] is False and "침수 센서" in r["guidance"]

@@ -7,7 +7,7 @@ from datetime import time, timedelta
 
 from app.planner.models import PlannerConstraint, PlannerItem, PlannerPlan
 from app.planner.schemas import DayView, ItemView, PlaceInfo, Violation
-from app.planner.travel import estimate_minutes
+from app.planner.travel import TravelLeg, estimate_leg
 
 WEEKDAYS = "월화수목금토일"
 
@@ -55,10 +55,34 @@ def _name(place: PlaceInfo | None, place_id: str) -> str:
     return place.title if place else place_id
 
 
+def _timeline(plan: PlannerPlan, d: int) -> list[PlannerItem]:
+    return sorted((i for i in plan.items if i.day == d), key=lambda i: i.position)
+
+
+def travel_pairs(plan: PlannerPlan, places: dict[str, PlaceInfo | None]) -> list[tuple[PlaceInfo, PlaceInfo]]:
+    """build_schedule 이 이동시간을 계산할 구간 (직전에 알려진 장소 → 다음 장소). 건너뜀·정보 없는 장소는 뺀다."""
+    pairs = []
+    for d in range(1, plan.num_days + 1):
+        prev = None
+        for it in _timeline(plan, d):
+            place = places.get(it.place_id)
+            if it.status == "skipped" or place is None:
+                continue
+            if prev is not None:
+                pairs.append((prev, place))
+            prev = place
+    return pairs
+
+
+TravelTable = dict[tuple[str, str], TravelLeg]  # (출발 place_id, 도착 place_id) -> 이동
+
+
 def build_schedule(
-    plan: PlannerPlan, places: dict[str, PlaceInfo | None]
+    plan: PlannerPlan, places: dict[str, PlaceInfo | None], travel: TravelTable | None = None,
 ) -> tuple[list[DayView], list[Violation]]:
-    """plan.items 를 날짜별로 배치해 도착·시작·종료 시각을 계산하고 위반 목록을 만든다."""
+    """plan.items 를 날짜별로 배치해 도착·시작·종료 시각을 계산하고 위반 목록을 만든다.
+    이동시간은 travel (travel_pairs 의 구간을 routing 에 물은 결과) 에서 찾고, 없으면 직선거리로 근사한다."""
+    travel = travel or {}
     violations: list[Violation] = []
     days: list[DayView] = []
     day_start, day_end = to_min(plan.day_start), to_min(plan.day_end)
@@ -71,21 +95,21 @@ def build_schedule(
         last_end: int | None = None
         views: list[ItemView] = []
 
-        for it in sorted((i for i in plan.items if i.day == d), key=lambda i: i.position):
+        for it in _timeline(plan, d):
             place = places.get(it.place_id)
             name = _name(place, it.place_id)
             if place is None:
                 violations.append(Violation(code="place_unavailable", severity="warning", day=d, item_id=it.id,
                                             message=f"장소 '{it.place_id}' 정보를 불러오지 못해 이동시간을 계산하지 않았습니다."))
             if it.status == "skipped":
-                views.append(_view(it, place, None, None, None, None, None))
+                views.append(_view(it, place, None, None, None, None))
                 continue
 
-            travel = dist = None
+            leg = None
             if prev is not None and place is not None:
-                travel, dist = estimate_minutes(prev, place, plan.travel_mode)
-                legs.append((it, travel))
-            arrive = cursor + (travel or 0)
+                leg = travel.get((prev.id, place.id)) or estimate_leg(prev, place, plan.travel_mode)
+                legs.append((it, leg.minutes))
+            arrive = cursor + (leg.minutes if leg else 0)
             start = arrive
             if it.start_time is not None:
                 fixed = to_min(it.start_time)
@@ -107,7 +131,7 @@ def build_schedule(
                         code="outside_open_hours", severity="warning", day=d, item_id=it.id,
                         message=f"'{name}' 방문 {fmt(start)}~{fmt(end)} 이 운영시간({fmt(hours[0])}~{fmt(hours[1])}) 밖입니다."))
 
-            views.append(_view(it, place, travel, dist, arrive, start, end))
+            views.append(_view(it, place, leg, arrive, start, end))
             cursor = last_end = end
             prev = place if place is not None else prev
 
@@ -123,11 +147,12 @@ def build_schedule(
     return days, violations
 
 
-def _view(it: PlannerItem, place, travel, dist, arrive, start, end) -> ItemView:
+def _view(it: PlannerItem, place, leg: TravelLeg | None, arrive, start, end) -> ItemView:
     return ItemView(
         id=it.id, day=it.day, order=it.position, place_id=it.place_id, place=place,
         stay_minutes=it.stay_minutes, start_time=it.start_time, memo=it.memo, status=it.status,
-        travel_minutes=travel, travel_distance_m=dist,
+        travel_minutes=leg and leg.minutes, travel_distance_m=leg and leg.distance_m,
+        travel_source=leg and leg.source,
         arrive_at=None if arrive is None else fmt(arrive),
         start_at=None if start is None else fmt(start),
         end_at=None if end is None else fmt(end),

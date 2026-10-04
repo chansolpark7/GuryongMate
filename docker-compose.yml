@@ -25,6 +25,9 @@ x-backend-env: &backend-env
   SAFETY_PLACES_BASE_URL: http://gateway
   AGENT_API_BASE_URL: http://gateway
   ACCOUNT_API_BASE_URL: http://gateway
+  PLANNER_ROUTING_BASE_URL: http://gateway
+  ROUTING_SAFETY_BASE_URL: http://gateway
+  ROUTING_VALHALLA_URL: http://valhalla:8002
 
 services:
   gateway:
@@ -39,6 +42,7 @@ services:
       - agent
       - safety
       - account
+      - routing
 
   db:
     image: pgvector/pgvector:pg16
@@ -113,6 +117,32 @@ services:
       db:
         condition: service_healthy
 
+  # 길찾기 엔진 (Valhalla, OSM 포항 영역). 내부 전용, routing 이 호출한다. services/valhalla/ 참고
+  valhalla:
+    build: ./services/valhalla
+    environment:
+      server_threads: 2
+      build_elevation: "True"   # 언덕 회피(use_hills)용 고도. 포항 영역만 받는다
+      build_admins: "False"    # 포항만 잘라서 국가·도 경계가 깨진다. 한국 기본값(우측통행)으로 충분
+      build_time_zones: "False"
+    volumes:
+      - valhalla-data:/custom_files
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8002/status"]
+      interval: 10s
+      timeout: 3s
+      retries: 90   # 첫 실행 시 OSM 다운로드·타일 빌드(수 분) 후 뜬다
+
+  # 길찾기 API (이동시간 행렬·경로·안내 문구·위험 구역 우회). valhalla 가 없으면 직선거리 근사로 응답
+  routing:
+    <<: *backend
+    environment:
+      <<: *backend-env
+      SERVICE: routing
+    depends_on:
+      valhalla:
+        condition: service_started
+
   # 로그인 (Google·ID/비밀번호), JWT 발급. 다른 서비스는 토큰 서명만 확인한다 (app.core.auth)
   account:
     <<: *backend
@@ -138,3 +168,5 @@ volumes:
   pgdata:
   hf-models:
     name: guryongmate-hf-models  # 이름 고정: 모든 worktree 스택이 모델 파일을 공유 (한 번만 다운로드)
+  valhalla-data:
+    name: guryongmate-valhalla   # 이름 고정: OSM·타일을 worktree 끼리 공유 (한 번만 빌드)

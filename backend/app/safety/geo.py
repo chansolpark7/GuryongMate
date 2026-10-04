@@ -74,5 +74,41 @@ def distance_to_zone(p: tuple[float, float], zone: Zone) -> float:
     return min(_to_segment(p, a, b) for a, b in zip(zone.path, zone.path[1:]))
 
 
+def _circle(c: tuple[float, float], radius_m: float, n: int = 16) -> list[tuple[float, float]]:
+    """(lat, lng) 중심 원을 n각형 꼭짓점 [(lng, lat)] 으로."""
+    k = 111_320 * math.cos(math.radians(c[0]))
+    return [(c[1] + radius_m * math.cos(a) / k, c[0] + radius_m * math.sin(a) / 111_320)
+            for a in (2 * math.pi * i / n for i in range(n))]
+
+
+def _hull(pts: list[tuple[float, float]]) -> list[tuple[float, float]]:
+    """볼록 껍질 (반시계 방향)."""
+    pts = sorted(set(pts))
+    if len(pts) <= 2:
+        return pts
+
+    def cross(o, a, b):
+        return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+
+    lower: list = []
+    upper: list = []
+    for p in pts:
+        while len(lower) >= 2 and cross(lower[-2], lower[-1], p) <= 0:
+            lower.pop()
+        lower.append(p)
+    for p in reversed(pts):
+        while len(upper) >= 2 and cross(upper[-2], upper[-1], p) <= 0:
+            upper.pop()
+        upper.append(p)
+    return lower[:-1] + upper[:-1]
+
+
+def zone_polygon(zone: Zone, radius_m: float | None = None) -> list[tuple[float, float]]:
+    """길찾기 우회용 닫힌 다각형 [(lng, lat), ..., 첫 점]. 점 구역은 원, 선 구역은 선을 감싼 볼록 다각형."""
+    r = zone.radius_m if radius_m is None else radius_m
+    ring = _hull([v for c in zone.path for v in _circle(c, r)])
+    return ring + ring[:1]
+
+
 def zones_at(p: tuple[float, float], zones) -> list[Zone]:
     return [z for z in zones if distance_to_zone(p, z) <= z.radius_m]

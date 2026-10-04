@@ -4,19 +4,20 @@
 - GET  /safety/outlook?date=   특정 날짜 전망 (계획 단계에서 '그날 어때?')
 - POST /safety/assess          일정 항목(장소+시각)별 위험도와 행동 지침 (계획 Agent 용)
 - GET  /safety/zones           방파제·침수 감시 구역 위치 (지도 표시용)
+- GET  /safety/avoid           지금 길찾기에서 피할 구역 다각형 (routing 서비스가 우회에 사용)
 
 여행일까지 많이 남았으면 날씨를 판단하지 않고 risk=unknown 과 '바꾸지 말라'는 지침을 돌려준다 (risk.py).
 """
 from datetime import date, datetime, time
 from functools import lru_cache
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.safety import geo
 from app.safety.config import settings
 from app.safety.places import PlaceLookup, get_place_lookup
-from app.safety.schemas import AssessRequest, AssessResult, Outlook, Status, ZoneView
+from app.safety.schemas import AssessRequest, AssessResult, AvoidResult, Outlook, Status, ZoneView
 from app.safety.service import SafetyService
 from app.safety.sources import Sources, build_sources
 
@@ -64,6 +65,15 @@ def outlook(
 @router.post("/assess", response_model=AssessResult)
 def assess(body: AssessRequest, svc: Service) -> AssessResult:
     return svc.assess(body)
+
+
+@router.get("/avoid", response_model=AvoidResult)
+def avoid(
+    svc: Service,
+    min_risk: Annotated[Literal["caution", "danger"], Query(description="이 등급 이상인 구역을 피한다")] = "caution",
+    now: NowParam = None,
+) -> AvoidResult:
+    return svc.avoid(now, min_risk)
 
 
 @router.get("/zones", response_model=list[ZoneView])
