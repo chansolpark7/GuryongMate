@@ -7,13 +7,18 @@
 
 각 도구 결과에는 앱의 처리 단계 표시용 정보(kind, detail)가 붙는다. 문구는 LLM 이 아니라 여기서 만든다.
 """
+import asyncio
 import json
 import re
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 
 from app.agent.api import ApiError, ServiceApi
 from app.agent.review import LEVEL, review, safety_issues, safety_what, summarize
 
+MAX_TRAVEL_TARGETS = 10
+MAX_HAZARD_ROUTES = 3
+CAR_OVERHEAD_MIN = 5  # 주차·승하차 (planner 일정 계산과 같은 값)
 CONTENT_TYPES = ["관광지", "음식점", "문화시설", "쇼핑", "레포츠", "숙박", "축제공연행사"]
 RULE_TYPES = ["must_include", "exclude", "end_before", "max_travel_minutes", "max_walk_minutes",
               "max_daily_walk_minutes"]
@@ -40,6 +45,15 @@ TOOL_SPECS = [
                                                       "직선거리(distance_m)가 붙으니, 먼 곳끼리 거리를 비교할 때는 넉넉히(예: 50000)"},
         "limit": {"type": "integer", "description": "최대 개수 (기본 8, 최대 15)"},
     }),
+    _fn("travel_time", "장소 사이 실제 길 기준 이동시간·거리 (도보·차량). 일정에 없는 장소끼리도 된다. "
+                       "\"차로 몇 분?\", \"걸어갈 만해?\", 어디가 더 가까운지 비교할 때 쓴다. "
+                       "check_hazards=true 면 '지금 출발하면' 안전한지 본다: 경로와 도착지의 위험 단계(예보·특보·침수 센서), "
+                       "지금 피할 위험 구역을 지나는지와 우회하면 몇 분 더인지. 지금 이동할지 묻는 질문에는 꼭 켠다.", {
+        "from_place_id": {"type": "string", "description": "출발 장소 (search_places 로 찾은 id)"},
+        "to_place_ids": {"type": "array", "items": {"type": "string"}, "description": "도착 장소 1~10곳"},
+        "mode": {"type": "string", "enum": ["both", "walk", "car"], "description": "기본 both (도보·차량 모두)"},
+        "check_hazards": {"type": "boolean", "description": "지금 출발 기준 안전 확인 (도착 3곳까지)"},
+    }, ["from_place_id", "to_place_ids"]),
     _fn("check_safety", "지금 초안 일정(방문 + 장소 사이 이동 구간)의 안전 단계를 본다 (침수 센서, 방파제, 기상 예보·특보). "
                         "safe 안전 / caution 주의 / danger 위험 / 판단 안 함(먼 날짜·데이터 장애). "
                         "날씨·안전을 묻거나 야외·해안 일정을 넣었을 때 쓴다. review_plan 도 위험 항목을 함께 알려준다."),
@@ -117,7 +131,7 @@ TOOL_SPECS = [
 # 도구 -> 처리 단계 종류
 STEP_KIND = {
     "search_places": "search", "get_place": "place", "view_plan": "plan", "review_plan": "review",
-    "check_safety": "safety", "safety_outlook": "safety",
+    "check_safety": "safety", "safety_outlook": "safety", "travel_time": "route",
     "add_item": "edit", "update_item": "edit", "remove_item": "edit", "update_plan": "edit", "discard_changes": "edit",
     "add_rule": "rule", "remove_rule": "rule", "recommend_places": "recommend",
 }
@@ -370,6 +384,92 @@ class Toolbox:
         count = sum(len(d["items"]) for d in view["days"])
         return ToolOutcome(True, _dump(view), f"일정 {count}곳",
                            history=_dump({"result": "(당시 일정 조회 결과 생략. 최신 일정은 시스템 프롬프트 참고)"}))
+
+    async def _t_travel_time(self, from_place_id: str, to_place_ids: list[str], mode: str = "both",
+                             check_hazards: bool = False) -> ToolOutcome:
+        if isinstance(to_place_ids, str):
+            to_place_ids = [to_place_ids]
+        if not 1 <= len(to_place_ids) <= MAX_TRAVEL_TARGETS:
+            raise ValueError(f"to_place_ids 는 1~{MAX_TRAVEL_TARGETS}곳")
+        if mode not in ("both", "walk", "car"):
+            raise ValueError("mode 는 both | walk | car")
+        places = await asyncio.gather(*(self.api.get_place(p) for p in [from_place_id, *to_place_ids]))
+        origin, dests = places[0], places[1:]
+        pt = lambda p: {"lat": p["lat"], "lng": p["lng"]}  # noqa: E731
+        modes = ["walk", "car"] if mode == "both" else [mode]
+        tables = await asyncio.gather(*(self.api.routing_matrix(m, [pt(origin)], [pt(d) for d in dests]) for m in modes))
+        results = [{"to": d["title"], "place_id": d["id"], "area": d.get("area")} for d in dests]
+        for m, table in zip(modes, tables):
+            for r, leg in zip(results, table["matrix"][0]):
+                extra = CAR_OVERHEAD_MIN if m == "car" and leg["distance_m"] > 0 else 0
+                r[m] = {"minutes": leg["minutes"] + extra, "distance_m": leg["distance_m"]}
+                if leg["source"] != "road":
+                    r[m]["approx"] = True  # 길찾기를 못 써 직선거리로 추정
+        if check_hazards:
+            hz_mode = "walk" if "walk" in modes else "car"
+            routes = await asyncio.gather(*(self.api.routing_route(hz_mode, [pt(origin), pt(d)])
+                                            for d in dests[:MAX_HAZARD_ROUTES]))
+            for r, route in zip(results, routes):
+                h = route["hazards"]
+                if not h["checked"]:
+                    r["route_zones"] = "확인하지 못함 (안전하다는 뜻 아님)"
+                elif not h["on_route"] and not h["avoided"]:
+                    r["route_zones"] = "경로에 지금 막아야 할 구역 없음"
+                else:
+                    r["route_zones"] = {"avoided": [z["name"] for z in h["avoided"]],
+                                        "still_on_route": [f"{z['name']} ({z['reason']})" for z in h["on_route"]],
+                                        "detour_minutes": h.get("detour_minutes"), "note": h.get("note")}
+            await self._safety_now(origin, dests[:MAX_HAZARD_ROUTES], routes, hz_mode, results)
+        out = {"from": origin["title"], "results": results,
+               "note": "차량은 주차·승하차 5분 포함. approx 는 실제 길이 아닌 직선거리 추정. "
+                       "safety_now 는 지금 출발했을 때 경로·도착지의 위험 단계 (예보·특보·침수 센서). "
+                       "route_zones 는 길찾기가 지금 막는 구역(실측이 오른 센서 주변 80m, 방파제)만 본 것이라 "
+                       "그것만으로 안전하다고 말하지 마라. 미래 일정은 check_safety 로."}
+        first = results[0]
+        if len(results) == 1:
+            parts = [f"{'도보' if m == 'walk' else '차량'} {first[m]['minutes']}분" for m in modes]
+            detail = f"{first['to']} {'·'.join(parts)}"
+        else:
+            detail = f"{origin['title']}에서 {len(results)}곳"
+        return ToolOutcome(True, _dump(out), detail)
+
+    async def _safety_now(self, origin: dict, dests: list[dict], routes: list[dict], mode: str,
+                          results: list[dict]) -> None:
+        """지금 출발해 각 도착지로 가면: 이동 경로(경로선)와 도착 후 1시간 방문을 safety 로 평가해 results 에 붙인다."""
+        try:
+            now = datetime.fromisoformat((await self.api.safety_situation())["now"])
+            visits = []
+            for n, (d, route) in enumerate(zip(dests, routes)):
+                coords = [(lat, lng) for lng, lat in route["geometry"]["coordinates"]]
+                if len(coords) < 2:
+                    coords = [(origin["lat"], origin["lng"]), (d["lat"], d["lng"])]
+                step = max(1, len(coords) // 2000)
+                coords = coords[::step] + ([coords[-1]] if (len(coords) - 1) % step else [])
+                arrive = now + timedelta(minutes=max(1, route["minutes"]))
+                leg = {"key": f"t{n}", "path": [list(c) for c in coords], "mode": mode, "date": now.date().isoformat(),
+                       "start": f"{now:%H:%M}", "label": f"{origin['title']} → {d['title']}"}
+                if arrive.date() == now.date() and arrive > now:
+                    leg["end"] = f"{arrive:%H:%M}"
+                visits.append(leg)
+                visits.append({"key": f"v{n}", "place_id": d["id"], "lat": d["lat"], "lng": d["lng"], "label": d["title"],
+                               "date": arrive.date().isoformat(), "start": f"{arrive:%H:%M}"})
+            res = {v["key"]: v for v in (await self.api.safety_assess(visits))["visits"]}
+        except ApiError:
+            for r in results[:len(dests)]:
+                r["safety_now"] = "안전 정보를 확인하지 못함 (안전하다는 뜻 아님)"
+            return
+
+        def brief(v: dict) -> dict:
+            out = {"risk": LEVEL.get(v["risk"], "판단 안 함"),
+                   "reasons": [f"[{'참고' if h['level'] == 'info' else LEVEL[h['level']]}] {h['reason']}"
+                               for h in v["hazards"][:3]]}
+            if v["risk"] in ("caution", "danger"):
+                out["advice"] = v["advice"]
+            return out
+
+        for n, r in enumerate(results[:len(dests)]):
+            r["safety_now"] = {"depart": f"{now:%H:%M}", "route": brief(res[f"t{n}"]),
+                               "destination": brief(res[f"v{n}"])}
 
     async def _t_check_safety(self) -> ToolOutcome:
         check = await self.api.check_safety(self.plan_id, self.draft.ops)

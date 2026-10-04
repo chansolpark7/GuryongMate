@@ -108,6 +108,7 @@ LLM은 일정을 직접 바꾸지 않는다. 결과는 두 종류의 **카드**�
 | `review` | 일정 검토 | `문제 2건` / `문제 없음` | 일정을 검토하고 있어요. |
 | `recommend` | 추천 정리 | `4곳` | 추천할 곳을 고르고 있어요. |
 | `proposal` | 변경안 만들기 | `running`: `잠시만요...` / `done`: `변경 3건` | 변경안을 만들고 있어요. |
+| `route` | 이동시간 확인 | `호미곶 도보 160분·차량 27분` / `구룡포항에서 3곳` | 이동 시간을 계산하고 있어요. |
 | `safety` | 안전 확인 | `위험 포함 2곳` / `위험 신호 없음` / `판단할 수 없는 일정 있음` / `10-11 주의 신호` | 날씨와 안전을 확인하고 있어요. |
 
 - 실패한 도구 호출은 그 단계를 `error`로 표시하고, `detail`에 짧은 사유를 넣는다. LLM은 오류를 받고 다시 시도할 수 있으므로 턴은 계속된다.
@@ -174,6 +175,7 @@ LLM은 일정을 직접 바꾸지 않는다. 결과는 두 종류의 **카드**�
 | `add_rule` / `remove_rule` | 조건(규칙) → 초안 | `rule` |
 | `discard_changes` | 초안 비우기 | `edit` |
 | `review_plan` | 초안 일정을 검토해 문제 목록을 돌려준다 (일정 규칙 + 안전). `AGENT_REVIEW_ROUNDS` > 0 일 때만 | `review` |
+| `travel_time` | 장소 사이 실제 길 기준 도보·차량 시간 (일정 밖 장소끼리도). routing `POST /routing/matrix`. 차량은 주차·승하차 5분 포함, 직선거리 추정이면 `approx`. `check_hazards`면 도착 3곳까지 '지금 출발' 기준 안전: 경로선(`POST /routing/route`)과 도착지를 safety `POST /safety/assess`로 평가한 `safety_now`(경로·도착지 위험 단계, 예보·특보·센서) + 길찾기가 지금 막는 구역·우회 시간 `route_zones` | `route` |
 | `check_safety` | 초안 일정(방문 + 이동 구간)의 안전 단계. planner `POST /plans/{id}/safety/preview` (초안 없으면 `GET /safety`) | `safety` |
 | `safety_outlook` | 날짜별 날씨·바다 전망 (`date`). safety `GET /safety/outlook` | `safety` |
 | `recommend_places` | 추천 카드를 **바로** 만든다 (planner `POST /recommendations`) | `recommend` |
@@ -183,6 +185,7 @@ LLM은 일정을 직접 바꾸지 않는다. 결과는 두 종류의 **카드**�
 - 이어서 고치기: 이 세션의 최신 대기 제안이 있고 그 `base_version`이 지금 `version`과 같으면, 그 제안의 ops에서 초안을 시작하고 새 제안이 그것을 대체한다. 다르면 빈 초안에서 시작하고(LLM에 알린다), 새 제안이 만들어질 때 그것을 대체한다. `discard_changes`로 초안을 비우고 끝나면 이어받던 제안은 거절된다.
 - 같은 턴에서 새로 추가한 항목은 음수 임시 id로 다시 가리킨다. 제안이 승인되기 전까지 이어지는 턴에서도 같은 번호다.
 - 프롬프트 원칙: "골라 달라·추천해 달라"는 `recommend_places`, "짜 달라·바꿔 달라"는 변경 도구 → 제안.
+- `travel_time`의 `route_zones`는 길찾기가 막는 구역(실측이 오른 센서 주변 80m·방파제)만 본 것이라, 그것만으로 "안전"이라고 하지 않게 `safety_now`(날씨·특보·도착지 포함)를 함께 준다.
 
 ### 검토 루프 (계획 → 검토 → 수정 → 재검토)
 - `backend/app/agent/review.py`가 초안을 규칙으로 검토한다.

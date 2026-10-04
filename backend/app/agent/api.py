@@ -77,12 +77,26 @@ class ServiceApi:
     async def preview(self, plan_id: int, ops: list[dict]) -> dict:
         return await self._req("POST", f"/planner/plans/{plan_id}/preview", json={"ops": ops})
 
+    # ----- routing (길찾기) -----
+    async def routing_matrix(self, mode: str, sources: list[dict], targets: list[dict]) -> dict:
+        return await self._req("POST", "/routing/matrix", json={"mode": mode, "sources": sources, "targets": targets})
+
+    async def routing_route(self, mode: str, stops: list[dict], hazards: str = "avoid") -> dict:
+        return await self._req("POST", "/routing/route",
+                               json={"mode": mode, "stops": stops, "hazards": hazards, "steps": False})
+
     # ----- planner: 안전 점검 · safety -----
     async def check_safety(self, plan_id: int, ops: list[dict]) -> dict:
         """초안(ops)이 있으면 적용했다고 치고, 없으면 지금 일정의 안전 점검 (방문 + 이동 구간)."""
         if ops:
             return await self._req("POST", f"/planner/plans/{plan_id}/safety/preview", json={"ops": ops})
         return await self._req("GET", f"/planner/plans/{plan_id}/safety")
+
+    async def safety_situation(self) -> dict:
+        return await self._req("GET", "/safety/situation")
+
+    async def safety_assess(self, visits: list[dict]) -> dict:
+        return await self._req("POST", "/safety/assess", json={"visits": visits})
 
     async def safety_outlook(self, day: str) -> dict:
         return await self._req("GET", "/safety/outlook", params={"date": day})
