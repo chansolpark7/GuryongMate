@@ -11,7 +11,7 @@ Flutter 앱 ──► gateway (:API_PORT, 기본 8000)   Caddy. URL 앞부분으
                 ├─ /planner*  ──► planner     일정·검증·변경 제안
                 ├─ /agent*    ──► agent       LLM 채팅 (SSE) · 도구 실행
                 ├─ /safety*   ──► safety      구룡포 안전 정보 (디지털트윈 실측 + 기상 예보·특보)
-                └─ /auth* /users* ──► account (예정) 로그인·사용자 프로필
+                └─ /auth* /users* ──► account   로그인 (Google·ID/비밀번호)·사용자 정보
                embedding   임베딩 모델 서버 (내부 전용, places 가 호출)
                places-init 시작 시 장소 데이터·임베딩이 비어 있으면 채우고 종료
                db          Postgres + pgvector (모든 서비스 공용, 테이블 접두사로 구분)
@@ -25,7 +25,7 @@ LLM: 호스트의 Ollama(host.docker.internal:11434) 또는 OpenAI API — Docke
 | planner | 플래너 담당 | `backend/app/planner/` | `backend/app/planner/`, `backend/requirements/planner.txt`, `backend/tests/planner/`, `scripts/planner/`, `docs/planner/` | `planner_*` | `/planner/docs` |
 | agent | Agent 담당 | `backend/app/agent/` | `backend/app/agent/`, `backend/tests/agent/`, `docs/agent/` | `agent_*` | `/agent/docs` |
 | safety | 안전 정보 담당 | `backend/app/safety/` | `backend/app/safety/`, `backend/tests/safety/`, `docs/safety/`, `docs/dt/`, `docs/external/` | 없음 | `/safety/docs` |
-| account (예정) | 미정 | `backend/app/account/` | `backend/app/account/`, `backend/tests/account/`, `docs/account/` | `account_*` | `/account/docs` |
+| account | 계정 담당 | `backend/app/account/` | `backend/app/account/`, `backend/requirements/account.txt`, `backend/tests/account/`, `docs/account/` | `account_*` | `/account/docs` |
 | gateway·db·공용 | 공용 | — | 아래 "공용 파일" | — | — |
 
 ### 백엔드 서비스는 이미지 하나, 컨테이너 여러 개
@@ -52,7 +52,7 @@ LLM: 호스트의 Ollama(host.docker.internal:11434) 또는 OpenAI API — Docke
 - **장소 식별자**: 장소는 `place_id`(문자열, 예: `kto-126128`)로만 참조한다. 상세는 `GET /places/{place_id}`.
 - **다른 서비스의 테이블을 직접 읽거나 쓰지 않는다.** DB는 하나지만 테이블 접두사가 소유 경계다.
 
-## 3. 인증 (account 서비스 도입 시)
+## 3. 인증
 
 - account가 로그인 시 JWT(HS256, claim `sub` = user_id)를 발급한다. 앱은 요청마다 `Authorization: Bearer <토큰>`을 붙인다.
 - 다른 서비스는 account를 호출하지 않고 **공용 코드로 토큰을 직접 검증**한다.
@@ -64,7 +64,9 @@ LLM: 호스트의 Ollama(host.docker.internal:11434) 또는 OpenAI API — Docke
   ```
 
 - 서명 키는 `JWT_SECRET`, 로그인 강제 여부는 `AUTH_REQUIRED`(기본 `false`, 토큰이 없으면 `anonymous`)로 정한다. 토큰 발급은 `app.core.auth.issue_token`.
-- 현재 planner·agent는 임시로 `X-User-Id` 헤더를 쓴다. account가 생기면 `CurrentUser`로 바꾼다.
+- `AUTH_REQUIRED=false`(개발·테스트)에서는 토큰이 없으면 `X-User-Id` 헤더를 사용자로 본다. 앱·데모는 `AUTH_REQUIRED=true`로 띄운다.
+- 다른 서비스를 사용자 대신 부를 때는 `ForwardAuth`로 받은 인증을 그대로 전달한다 (예: agent → planner).
+- 사용자 데이터를 가진 서비스는 탈퇴용 `DELETE /<서비스>/me`를 제공한다. account가 탈퇴 시 부른다 (`docs/account/README.md` §4).
 
 ## 4. 작업 공간: 기능마다 git worktree 하나
 
@@ -119,6 +121,7 @@ worktree마다 compose 프로젝트(컨테이너·DB 볼륨)가 따로 생긴다
 | `GuryongMate-wt/planner` | `API_PORT=8002`, `DB_PORT=5434` |
 | `GuryongMate-wt/service-split` | `API_PORT=8003`, `DB_PORT=5435` |
 | `GuryongMate-wt/safety` | `API_PORT=8004`, `DB_PORT=5436` |
+| `GuryongMate-wt/account` | `API_PORT=8004`, `DB_PORT=5436` |
 
 API 키는 각 worktree의 `backend/.env`에 둔다 (`backend/.env.example` 참고).
 

@@ -29,13 +29,16 @@
 		}
 	}
 
-	# account 서비스가 생기면 주석 해제
-	# handle /auth* {
-	# 	reverse_proxy account:8000
-	# }
-	# handle /users* {
-	# 	reverse_proxy account:8000
-	# }
+	handle /auth* {
+		reverse_proxy account:8000
+	}
+	handle /users* {
+		reverse_proxy account:8000
+	}
+	handle /account* {
+		# 서비스 문서 (/account/docs)
+		reverse_proxy account:8000
+	}
 
 	handle {
 		header Content-Type application/json
