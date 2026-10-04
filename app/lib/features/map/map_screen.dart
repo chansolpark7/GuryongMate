@@ -1,0 +1,593 @@
+import 'package:flutter/material.dart';
+import 'package:flutter_map/flutter_map.dart';
+import 'package:latlong2/latlong.dart';
+import 'package:provider/provider.dart';
+
+import '../../core/format.dart';
+import '../../core/models/place.dart';
+import '../../core/models/plan.dart';
+import '../../core/theme/app_theme.dart';
+import '../../core/widgets/common.dart';
+import '../chat/chat_controller.dart';
+import '../chat/proposal_card.dart';
+import '../planner/item_actions.dart';
+import '../planner/place_search_sheet.dart';
+import '../planner/plan_controller.dart';
+
+const _guryongpo = LatLng(35.9890, 129.5560);
+
+/// 07_Map / 09_Map_After_Apply / 10_Map_Layers. Planner 와 같은 PlanController 를 쓴다.
+class MapScreen extends StatefulWidget {
+  const MapScreen({super.key});
+
+  @override
+  State<MapScreen> createState() => _MapScreenState();
+}
+
+class _MapScreenState extends State<MapScreen> {
+  final _map = MapController();
+  bool _ready = false;
+  bool _layersOpen = false;
+  bool _showItinerary = true;
+  bool _showRoute = true;
+  bool _showPlaces = false;
+  List<PlaceSummary> _places = const [];
+  String? _fittedKey;
+  int? _focusedItem;
+
+  PlanController get _c => context.read<PlanController>();
+
+  List<PlanItem> _visibleItems(PlanController c) =>
+      (c.currentDay?.items ?? const <PlanItem>[]).where((i) => i.place != null && !i.skipped).toList();
+
+  /// Day 가 바뀌거나 일정이 바뀌면 전체가 보이게, 선택이 바뀌면 그 핀으로.
+  void _syncCamera(PlanController c) {
+    if (!_ready) return;
+    final items = _visibleItems(c);
+    final key = '${c.day}:${items.map((i) => i.id).join(',')}';
+    final sel = c.selectedItemId == null ? null : c.plan?.item(c.selectedItemId!);
+    if (sel?.place != null && sel!.id != _focusedItem) {
+      _focusedItem = sel.id;
+      _map.move(LatLng(sel.place!.lat, sel.place!.lng), _map.camera.zoom < 15 ? 15 : _map.camera.zoom);
+      return;
+    }
+    if (c.selectedItemId == null) _focusedItem = null;
+    if (key == _fittedKey) return;
+    _fittedKey = key;
+    _fit(items);
+  }
+
+  void _fit(List<PlanItem> items) {
+    final pts = items.map((i) => LatLng(i.place!.lat, i.place!.lng)).toList();
+    if (pts.isEmpty) {
+      _map.move(_guryongpo, 14);
+    } else if (pts.length == 1) {
+      _map.move(pts.first, 15);
+    } else {
+      _map.fitCamera(CameraFit.coordinates(
+        coordinates: pts,
+        padding: const EdgeInsets.fromLTRB(48, 140, 48, 260),
+        maxZoom: 16.5,
+      ));
+    }
+  }
+
+  Future<void> _togglePlaces(bool on) async {
+    setState(() => _showPlaces = on);
+    if (!on || _places.isNotEmpty) return;
+    try {
+      final center = _ready ? _map.camera.center : _guryongpo;
+      final res = await _c.api.searchPlaces(lat: center.latitude, lng: center.longitude, radiusM: 4000, limit: 80);
+      if (mounted) setState(() => _places = res);
+    } catch (e) {
+      if (mounted) showError(context, e);
+    }
+  }
+
+  Future<void> _openPlace(PlaceSummary p) async {
+    final c = _c;
+    final picked = await showPlaceDetailSheet(context, c, p.id);
+    if (picked == null || !mounted) return;
+    try {
+      await c.addPlace(picked.placeId, day: picked.day, stayMinutes: picked.stayMinutes);
+      if (mounted) showInfo(context, 'Day ${picked.day}에 추가했어요');
+    } catch (e) {
+      if (mounted) showError(context, e);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.watch<PlanController>();
+    final plan = c.plan;
+    final items = _visibleItems(c);
+    final applied = c.lastApplied;
+    final ghostDay = applied?.before.dayOf(c.day);
+    final oldRoute = (ghostDay?.items ?? const <PlanItem>[]).where((i) => i.place != null && !i.skipped).map((i) => LatLng(i.place!.lat, i.place!.lng)).toList();
+    final removed = plan == null || applied == null ? const <PlanItem>[] : applied.removedItems(plan).where((i) => i.day == c.day && i.place != null).toList();
+    final showChange = applied != null && c.aiUpdates.isNotEmpty && oldRoute.isNotEmpty;
+    final selected = c.selectedItemId == null ? null : plan?.item(c.selectedItemId!);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _syncCamera(c);
+    });
+
+    final route = items.map((i) => LatLng(i.place!.lat, i.place!.lng)).toList();
+    return Scaffold(
+      body: Stack(children: [
+        FlutterMap(
+          mapController: _map,
+          options: MapOptions(
+            initialCenter: _guryongpo,
+            initialZoom: 14,
+            onMapReady: () {
+              _ready = true;
+              _syncCamera(c);
+            },
+            onTap: (_, _) {
+              if (_layersOpen) {
+                setState(() => _layersOpen = false);
+              } else {
+                c.select(null);
+              }
+            },
+          ),
+          children: [
+            TileLayer(urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png', userAgentPackageName: 'com.guryongmate.guryong_mate'),
+            if (_showRoute)
+              PolylineLayer(polylines: [
+                if (showChange && oldRoute.length > 1)
+                  Polyline(points: oldRoute, strokeWidth: 3, color: AppColors.text3, pattern: StrokePattern.dashed(segments: const [6, 6])),
+                if (route.length > 1)
+                  Polyline(points: route, strokeWidth: 5, color: AppColors.primary, borderStrokeWidth: 4, borderColor: Colors.white),
+              ]),
+            if (_showPlaces)
+              MarkerLayer(markers: [
+                for (final p in _places)
+                  if (!items.any((i) => i.placeId == p.id))
+                    Marker(
+                      point: LatLng(p.lat, p.lng),
+                      width: 26,
+                      height: 26,
+                      child: GestureDetector(
+                        onTap: () => _openPlace(p),
+                        child: Tooltip(
+                          message: p.title,
+                          child: Container(
+                            decoration: BoxDecoration(color: AppColors.surface, shape: BoxShape.circle, border: Border.all(color: AppColors.text3), boxShadow: AppShadow.card),
+                            child: Icon(placeVisual(p.contentType).$1, size: 14, color: AppColors.text2),
+                          ),
+                        ),
+                      ),
+                    ),
+              ]),
+            if (_showItinerary)
+              MarkerLayer(markers: [
+                if (showChange)
+                  for (final g in removed)
+                    Marker(
+                      point: LatLng(g.place!.lat, g.place!.lng),
+                      width: 26,
+                      height: 26,
+                      child: Tooltip(
+                        message: '제거됨: ${g.title}',
+                        child: Container(
+                          decoration: BoxDecoration(color: const Color(0xFFC4C9D1), shape: BoxShape.circle, border: Border.all(color: Colors.white, width: 3)),
+                        ),
+                      ),
+                    ),
+                for (final (i, it) in items.indexed)
+                  if (it.id != selected?.id)
+                    Marker(
+                      point: LatLng(it.place!.lat, it.place!.lng),
+                      width: 36,
+                      height: 36,
+                      child: _Pin(number: i + 1, ai: c.aiUpdates.containsKey(it.id), onTap: () => c.select(it.id)),
+                    ),
+                if (selected?.place != null && items.any((i) => i.id == selected!.id))
+                  Marker(
+                    point: LatLng(selected!.place!.lat, selected.place!.lng),
+                    width: 160,
+                    height: 112,
+                    alignment: const Alignment(0, -0.18),
+                    child: _SelectedPin(
+                      number: items.indexWhere((i) => i.id == selected.id) + 1,
+                      label: selected.title,
+                      ai: c.aiUpdates.containsKey(selected.id),
+                    ),
+                  ),
+              ]),
+          ],
+        ),
+        // Map Top Bar (floating)
+        SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+              Row(children: [
+                _RoundButton(icon: Icons.arrow_back_ios_new, onTap: () => Navigator.of(context).maybePop(), tooltip: '뒤로'),
+                const SizedBox(width: 10),
+                Expanded(child: _PlanSwitcher(controller: c)),
+                const SizedBox(width: 10),
+                _RoundButton(
+                  icon: Icons.layers_outlined,
+                  active: _layersOpen,
+                  onTap: () => setState(() => _layersOpen = !_layersOpen),
+                  tooltip: '지도 레이어',
+                ),
+              ]),
+              if (_layersOpen)
+                Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: _LayerPanel(
+                    itinerary: _showItinerary,
+                    route: _showRoute,
+                    places: _showPlaces,
+                    onItinerary: (v) => setState(() => _showItinerary = v),
+                    onRoute: (v) => setState(() => _showRoute = v),
+                    onPlaces: _togglePlaces,
+                  ),
+                ),
+            ]),
+          ),
+        ),
+        // 하단: AI FAB · (토스트) · Place Map Card 또는 Route Summary
+        Positioned(
+          left: 16,
+          right: 16,
+          bottom: 16,
+          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, mainAxisSize: MainAxisSize.min, children: [
+            Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
+              if (showChange && selected == null) const _Toast(text: 'AI 변경이 지도에 반영됐어요'),
+              const Spacer(),
+              Column(children: [
+                _RoundButton(icon: Icons.my_location, onTap: () => _fit(items), tooltip: '전체 경로 보기'),
+                const SizedBox(height: 10),
+                AiFab(onTap: () => c.openAi()),
+              ]),
+            ]),
+            const SizedBox(height: 6),
+            Text('© OpenStreetMap contributors', style: AppText.caption.copyWith(fontSize: 10, color: AppColors.text2)),
+            const SizedBox(height: 6),
+            if (plan != null)
+              if (selected != null && items.any((i) => i.id == selected.id))
+                _PlaceMapCard(controller: c, items: items, item: selected)
+              else
+                _RouteSummary(controller: c, items: items, showDelta: showChange),
+          ]),
+        ),
+      ]),
+    );
+  }
+}
+
+class _RoundButton extends StatelessWidget {
+  const _RoundButton({required this.icon, required this.onTap, required this.tooltip, this.active = false});
+  final IconData icon;
+  final VoidCallback onTap;
+  final String tooltip;
+  final bool active;
+
+  @override
+  Widget build(BuildContext context) => Tooltip(
+        message: tooltip,
+        child: Container(
+          decoration: const BoxDecoration(shape: BoxShape.circle, boxShadow: AppShadow.floating),
+          child: Material(
+            color: active ? AppColors.primarySoft : AppColors.surface,
+            shape: const CircleBorder(),
+            child: InkWell(
+              customBorder: const CircleBorder(),
+              onTap: onTap,
+              child: SizedBox(width: 44, height: 44, child: Icon(icon, size: 20, color: active ? AppColors.primary : AppColors.text)),
+            ),
+          ),
+        ),
+      );
+}
+
+class _PlanSwitcher extends StatelessWidget {
+  const _PlanSwitcher({required this.controller});
+  final PlanController controller;
+
+  @override
+  Widget build(BuildContext context) {
+    final plan = controller.plan;
+    final n = plan?.numDays ?? 1;
+    return Container(
+      height: 44,
+      decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(22), boxShadow: AppShadow.floating),
+      child: PopupMenuButton<int>(
+        tooltip: 'Day 선택',
+        position: PopupMenuPosition.under,
+        onSelected: controller.setDay,
+        itemBuilder: (_) => [
+          for (var d = 1; d <= n; d++)
+            PopupMenuItem(
+              value: d,
+              child: Text('Day $d · ${plan == null ? '' : md(plan.startDate.add(Duration(days: d - 1)))}',
+                  style: TextStyle(fontWeight: d == controller.day ? FontWeight.w700 : FontWeight.w400)),
+            ),
+        ],
+        child: Center(
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            Flexible(child: Text(plan?.title ?? '', style: AppText.label.copyWith(fontWeight: FontWeight.w700), overflow: TextOverflow.ellipsis)),
+            Text(' · Day ${controller.day}', style: AppText.label.copyWith(color: AppColors.text3)),
+            const Icon(Icons.expand_more, size: 18, color: AppColors.text3),
+          ]),
+        ),
+      ),
+    );
+  }
+}
+
+class _LayerPanel extends StatelessWidget {
+  const _LayerPanel({required this.itinerary, required this.route, required this.places, required this.onItinerary, required this.onRoute, required this.onPlaces});
+  final bool itinerary;
+  final bool route;
+  final bool places;
+  final ValueChanged<bool> onItinerary;
+  final ValueChanged<bool> onRoute;
+  final ValueChanged<bool> onPlaces;
+
+  @override
+  Widget build(BuildContext context) {
+    Widget row(IconData icon, String label, bool? value, ValueChanged<bool>? onChanged, {String? note}) => InkWell(
+          onTap: onChanged == null ? null : () => onChanged(!(value ?? false)),
+          child: SizedBox(
+            height: 44,
+            child: Row(children: [
+              Checkbox(value: value ?? false, onChanged: onChanged == null ? null : (v) => onChanged(v ?? false)),
+              Icon(icon, size: 18, color: onChanged == null ? AppColors.text3 : AppColors.text2),
+              const SizedBox(width: 8),
+              Text(label, style: AppText.label.copyWith(color: onChanged == null ? AppColors.text3 : AppColors.text)),
+              if (note != null) ...[const SizedBox(width: 6), Text(note, style: AppText.caption)],
+            ]),
+          ),
+        );
+    return Container(
+      width: 232,
+      padding: const EdgeInsets.fromLTRB(8, 12, 12, 8),
+      decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(16), boxShadow: AppShadow.floating),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Padding(padding: const EdgeInsets.only(left: 12, bottom: 4), child: Text('지도 레이어', style: AppText.label.copyWith(fontWeight: FontWeight.w700))),
+        row(Icons.place_outlined, '일정', itinerary, onItinerary),
+        row(Icons.route, '이동 경로', route, onRoute),
+        row(Icons.groups_outlined, '혼잡도', false, null, note: '준비 중'),
+        row(Icons.cloud_outlined, '날씨', false, null, note: '준비 중'),
+        row(Icons.photo_outlined, '관광지', places, onPlaces),
+      ]),
+    );
+  }
+}
+
+class _Pin extends StatelessWidget {
+  const _Pin({required this.number, required this.ai, required this.onTap});
+  final int number;
+  final bool ai;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) => GestureDetector(
+        onTap: onTap,
+        child: Center(
+          child: Container(
+            width: 30,
+            height: 30,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: ai ? AppColors.ai : AppColors.primary,
+              shape: BoxShape.circle,
+              border: Border.all(color: Colors.white, width: 3),
+              boxShadow: AppShadow.card,
+            ),
+            child: Text('$number', style: AppText.caption.copyWith(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 13)),
+          ),
+        ),
+      );
+}
+
+class _SelectedPin extends StatelessWidget {
+  const _SelectedPin({required this.number, required this.label, required this.ai});
+  final int number;
+  final String label;
+  final bool ai;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = ai ? AppColors.ai : AppColors.primary;
+    return Column(mainAxisSize: MainAxisSize.min, children: [
+      Container(
+        constraints: const BoxConstraints(maxWidth: 160),
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+        decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(8), boxShadow: AppShadow.card),
+        child: Text(label, style: AppText.caption.copyWith(color: AppColors.text, fontWeight: FontWeight.w700), overflow: TextOverflow.ellipsis),
+      ),
+      const SizedBox(height: 2),
+      SizedBox(
+        width: 64,
+        height: 64,
+        child: Stack(alignment: Alignment.center, children: [
+          Container(width: 64, height: 64, decoration: BoxDecoration(color: color.withValues(alpha: 0.18), shape: BoxShape.circle)),
+          Container(
+            width: 40,
+            height: 40,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(color: color, shape: BoxShape.circle, border: Border.all(color: Colors.white, width: 3), boxShadow: AppShadow.floating),
+            child: Text('$number', style: AppText.section.copyWith(color: Colors.white)),
+          ),
+        ]),
+      ),
+    ]);
+  }
+}
+
+class _Toast extends StatelessWidget {
+  const _Toast({required this.text});
+  final String text;
+
+  @override
+  Widget build(BuildContext context) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(color: AppColors.aiSoft.withValues(alpha: 0.95), borderRadius: BorderRadius.circular(18), boxShadow: AppShadow.card),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          const Icon(Icons.auto_awesome, size: 14, color: AppColors.ai),
+          const SizedBox(width: 6),
+          Text(text, style: AppText.caption.copyWith(color: AppColors.ai, fontWeight: FontWeight.w700)),
+        ]),
+      );
+}
+
+class _PlaceMapCard extends StatelessWidget {
+  const _PlaceMapCard({required this.controller, required this.items, required this.item});
+  final PlanController controller;
+  final List<PlanItem> items;
+  final PlanItem item;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = controller;
+    final idx = items.indexWhere((i) => i.id == item.id);
+    final next = idx + 1 < items.length ? items[idx + 1] : null;
+    final mode = c.plan?.travelMode == 'car' ? '차량' : '도보';
+    final vs = c.plan?.violationsFor(item.id) ?? const <Violation>[];
+    final ai = c.aiUpdates.containsKey(item.id);
+    return GestureDetector(
+      // 카드 좌우 스와이프로 이전/다음 장소
+      onHorizontalDragEnd: (d) {
+        final v = d.primaryVelocity ?? 0;
+        if (v < -200 && idx + 1 < items.length) c.select(items[idx + 1].id);
+        if (v > 200 && idx > 0) c.select(items[idx - 1].id);
+      },
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+        decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(20), boxShadow: AppShadow.floating),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, mainAxisSize: MainAxisSize.min, children: [
+          const Grabber(),
+          Row(children: [
+            Container(
+              width: 28,
+              height: 28,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(color: ai ? AppColors.ai : AppColors.primary, shape: BoxShape.circle),
+              child: Text('${idx + 1}', style: AppText.label.copyWith(color: Colors.white, fontWeight: FontWeight.w700)),
+            ),
+            const SizedBox(width: 10),
+            Expanded(child: Text(item.title, style: AppText.headline, overflow: TextOverflow.ellipsis)),
+            Text('${idx + 1} / ${items.length}', style: AppText.caption),
+          ]),
+          const SizedBox(height: 6),
+          Text('${item.startAt} – ${item.endAt} · ${durationKo(item.stayMinutes)}', style: AppText.meta),
+          const SizedBox(height: 10),
+          Wrap(spacing: 6, runSpacing: 6, children: [
+            if (ai) InfoChip(label: 'AI 변경', icon: Icons.auto_awesome, fg: AppColors.ai, bg: AppColors.aiSoft),
+            for (final v in vs) v.isError ? InfoChip.error(v.shortLabel) : InfoChip.warning(v.shortLabel),
+            if (next?.travelMinutes != null) InfoChip(label: '다음 장소 $mode ${next!.travelMinutes}분', icon: mode == '차량' ? Icons.directions_car_outlined : Icons.directions_walk),
+            if (next == null) const InfoChip(label: '오늘 마지막 장소', icon: Icons.flag_outlined),
+          ]),
+          const SizedBox(height: 14),
+          Row(children: [
+            Expanded(
+              flex: 150,
+              child: AppButton(label: '일정에서 보기', icon: Icons.calendar_month_outlined, kind: ButtonKind.soft, height: 44, onPressed: () => c.showInPlanner(item.id)),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              flex: 80,
+              child: AppButton(
+                label: '교체',
+                icon: Icons.swap_horiz,
+                kind: ButtonKind.secondary,
+                height: 44,
+                onPressed: () => c.openAi(prefill: "Day ${item.day}의 '${item.title}' 대신 비슷한 시간에 갈 만한 다른 곳으로 바꿔줘", send: true),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              flex: 80,
+              child: AppButton(
+                label: '삭제',
+                icon: Icons.delete_outline,
+                kind: ButtonKind.danger,
+                height: 44,
+                onPressed: () async {
+                  if (!await confirmDelete(context, item.title)) return;
+                  try {
+                    await c.removeItem(item.id);
+                  } catch (e) {
+                    if (context.mounted) showError(context, e);
+                  }
+                },
+              ),
+            ),
+          ]),
+        ]),
+      ),
+    );
+  }
+}
+
+class _RouteSummary extends StatelessWidget {
+  const _RouteSummary({required this.controller, required this.items, required this.showDelta});
+  final PlanController controller;
+  final List<PlanItem> items;
+  final bool showDelta;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = controller;
+    final day = c.currentDay;
+    final total = day?.travelMinutes ?? 0;
+    final before = c.lastApplied?.before.dayOf(c.day)?.travelMinutes;
+    final delta = showDelta && before != null ? total - before : null;
+    return Container(
+      padding: const EdgeInsets.fromLTRB(16, 14, 12, 14),
+      decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(16), boxShadow: AppShadow.floating),
+      child: Row(children: [
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+            Text('Day ${c.day} 경로 · ${items.length}곳', style: AppText.section.copyWith(fontSize: 15)),
+            const SizedBox(height: 2),
+            Text.rich(
+              TextSpan(style: AppText.meta, children: [
+                TextSpan(text: '총 이동 $total분'),
+                if (delta != null && delta != 0)
+                  TextSpan(
+                    text: ' (${delta > 0 ? '+' : ''}$delta분)',
+                    style: TextStyle(color: delta > 0 ? AppColors.warning : AppColors.success, fontWeight: FontWeight.w700),
+                  ),
+                if (day?.endAt != null) TextSpan(text: ' · ${day!.endAt} 종료'),
+              ]),
+            ),
+            if (items.isEmpty) Text('일정을 추가하면 지도에 경로가 그려져요', style: AppText.caption),
+          ]),
+        ),
+        if (showDelta)
+          IntrinsicWidth(
+            child: AppButton(
+              label: '변경 내역',
+              kind: ButtonKind.soft,
+              height: 44,
+              onPressed: () {
+                final p = c.lastApplied?.proposal;
+                if (p == null) return;
+                final turn = ChatTurn('')
+                  ..proposal = p
+                  ..proposalState = ProposalState.applied;
+                showModalBottomSheet<void>(
+                  context: context,
+                  isScrollControlled: true,
+                  showDragHandle: true,
+                  builder: (ctx) => SafeArea(
+                    child: SingleChildScrollView(
+                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                      child: ProposalCard(turn: turn, readOnly: true),
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+      ]),
+    );
+  }
+}
