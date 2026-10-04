@@ -497,3 +497,54 @@ def test_avoid_sensor_failure_is_reported(use):
     r = avoid(use(SensorsDown("storm")))
     assert not any(z["kind"] == "flood" for z in r["zones"])
     assert r["data_status"]["sensors"]["ok"] is False and "침수 센서" in r["guidance"]
+
+
+# ---------- 이동 경로 ----------
+
+STREET, POLICE_SENSOR = (35.9820, 129.5420), (35.988698, 129.553056)
+BW_A, BW_B = (35.98573, 129.557888), (35.987397, 129.558444)  # 북방파제 선
+
+
+def leg(path, mode="walk", d="2026-10-04", start="10:30", end="10:50", key="leg"):
+    return {"key": key, "path": [list(p) for p in path], "mode": mode, "date": d, "start": start, "end": end,
+            "label": "이동"}
+
+
+def test_walk_path_through_flood_sensor_zone(use):
+    client = use(CountingMock("flood"))
+    # 점 두 개뿐인 긴 직선이어도 촘촘히 나눠 센서 반경을 지나는 것을 잡는다
+    far_a, far_b = (POLICE_SENSOR[0] - 0.004, POLICE_SENSOR[1]), (POLICE_SENSOR[0] + 0.004, POLICE_SENSOR[1])
+    v = assess(client, leg([far_a, far_b]))["visits"][0]
+    assert v["kind"] == "travel" and v["mode"] == "walk" and v["indoor"] is None
+    assert v["risk"] == "caution" and "침수 감시 구역" in v["sensitivity"]
+    assert any(h["source"].startswith("E-UM") for h in v["hazards"]) and "경로" in v["advice"]
+    away = assess(client, leg([STREET, (STREET[0] + 0.001, STREET[1])]))["visits"][0]
+    assert away["risk"] == "safe"
+
+
+def test_breakwater_path_walk_vs_car(use):
+    client = use(CountingMock("wind_tomorrow"))
+    walk = assess(client, leg([BW_A, BW_B], d="2026-10-05", start="14:00", end="14:20"))["visits"][0]
+    assert walk["risk"] == "danger" and "방파제" in walk["sensitivity"] and "우회" in walk["advice"]
+    car = assess(client, leg([BW_A, BW_B], mode="car", d="2026-10-05", start="14:00", end="14:20"))["visits"][0]
+    # 차는 방파제를 지나지 않는 것으로 본다. 바람은 차 안이라 참고까지
+    assert car["risk"] == "safe" and car["sensitivity"] == [] and {h["level"] for h in car["hazards"]} == {"info"}
+
+
+def test_car_path_through_flood_zone_in_heavy_rain(use):
+    # storm: 10/04 16~23시 시간당 35mm. 침수 감시 구역은 차로 지나도 그대로 위험
+    near = (POLICE_SENSOR[0], POLICE_SENSOR[1] - 0.0005)
+    car = assess(use(CountingMock("storm")), leg([near, POLICE_SENSOR], mode="car", start="17:00", end="17:10"))
+    assert car["visits"][0]["risk"] == "danger" and "침수 감시 구역" in car["visits"][0]["sensitivity"]
+
+
+@pytest.mark.parametrize("bad", [
+    {"path": [[35.98, 129.55], [35.99, 129.56]]},                      # mode 없음
+    {"place_id": "p-street", "mode": "walk"},                           # path 없이 mode
+    {"path": [[35.98, 129.55]], "mode": "walk"},                        # 점 하나
+    {"path": [[35.98, 129.55], [35.99]], "mode": "walk"},               # 좌표 형식
+    {"path": [[35.98, 129.55], [35.99, 129.56]], "mode": "bike"},       # 모르는 수단
+])
+def test_path_validation(use, bad):
+    body = {"visits": [{"date": "2026-10-05", "start": "14:00"} | bad]}
+    assert use(CountingMock()).post("/safety/assess", json=body).status_code == 422
