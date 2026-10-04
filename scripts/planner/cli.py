@@ -38,7 +38,8 @@ def table(headers: list[str], rows: list[list[str]], indent: str = "  ") -> None
 
 def print_plan(p: dict) -> None:
     print(f"[계획 #{p['id']}] {p['title']}  |  {p['start_date']} ~ {p['end_date']}  |  "
-          f"{p['day_start']}~{p['day_end']}  |  {MODE.get(p['travel_mode'], p['travel_mode'])}  |  user={p['user_id']}")
+          f"{p['day_start']}~{p['day_end']}  |  {MODE.get(p['travel_mode'], p['travel_mode'])}  |  v{p['version']}  |  "
+          f"user={p['user_id']}")
     if p["memo"]:
         print(f"  메모: {p['memo']}")
     for d in p["days"]:
@@ -179,21 +180,23 @@ def cmd_check(c, a):
     print_violations(r["violations"])
 
 
-# ---------- 제안 · Agent ----------
+# ---------- 제안 · 추천 · Agent ----------
 
-DIM, BOLD, RESET = "\033[2m", "\033[1m", "\033[0m"
-TOOL_LABELS = {"search_places": "장소 검색", "get_place": "장소 확인", "view_plan": "일정 확인",
-               "add_item": "일정 추가", "update_item": "일정 수정", "remove_item": "일정 삭제",
-               "update_plan": "계획 설정", "add_rule": "규칙 추가", "remove_rule": "규칙 삭제",
-               "discard_changes": "변경 취소"}
+DIM, BOLD, RESET, CLEAR = "\033[2m", "\033[1m", "\033[0m", "\r\033[2K"
+STATE = {"in_plan": "일정에 있음", "not_in_plan": "", "day_out_of_range": "날짜 없음"}
+BUTTON = {"in_plan": "[빼기]", "not_in_plan": "[추가]", "day_out_of_range": ""}
 
 
-def print_proposal(p: dict) -> None:
-    print(f"\n{BOLD}[제안 #{p['id']}] ({p['status']}){RESET}")
+def print_error(e: PlannerApiError) -> None:
+    print(f"오류 {e.status} {e.code}: {e.message}")
+
+
+def print_proposal(p: dict, no: int | None = None) -> None:
+    label = f"카드 {no} · " if no else ""
+    state = p["status"] + (f"/{p['decision']}" if p.get("decision") else "")
+    print(f"\n{BOLD}[{label}변경 제안 #{p['id']}] ({state}){RESET}")
     for ch in p.get("changes", []):
         print(f"  - {ch['message']}")
-    if p.get("error"):
-        print(f"  ! {p['error']}")
     after = p.get("after")
     if after:
         errors = [v for v in after["violations"] if v["severity"] == "error"]
@@ -201,6 +204,23 @@ def print_proposal(p: dict) -> None:
         print(f"  검증: error {len(errors)} · warning {len(warns)}")
         for v in errors + warns:
             print(f"    [{'E' if v['severity'] == 'error' else 'W'}] {v['message']}")
+    if p["status"] == "pending" and p.get("base_changed"):
+        print(f"  {DIM}! 이 제안 이후 일정이 바뀌었어요 (승인 시 확인){RESET}")
+
+
+def print_recommendation(r: dict, no: int | None = None) -> None:
+    label = f"카드 {no} · " if no else ""
+    print(f"\n{BOLD}[{label}장소 추천 #{r['id']}] {r['title']}{RESET}")
+    for n, c in enumerate(r["candidates"], start=1):
+        title = (c["place"] or {}).get("title", c["place_id"])
+        when = f"{c['day']}일차" + (f" {c['time_hint']}쯤" if c["time_hint"] else "")
+        state = STATE[c["state"]]
+        if c["item"]:
+            state += f" · {c['item']['start_at'] or '건너뜀'}"
+        other = f" (다른 날: {', '.join(map(str, c['other_days']))}일차)" if c["other_days"] else ""
+        print(f"  {n}. {title}  {when}  {BUTTON[c['state']]} {state}{other}")
+        if c["reason"]:
+            print(f"     {DIM}{c['reason']}{RESET}")
 
 
 def cmd_proposals(c, a):
@@ -208,24 +228,84 @@ def cmd_proposals(c, a):
     if not rows:
         print("제안이 없습니다.")
     for p in rows:
-        print(f"#{p['id']} {p['status']:<10} {p['source']:<5} {p['created_at'][:16]}  {p['summary'][:60]!r}")
+        print(f"#{p['id']} {p['status']:<10} v{p['base_version']:<3} {p['created_at'][:16]}  "
+              f"변경 {len(p['changes'])}건  {p['summary'][:50]!r}")
 
 
 def cmd_proposal(c, a):
     p = c.get_proposal(a.plan, a.proposal)
     print_proposal(p)
-    if a.full and p.get("after"):
+    if a.full:
+        print("\n--- 제안 당시 일정 ---")
+        print_plan(p["before"])
         print("\n--- 승인 시 일정 ---")
         print_plan(p["after"])
 
 
+def cmd_accept(c, a):
+    try:
+        r = c.plan_accept_proposal(a.plan, a.proposal, "overwrite" if a.overwrite else "auto")
+    except PlannerApiError as e:
+        if e.code != "base_changed":
+            raise
+        print_base_changed(e)
+        print("카드 일정 그대로 반영하려면 --overwrite 를 붙이세요.")
+        return
+    print(f"제안 #{a.proposal} 반영됨 ({r['proposal']['decision']})\n")
+    print_plan(r["plan"])
+
+
+def cmd_reject(c, a):
+    c.plan_reject_proposal(a.plan, a.proposal)
+    print(f"제안 #{a.proposal} 거절됨")
+
+
+def cmd_recs(c, a):
+    rows = c.list_recommendations(a.plan)
+    if not rows:
+        print("추천이 없습니다.")
+    for r in rows:
+        print_recommendation(r)
+
+
+def cmd_rec(c, a):
+    print_recommendation(c.get_recommendation(a.plan, a.rec))
+
+
+def _rec_action(c, a, action):
+    r = c.plan_candidate(a.plan, a.rec, a.candidate, action)
+    print_recommendation(r["recommendation"])
+
+
+def cmd_rec_add(c, a):
+    _rec_action(c, a, "add")
+
+
+def cmd_rec_remove(c, a):
+    _rec_action(c, a, "remove")
+
+
+def print_base_changed(e: PlannerApiError) -> None:
+    d = e.detail
+    print(f"\n{BOLD}이 제안 이후 일정이 바뀌었어요{RESET} (제안 v{d['base_version']} → 지금 v{d['current_version']})")
+    if d["since_proposal"]:
+        print("  그대로 반영하면 사라지는 변경:")
+        for ch in d["since_proposal"]:
+            print(f"    - {ch['message']}")
+    print("  카드 일정으로 바꾸면:")
+    for ch in d["overwrite_effect"]:
+        print(f"    - {ch['message']}")
+
+
 class ChatPrinter:
-    """SSE 이벤트를 터미널에 실시간으로 그린다."""
+    """SSE 이벤트를 터미널에 실시간으로 그린다. 단계는 진행 중엔 [..], 끝나면 [v] 로 같은 줄을 갱신한다."""
 
     def __init__(self, show_thinking: bool):
         self.show_thinking = show_thinking
         self.line_start = True
         self.thinking = False
+        self.step_open = False  # 진행 중 단계 줄이 열려 있음 (줄바꿈 전)
+        self.cards: list[dict] = []
 
     def _out(self, s: str) -> None:
         sys.stdout.write(s)
@@ -234,13 +314,16 @@ class ChatPrinter:
             self.line_start = s.endswith("\n")
 
     def _newline(self) -> None:
+        if self.step_open:
+            self._out("\n")
+            self.step_open = False
         if not self.line_start:
             self._out("\n")
 
     def handle(self, event: str, d: dict) -> None:
         if event != "thinking" and self.thinking:
             self.thinking = False
-            if self.show_thinking:  # "(생각 중…)" 한 줄만 찍은 경우엔 이미 줄이 끝나 있다
+            if self.show_thinking:
                 self._out(RESET)
                 self._newline()
         if event == "thinking":
@@ -254,28 +337,65 @@ class ChatPrinter:
                 self._newline()
                 self._out(f"{DIM}(생각 중…){RESET}\n")
                 self.thinking = True
-        elif event == "text":
-            self._out(d["delta"])
-        elif event == "tool_call":
+        elif event == "status":
             self._newline()
-            args = d["arguments"] if len(d["arguments"]) < 120 else d["arguments"][:117] + "..."
-            self._out(f"{DIM}  · {TOOL_LABELS.get(d['name'], d['name'])} {args}{RESET}")
-        elif event == "tool_result":
-            self._out(f"{DIM} → {'ok' if d['ok'] else '실패'}: {d['summary']}{RESET}\n")
+            self._out(f"{BOLD}{d['text']}{RESET}\n")
+        elif event == "step":
+            mark = {"running": "[..]", "done": "[v]", "error": "[x]"}[d["status"]]
+            line = f"  {mark} {d['title']}" + (f" · {d['detail']}" if d["detail"] else "")
+            if d["status"] == "running":
+                if not self.step_open:
+                    self._newline()
+                self._out(CLEAR + DIM + line + RESET)
+                self.step_open = True
+            else:
+                self._out(CLEAR + line + "\n")
+                self.step_open = False
+        elif event == "text":
+            if self.step_open:
+                self._newline()
+            self._out(d["delta"])
         elif event == "proposal":
             self._newline()
+            self.cards.append({"type": "proposal", "proposal": d})
             print_proposal(d)
-            print(f"{DIM}  /accept 로 반영, /reject 로 거절, 말로 더 고칠 수도 있어요.{RESET}")
+            print(f"{DIM}  /accept 반영 · /reject 거절 · /detail 전체 일정 · 말로 더 고칠 수도 있어요{RESET}")
             self.line_start = True
+        elif event == "recommendation":
+            self._newline()
+            self.cards.append({"type": "recommendation", "recommendation": d})
+            print_recommendation(d)
+            print(f"{DIM}  /add <번호> 일정에 추가 · /remove <번호> 빼기{RESET}")
+            self.line_start = True
+        elif event == "steps_done":
+            self._newline()
+            self._out(f"{DIM}[v] {d['summary']}{RESET}\n")
         elif event == "error":
             self._newline()
-            self._out(f"오류: {d['message']}\n")
+            self._out(f"오류 ({d['code']}): {d['message']}\n")
         elif event == "done":
             self._newline()
 
 
-def _pending(c, sid: str) -> dict | None:
-    return c.get_session(sid).get("pending_proposal")
+def _session_cards(c, sid: str) -> list[dict]:
+    return [card for m in c.get_session(sid)["messages"] for card in m["cards"]]
+
+
+def _pick(cards: list[dict], kind: str, arg: str | None) -> dict | None:
+    """카드번호(1부터, 세션 전체 기준)로 고르거나, 생략하면 그 종류의 가장 최근 카드."""
+    if arg:
+        n = int(arg)
+        if not 1 <= n <= len(cards) or cards[n - 1]["type"] != kind:
+            print(f"카드 {n} 은(는) {'변경 제안' if kind == 'proposal' else '장소 추천'} 카드가 아닙니다. /cards 로 확인하세요.")
+            return None
+        return cards[n - 1][kind]
+    found = [card[kind] for card in cards if card["type"] == kind]
+    if not found:
+        print("해당 카드가 없습니다.")
+        return None
+    if kind == "proposal":  # 제안은 대기 중인 것 중 가장 최근을 우선
+        found = [p for p in found if p["status"] == "pending"] or found
+    return found[-1]
 
 
 def cmd_chat(c, a):
@@ -287,36 +407,61 @@ def cmd_chat(c, a):
     detail = c.get_session(sid)
     plan_id = detail["plan_id"]
     print(f"{BOLD}Planner Agent{RESET} — 계획 #{plan_id}, 세션 {sid} ({c.agent_info()['provider']})")
-    print(f"{DIM}/plan 일정 보기 · /proposal 대기 제안 · /accept · /reject · /exit{RESET}")
+    print(f"{DIM}/plan · /cards · /detail [n] · /accept [n] [overwrite] · /reject [n] · /repropose [n] · "
+          f"/add <i> · /remove <i> · /exit{RESET}")
     for m in detail["messages"][-6:]:
         who = "나" if m["role"] == "user" else "Agent"
         print(f"{DIM}{who}> {m['content']}{RESET}")
-    if detail["pending_proposal"]:
-        print_proposal(detail["pending_proposal"])
+        if m.get("steps_summary"):
+            print(f"{DIM}  [v] {m['steps_summary']}{RESET}")
 
-    def send(text: str) -> None:
+    def stream(events) -> None:
         printer = ChatPrinter(a.thinking)
         print(f"{BOLD}Agent>{RESET} ", end="", flush=True)
         try:
-            for event, data in c.chat_stream(sid, text):
+            for event, data in events:
                 printer.handle(event, data)
         except KeyboardInterrupt:
             print("\n(중단)")
         except httpx.HTTPError as e:  # 스트림이 끊겨도 대화는 계속
             print(f"\n연결 오류: {e!r}")
 
-    def decide(accept: bool) -> None:
-        pending = _pending(c, sid)
-        if not pending:
-            print("대기 중인 제안이 없습니다.")
+    def accept(arg: str | None, overwrite: bool) -> None:
+        p = _pick(_session_cards(c, sid), "proposal", arg)
+        if not p:
             return
-        if accept:
-            r = c.accept_proposal(sid, pending["id"])
-            print(f"제안 #{pending['id']} 반영됨\n")
-            print_plan(r["plan"])
-        else:
-            c.reject_proposal(sid, pending["id"])
-            print(f"제안 #{pending['id']} 거절됨 (일정 그대로)")
+        try:
+            r = c.accept_proposal(sid, p["id"], "overwrite" if overwrite else "auto")
+        except PlannerApiError as e:
+            if e.code != "base_changed":
+                raise
+            print_base_changed(e)
+            print("  1) 카드에서 본 일정 그대로 반영   2) 현재 일정에 맞춰 다시 제안   3) 취소")
+            try:
+                choice = input("선택> ").strip()
+            except EOFError:
+                choice = "3"
+            if choice == "1":
+                r = c.accept_proposal(sid, p["id"], "overwrite")
+            elif choice == "2":
+                stream(c.repropose_stream(sid, p["id"]))
+                return
+            else:
+                print("취소했어요.")
+                return
+        print(f"제안 #{p['id']} 반영됨 ({r['proposal']['decision']})\n")
+        print_plan(r["plan"])
+
+    def candidate(arg: str | None, action: str) -> None:
+        rec = _pick(_session_cards(c, sid), "recommendation", None)
+        if not rec:
+            return
+        if not arg or not arg.isdigit() or not 1 <= int(arg) <= len(rec["candidates"]):
+            print(f"후보 번호를 1~{len(rec['candidates'])} 중에서 주세요. 예) /{action} 1")
+            return
+        cand = rec["candidates"][int(arg) - 1]
+        r = c.candidate(sid, rec["id"], cand["id"], action)
+        print_recommendation(r["recommendation"])
 
     queue = list(a.message or [])
     while True:
@@ -333,27 +478,50 @@ def cmd_chat(c, a):
                 return
         if not line:
             continue
+        cmd, *args = line.split()
+        arg = args[0] if args and args[0].isdigit() else None
         try:
-            if line in ("/exit", "/quit"):
+            if cmd in ("/exit", "/quit"):
                 return
-            elif line == "/plan":
+            elif cmd == "/plan":
                 print_plan(c.get_plan(plan_id))
-            elif line == "/proposal":
-                p = _pending(c, sid)
+            elif cmd == "/cards":
+                cards = _session_cards(c, sid)
+                if not cards:
+                    print("카드가 없습니다.")
+                for n, card in enumerate(cards, start=1):
+                    if card["type"] == "proposal":
+                        print_proposal(card["proposal"], n)
+                    else:
+                        print_recommendation(card["recommendation"], n)
+            elif cmd == "/detail":
+                p = _pick(_session_cards(c, sid), "proposal", arg)
                 if p:
-                    print_proposal(p)
-                else:
-                    print("대기 중인 제안이 없습니다.")
-            elif line == "/accept":
-                decide(True)
-            elif line == "/reject":
-                decide(False)
-            elif line.startswith("/"):
-                print("명령: /plan /proposal /accept /reject /exit")
+                    print("\n--- 제안 당시 일정 ---")
+                    print_plan(p["before"])
+                    print("\n--- 승인 시 일정 ---")
+                    print_plan(p["after"])
+            elif cmd == "/accept":
+                accept(arg, "overwrite" in args)
+            elif cmd == "/reject":
+                p = _pick(_session_cards(c, sid), "proposal", arg)
+                if p:
+                    c.reject_proposal(sid, p["id"])
+                    print(f"제안 #{p['id']} 거절됨 (일정 그대로)")
+            elif cmd == "/repropose":
+                p = _pick(_session_cards(c, sid), "proposal", arg)
+                if p:
+                    stream(c.repropose_stream(sid, p["id"]))
+            elif cmd in ("/add", "/remove"):
+                candidate(args[0] if args else None, cmd[1:])
+            elif cmd.startswith("/"):
+                print("명령: /plan /cards /detail [n] /accept [n] [overwrite] /reject [n] /repropose [n] "
+                      "/add <i> /remove <i> /exit")
             else:
-                send(line)
+                stream(c.chat_stream(sid, line))
         except PlannerApiError as e:
-            print(f"오류 {e.status}: {e.detail}")
+            print_error(e)
+
 
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(prog="planner", description="GuryongMate Planner CLI")
@@ -453,7 +621,33 @@ def build_parser() -> argparse.ArgumentParser:
     p = add("proposal", cmd_proposal, "제안 상세 (변경 요약·검증)")
     p.add_argument("plan", type=int)
     p.add_argument("proposal", type=int)
-    p.add_argument("--full", action="store_true", help="승인 시 일정 전체 출력")
+    p.add_argument("--full", action="store_true", help="제안 당시·승인 시 일정 전체 출력")
+
+    p = add("accept", cmd_accept, "제안 승인 (planner 직접. 대화 기록에는 안 남음)")
+    p.add_argument("plan", type=int)
+    p.add_argument("proposal", type=int)
+    p.add_argument("--overwrite", action="store_true", help="일정이 바뀌었어도 카드의 일정 그대로 반영")
+
+    p = add("reject", cmd_reject, "제안 거절 (planner 직접)")
+    p.add_argument("plan", type=int)
+    p.add_argument("proposal", type=int)
+
+    p = add("recs", cmd_recs, "장소 추천 카드 목록 (후보 상태 포함)")
+    p.add_argument("plan", type=int)
+
+    p = add("rec", cmd_rec, "장소 추천 카드")
+    p.add_argument("plan", type=int)
+    p.add_argument("rec", type=int)
+
+    p = add("rec-add", cmd_rec_add, "추천 후보를 일정에 추가 (planner 직접)")
+    p.add_argument("plan", type=int)
+    p.add_argument("rec", type=int)
+    p.add_argument("candidate", type=int, help="후보 id")
+
+    p = add("rec-remove", cmd_rec_remove, "추천 후보를 일정에서 빼기 (planner 직접)")
+    p.add_argument("plan", type=int)
+    p.add_argument("rec", type=int)
+    p.add_argument("candidate", type=int, help="후보 id")
 
     p = add("chat", cmd_chat, "Planner Agent 와 대화 (계획의 최근 세션을 이어서)")
     p.add_argument("plan", type=int)
@@ -475,7 +669,7 @@ def run(ap: argparse.ArgumentParser, argv: list[str], client: PlannerClient | No
     try:
         a.fn(c, a)
     except PlannerApiError as e:
-        print(f"오류 {e.status}: {json.dumps(e.detail, ensure_ascii=False) if not isinstance(e.detail, str) else e.detail}")
+        print_error(e)
     except Exception as e:  # 연결 실패 등
         print(f"오류: {e}")
 

@@ -1,23 +1,47 @@
-"""agent 모듈 공개 스키마 (앱·CLI 계약).
+"""agent 공개 스키마 (앱·CLI 계약). 명세: docs/agent/README.md
 
 채팅 스트림(SSE) 이벤트 — `event: <이름>` / `data: <JSON>`
-    start        {"session_id"}
-    thinking     {"delta"}                         모델의 추론 과정 (모델이 지원할 때만, 표시는 선택)
-    text         {"delta"}                         답변 텍스트 조각. 오는 대로 이어 붙여 표시
-    tool_call    {"id", "name", "arguments"}       도구 호출 시작 (예: "장소 검색 중…" 표시)
-    tool_result  {"id", "name", "ok", "summary"}
-    proposal     ProposalDetail (planner)          일정 변경 제안. changes/before/after 로 비교 카드 표시
-    done         {"text", "proposal_id"}           턴 종료
-    error        {"message"}                       오류 (이 뒤로 이벤트 없음)
+    start          {"session_id"}
+    status         {"text"}                                진행 영역 맨 위 한 줄
+    step           Step                                    같은 id 면 그 줄을 갱신
+    thinking       {"delta"}                               모델 추론 (지원 모델만)
+    text           {"delta"}                               답변 조각
+    proposal       ProposalDetail (planner)                변경 제안 카드
+    recommendation RecommendationView (planner)            장소 추천 카드
+    steps_done     {"count", "summary"}                    진행 영역을 한 줄로 접기
+    done           {"text", "cards": [{"type", "id"}], "usage"}  턴 종료 (usage: LLM 토큰 사용량, 모니터링용)
+    error          {"code", "message"}                     오류 (이 뒤로 이벤트 없음)
 """
 from datetime import datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+StepKind = Literal["search", "place", "plan", "edit", "rule", "review", "recommend", "proposal"]
 
-class SessionCreate(BaseModel):
+
+class Strict(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class SessionCreate(Strict):
     plan_id: int
+
+
+class ChatRequest(Strict):
+    message: str = Field(min_length=1, max_length=4000, pattern=r"\S", description="공백만 있는 메시지는 거부")
+
+
+class AcceptRequest(Strict):
+    mode: Literal["auto", "overwrite"] = "auto"
+
+
+class Step(BaseModel):
+    id: str
+    kind: StepKind
+    status: Literal["running", "done", "error"]
+    title: str
+    detail: str = ""
 
 
 class SessionView(BaseModel):
@@ -30,39 +54,32 @@ class SessionView(BaseModel):
 
 
 class MessageView(BaseModel):
-    """화면에 보일 메시지 (도구 호출 내부 기록·숨김 알림은 제외)."""
+    """화면에 보일 메시지 (도구 실행 기록·숨김 알림은 제외)."""
 
     id: int
     role: Literal["user", "assistant"]
     content: str
-    proposal_id: int | None = None
     created_at: datetime
+    steps: list[Step] = []
+    steps_summary: str | None = None
+    cards: list[dict[str, Any]] = Field(
+        [], description='[{"type": "proposal", "proposal": ProposalDetail} | {"type": "recommendation", '
+                        '"recommendation": RecommendationView}] — 조회 시점의 상태')
 
 
 class SessionDetail(SessionView):
     messages: list[MessageView]
-    pending_proposal: dict[str, Any] | None = Field(None, description="승인 대기 중인 제안 (planner ProposalDetail)")
-
-
-class ChatRequest(BaseModel):
-    message: str = Field(min_length=1, max_length=4000, pattern=r"\S", description="공백만 있는 메시지는 거부")
-
-
-class ToolCallLog(BaseModel):
-    id: str
-    name: str
-    arguments: str
-    ok: bool
-    summary: str
 
 
 class ChatResult(BaseModel):
     """stream=false 일 때의 응답 (스트림 이벤트를 모은 것)."""
 
     text: str
-    tool_calls: list[ToolCallLog]
-    proposal: dict[str, Any] | None = None
-    error: str | None = None
+    steps: list[Step]
+    steps_summary: str | None
+    cards: list[dict[str, Any]]
+    error: dict[str, str] | None = None
+    usage: dict[str, int] | None = Field(None, description="이 턴의 LLM 토큰 사용량 (input, cached, output, reasoning, calls)")
 
 
 class AgentInfo(BaseModel):

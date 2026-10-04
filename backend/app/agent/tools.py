@@ -1,14 +1,17 @@
 """Planner Agent 의 도구.
 
 - 조회 도구(search_places, get_place, view_plan)는 바로 실행한다.
-- 변경 도구는 계획을 바로 바꾸지 않는다. 이번 대화의 초안(Draft.ops)에 연산을 쌓고, planner 미리보기 API 로
-  적용 결과를 계산해 LLM 에 돌려준다. 턴이 끝나면 하네스가 초안을 제안(Proposal)으로 만들고,
-  사용자가 승인해야 실제로 반영된다.
+- 변경 도구는 계획을 바로 바꾸지 않는다. 이번 턴의 초안(Draft.ops)에 연산을 쌓고, planner preview 로
+  적용 결과를 계산해 LLM 에 돌려준다. 턴이 끝나면 하네스가 초안을 제안(Proposal)으로 만든다.
+- recommend_places 는 추천 카드를 바로 만든다 (사용자가 후보를 골라 직접 추가하므로 초안과 무관).
+
+각 도구 결과에는 앱의 처리 단계 표시용 정보(kind, detail)가 붙는다. 문구는 LLM 이 아니라 여기서 만든다.
 """
 import json
 from dataclasses import dataclass, field
 
 from app.agent.api import ApiError, ServiceApi
+from app.agent.review import review, summarize
 
 CONTENT_TYPES = ["관광지", "음식점", "문화시설", "쇼핑", "레포츠", "숙박", "축제공연행사"]
 RULE_TYPES = ["must_include", "exclude", "end_before", "max_travel_minutes"]
@@ -35,7 +38,10 @@ TOOL_SPECS = [
         "place_id": {"type": "string"},
     }, ["place_id"]),
     _fn("view_plan", "현재 일정(이번 대화에서 제안 중인 변경 포함)을 시간표와 위반 사항과 함께 본다."),
-    _fn("add_item", "일정에 장소를 추가한다 (제안에 포함, 사용자 승인 후 반영). "
+    _fn("review_plan", "지금 초안 일정을 검토해 문제 목록을 받는다: 운영시간·휴무, 종료 시각 초과, 긴 이동, "
+                       "식사 시간에 식당 없음, 중복, 사용자 규칙 위반. 일정을 바꾼 뒤 답하기 전에 반드시 호출하고, "
+                       "문제를 고친 뒤 다시 호출해 확인한다."),
+    _fn("add_item", "일정에 장소를 추가한다 (변경 제안에 포함, 사용자 승인 후 반영). "
                     "시각은 앞 일정에 이어 자동 계산된다. 시각 고정이 꼭 필요하면 추가 후 update_item 으로.", {
         "place_id": {"type": "string", "description": "search_places 로 찾은 id"},
         "day": {"type": "integer", "description": "n일차 (1부터, 기본 1)"},
@@ -74,17 +80,36 @@ TOOL_SPECS = [
     }, ["type"]),
     _fn("remove_rule", "규칙을 삭제한다.", {"rule_id": {"type": "integer"}}, ["rule_id"]),
     _fn("discard_changes", "이번 대화에서 제안 중인 변경을 모두 취소하고 현재 확정 일정으로 되돌린다."),
+    _fn("recommend_places", "사용자가 직접 골라 넣을 장소 후보를 추천 카드로 보여준다 (바로 표시됨). "
+                            "'추천해줘', '갈 만한 곳 알려줘'처럼 사용자가 고르고 싶어 할 때 쓴다. "
+                            "사용자가 카드에서 후보마다 [추가]를 누르면 일정에 들어간다.", {
+        "title": {"type": "string", "description": "카드 제목 (예: 비 올 때 갈 만한 실내 장소)"},
+        "candidates": {"type": "array", "description": "1~10개", "items": {"type": "object", "properties": {
+            "place_id": {"type": "string", "description": "search_places 로 찾은 id"},
+            "day": {"type": "integer", "description": "넣을 n일차 (기본 1)"},
+            "time_hint": {"type": "string", "description": "이 시각 무렵에 넣으면 좋음 HH:MM (선택)"},
+            "stay_minutes": {"type": "integer", "description": "체류 시간(분), 기본 60"},
+            "reason": {"type": "string", "description": "추천 이유 한 줄"},
+        }, "required": ["place_id"]}},
+    }, ["title", "candidates"]),
 ]
 
-MUTATING = {"add_item", "update_item", "remove_item", "update_plan", "add_rule", "remove_rule", "discard_changes"}
+# 도구 -> 처리 단계 종류
+STEP_KIND = {
+    "search_places": "search", "get_place": "place", "view_plan": "plan", "review_plan": "review",
+    "add_item": "edit", "update_item": "edit", "remove_item": "edit", "update_plan": "edit", "discard_changes": "edit",
+    "add_rule": "rule", "remove_rule": "rule", "recommend_places": "recommend",
+}
 
 
 @dataclass
 class Draft:
-    """이번 세션의 제안 초안. base_proposal_id 는 이어서 수정 중인 대기 제안."""
+    """이번 턴의 제안 초안.
+    base_proposal_id: 새 제안이 대체할 이전 대기 제안. continued: 그 제안의 ops 에서 이어서 시작했는지."""
 
     ops: list[dict] = field(default_factory=list)
     base_proposal_id: int | None = None
+    continued: bool = False
     changed: bool = False
 
 
@@ -92,13 +117,14 @@ class Draft:
 class ToolOutcome:
     ok: bool
     content: str  # LLM 에 돌려줄 내용 (JSON 문자열)
-    summary: str  # 앱·CLI 에 보여줄 한 줄
+    detail: str  # 처리 단계에 보여줄 짧은 결과
     history: str | None = None  # 대화 기록에 남길 짧은 형태 (없으면 content). 일정 스냅샷이 기록에 쌓이지 않게
+    card: dict | None = None  # 이 도구가 만든 카드 {"type", "<type>": 내용}
 
 
 # ---------- LLM 에 보여줄 압축 표현 ----------
 
-def compact_plan(plan: dict, changes: list[dict] | None = None, pending: int = 0) -> dict:
+def compact_plan(plan: dict, changes: list[str] | None = None, pending: int = 0) -> dict:
     days = []
     for d in plan["days"]:
         items = []
@@ -131,6 +157,26 @@ def compact_plan(plan: dict, changes: list[dict] | None = None, pending: int = 0
     return out
 
 
+def total_travel(plan: dict) -> int:
+    return sum(i["travel_minutes"] or 0 for d in plan["days"] for i in d["items"])
+
+
+def _item_title(plan: dict, item_id: int) -> str:
+    for d in plan["days"]:
+        for i in d["items"]:
+            if i["id"] == item_id:
+                return i["place"]["title"] if i["place"] else i["place_id"]
+    return f"항목 {item_id}"
+
+
+def _place_title(plan: dict, place_id: str) -> str:
+    for d in plan["days"]:
+        for i in d["items"]:
+            if i["place_id"] == place_id and i["place"]:
+                return i["place"]["title"]
+    return place_id
+
+
 def _blank(v) -> bool:
     return v is None or str(v).strip().lower() in ("", "none", "null")
 
@@ -140,17 +186,23 @@ def _dump(obj) -> str:
 
 
 class Toolbox:
-    def __init__(self, api: ServiceApi, plan_id: int, draft: Draft):
+    def __init__(self, api: ServiceApi, plan_id: int, draft: Draft, session_id: str):
         self.api = api
         self.plan_id = plan_id
         self.draft = draft
+        self.session_id = session_id
+        self.last_plan: dict | None = None  # 가장 최근의 (초안 적용) 일정 — 단계 문구·이동시간 변화 계산용
+        self.rev = 0  # 초안이 바뀔 때마다 +1
+        self.reviewed_rev = 0  # 마지막으로 검토한 초안의 rev
 
     async def current_view(self) -> dict:
-        """초안이 있으면 초안 적용 결과, 없으면 확정 일정."""
+        """초안이 있으면 초안 적용 결과, 없으면 확정 일정 (LLM 용 압축 표현). last_plan 도 갱신한다."""
         if self.draft.ops:
             r = await self.api.preview(self.plan_id, self.draft.ops)
+            self.last_plan = r["plan"]
             return compact_plan(r["plan"], [c["message"] for c in r["changes"]], len(self.draft.ops))
-        return compact_plan(await self.api.get_plan(self.plan_id))
+        self.last_plan = await self.api.get_plan(self.plan_id)
+        return compact_plan(self.last_plan)
 
     async def call(self, name: str, raw_args: str) -> ToolOutcome:
         try:
@@ -168,7 +220,7 @@ class Toolbox:
         except (TypeError, ValueError, KeyError) as e:
             return ToolOutcome(False, _dump({"error": f"인자가 잘못됐습니다: {e}"}), "인자 오류")
         except ApiError as e:
-            return ToolOutcome(False, _dump({"error": e.message}), f"실패: {e.message[:80]}")
+            return ToolOutcome(False, _dump({"error": e.message, "code": e.code}), e.message[:60])
 
     # ----- 조회 -----
     async def _t_search_places(self, query: str = "", content_type: str = "", area: str = "", near_place_id: str = "",
@@ -186,7 +238,9 @@ class Toolbox:
         out: dict = {"items": items}
         if not items:
             out["hint"] = "결과가 없습니다. 다른 표현이나 content_type/area 만으로 다시 찾아보세요."
-        return ToolOutcome(True, _dump(out), f"{len(items)}건")
+            return ToolOutcome(True, _dump(out), "결과 없음")
+        detail = items[0]["title"] + (f" 외 {len(items) - 1}곳" if len(items) > 1 else "")
+        return ToolOutcome(True, _dump(out), detail)
 
     async def _t_get_place(self, place_id: str) -> ToolOutcome:
         p = await self.api.get_place(place_id)
@@ -197,20 +251,41 @@ class Toolbox:
         return ToolOutcome(True, _dump(out), p["title"])
 
     async def _t_view_plan(self) -> ToolOutcome:
-        return ToolOutcome(True, _dump(await self.current_view()), "일정 조회",
+        view = await self.current_view()
+        count = sum(len(d["items"]) for d in view["days"])
+        return ToolOutcome(True, _dump(view), f"일정 {count}곳",
                            history=_dump({"result": "(당시 일정 조회 결과 생략. 최신 일정은 시스템 프롬프트 참고)"}))
 
     # ----- 변경 (초안에 쌓음) -----
+    async def review_now(self) -> list[dict]:
+        """지금 초안을 검토 (하네스의 검토 관문도 이걸 쓴다)."""
+        await self.current_view()
+        self.reviewed_rev = self.rev
+        return review(self.last_plan)
+
+    async def _t_review_plan(self) -> ToolOutcome:
+        issues = await self.review_now()
+        blocking = [i for i in issues if i["level"] in ("must", "should")]
+        result = ("문제 없음. 답변해도 된다." if not blocking else
+                  "must 는 반드시, should 는 가능하면 고친 뒤 review_plan 으로 다시 확인한다. "
+                  "고칠 수 없는 문제는 답변에서 이유를 짧게 말한다.")
+        return ToolOutcome(True, _dump({"result": result, "issues": issues}), summarize(issues))
+
     async def _stage(self, op: dict, label: str, notice: str = "") -> ToolOutcome:
         candidate = [*self.draft.ops, op]
         r = await self.api.preview(self.plan_id, candidate)  # 적용 불가면 ApiError -> 초안에 넣지 않음
+        before_travel = total_travel(self.last_plan) if self.last_plan else None
         self.draft.ops = candidate
         self.draft.changed = True
+        self.rev += 1
+        self.last_plan = r["plan"]
         changes = [c["message"] for c in r["changes"]]
         view = compact_plan(r["plan"], changes, len(candidate))
-        note = "제안 초안에 반영됨 (아직 실제 일정 아님. 응답이 끝나면 사용자에게 승인 요청됨)" + notice
+        note = "변경 제안 초안에 반영됨 (아직 실제 일정 아님. 응답이 끝나면 사용자에게 승인 요청됨)" + notice
         short = {"result": note, "changes": changes, "violations": view["violations"]}
-        return ToolOutcome(True, _dump({"result": note, "plan_after": view}), label, history=_dump(short))
+        delta = total_travel(r["plan"]) - before_travel if before_travel is not None else 0
+        detail = label + (f" · 총 이동 {delta:+d}분" if delta else "")
+        return ToolOutcome(True, _dump({"result": note, "plan_after": view}), detail, history=_dump(short))
 
     async def _t_add_item(self, place_id: str, day: int = 1, order: int | None = None, stay_minutes: int = 60,
                           memo: str = "", **ignored) -> ToolOutcome:
@@ -218,11 +293,17 @@ class Toolbox:
         op = {"op": "add_item", "place_id": place_id, "day": day, "order": order, "stay_minutes": stay_minutes,
               "memo": memo}
         notice = ""
+        if self.last_plan and 1 <= day <= len(self.last_plan["days"]) and any(
+                i["place_id"] == place_id for i in self.last_plan["days"][day - 1]["items"]):
+            notice = f". 주의: 이 장소는 이미 {day}일차 일정에 있어 중복으로 들어갔다 (의도가 아니면 remove_item)"
         if ignored:
-            notice = f". 무시된 인자: {sorted(ignored)}"
+            notice += f". 무시된 인자: {sorted(ignored)}"
             if "start_time" in ignored:
                 notice += " (시작 시각 고정은 update_item 으로만 할 수 있다)"
-        return await self._stage(op, f"추가 {place_id} ({day}일차)", notice)
+        outcome = await self._stage(op, "", notice)
+        title = _place_title(self.last_plan, place_id)
+        outcome.detail = f"{title} 추가" + outcome.detail
+        return outcome
 
     async def _t_update_item(self, item_id: int, **changes) -> ToolOutcome:
         allowed = {"day", "order", "stay_minutes", "start_time", "memo", "status"}
@@ -233,10 +314,13 @@ class Toolbox:
             raise TypeError("바꿀 값을 하나 이상 지정하세요")
         if "start_time" in changes and _blank(changes["start_time"]):
             changes["start_time"] = None
-        return await self._stage({"op": "update_item", "item_id": item_id, **changes}, f"수정 항목 {item_id}")
+        outcome = await self._stage({"op": "update_item", "item_id": item_id, **changes}, "")
+        outcome.detail = f"{_item_title(self.last_plan, item_id)} 수정" + outcome.detail
+        return outcome
 
     async def _t_remove_item(self, item_id: int) -> ToolOutcome:
-        return await self._stage({"op": "remove_item", "item_id": item_id}, f"삭제 항목 {item_id}")
+        title = _item_title(self.last_plan, item_id) if self.last_plan else f"항목 {item_id}"
+        return await self._stage({"op": "remove_item", "item_id": item_id}, f"{title} 삭제")
 
     async def _t_update_plan(self, **changes) -> ToolOutcome:
         allowed = {"title", "start_date", "end_date", "day_start", "day_end", "travel_mode"}
@@ -249,13 +333,47 @@ class Toolbox:
         if set(params) - allowed:
             raise TypeError(f"알 수 없는 인자 {sorted(set(params) - allowed)}")
         op = {"op": "add_constraint", "type": type, "params": params, "hard": hard, "source": "llm", "note": note}
-        return await self._stage(op, f"규칙 추가 {type}")
+        outcome = await self._stage(op, "")
+        name = _place_title(self.last_plan, params.get("place_id", "")) if "place_id" in params else ""
+        outcome.detail = {
+            "must_include": f"'{name}' 꼭 포함", "exclude": f"'{name}' 제외",
+            "end_before": f"{params.get('time')} 전 종료", "max_travel_minutes": f"이동 {params.get('minutes')}분 이내",
+        }.get(type, type)
+        return outcome
 
     async def _t_remove_rule(self, rule_id: int) -> ToolOutcome:
-        return await self._stage({"op": "remove_constraint", "constraint_id": rule_id}, f"규칙 삭제 {rule_id}")
+        return await self._stage({"op": "remove_constraint", "constraint_id": rule_id}, "조건 삭제")
 
     async def _t_discard_changes(self) -> ToolOutcome:
         self.draft.ops = []
         self.draft.changed = True
-        return ToolOutcome(True, _dump({"result": "제안 중인 변경을 모두 취소했습니다.",
-                                        "plan": await self.current_view()}), "변경 취소")
+        self.rev += 1
+        view = await self.current_view()
+        return ToolOutcome(True, _dump({"result": "제안 중인 변경을 모두 취소했습니다.", "plan": view}), "변경 취소",
+                           history=_dump({"result": "제안 중인 변경을 모두 취소했습니다."}))
+
+    # ----- 추천 카드 (바로 생성) -----
+    async def _t_recommend_places(self, title: str, candidates: list) -> ToolOutcome:
+        if not isinstance(candidates, list) or not candidates:
+            raise ValueError("candidates 는 1개 이상인 목록이어야 합니다")
+        cleaned = []
+        for c in candidates:
+            if not isinstance(c, dict) or "place_id" not in c:
+                raise ValueError("각 후보는 place_id 가 있는 객체여야 합니다")
+            keep = {k: c[k] for k in ("place_id", "day", "time_hint", "stay_minutes", "reason")
+                    if not _blank(c.get(k))}
+            keep.setdefault("day", 1)
+            cleaned.append(keep)
+        rec = await self.api.create_recommendation(self.plan_id, str(title)[:100] or "추천", cleaned, self.session_id)
+        # place_id 까지 남겨야 다음 턴에 "이렇게 코스 짜줘"를 다시 검색하지 않고 바로 처리할 수 있다
+        summary = [{"place_id": c["place_id"], "title": (c["place"] or {}).get("title", c["place_id"]), "day": c["day"],
+                    **({"time_hint": c["time_hint"]} if c["time_hint"] else {}), "stay_minutes": c["stay_minutes"],
+                    "state": c["state"]} for c in rec["candidates"]]
+        content = {"result": "추천 카드를 사용자에게 보여줬다. 사용자가 원하는 후보를 직접 추가한다 (승인 절차 없음).",
+                   "candidates": summary}
+        return ToolOutcome(True, _dump(content), f"{len(rec['candidates'])}곳",
+                           card={"type": "recommendation", "recommendation": rec})
+
+
+def tool_specs(review_enabled: bool) -> list[dict]:
+    return TOOL_SPECS if review_enabled else [t for t in TOOL_SPECS if t["function"]["name"] != "review_plan"]

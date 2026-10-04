@@ -1,6 +1,7 @@
 """GuryongMate API 클라이언트 (planner·places·agent). CLI 가 쓰고, 다른 Python 도구에서도 재사용할 수 있다.
 
-메서드는 API 응답 JSON(dict)을 그대로 돌려준다. 오류는 PlannerApiError.
+메서드는 API 응답 JSON(dict)을 그대로 돌려준다. 오류는 PlannerApiError (code·message·detail).
+명세: docs/planner/README.md, docs/agent/README.md
 """
 import json
 from collections.abc import Iterator
@@ -11,26 +12,54 @@ import httpx
 
 class PlannerApiError(RuntimeError):
     def __init__(self, status: int, detail: Any):
-        super().__init__(f"HTTP {status}: {detail}")
         self.status = status
-        self.detail = detail
+        self.detail = detail if isinstance(detail, dict) else {"code": "error", "message": str(detail)}
+        super().__init__(f"HTTP {status} {self.code}: {self.message}")
+
+    @property
+    def code(self) -> str:
+        return self.detail.get("code", "error")
+
+    @property
+    def message(self) -> str:
+        return self.detail.get("message", "")
 
 
 class PlannerClient:
     def __init__(self, base_url: str = "http://127.0.0.1:8000", user_id: str = "demo", timeout: float = 10):
         self._http = httpx.Client(base_url=base_url, headers={"X-User-Id": user_id}, timeout=timeout)
 
+    @staticmethod
+    def _detail(resp: httpx.Response) -> Any:
+        try:
+            body = resp.json()
+        except ValueError:
+            return resp.text
+        return body.get("detail", body) if isinstance(body, dict) else body
+
     def _req(self, method: str, path: str, **kw) -> Any:
         resp = self._http.request(method, path, **kw)
         if resp.is_error:
-            try:
-                detail = resp.json().get("detail", resp.text)
-            except ValueError:
-                detail = resp.text
-            raise PlannerApiError(resp.status_code, detail)
+            raise PlannerApiError(resp.status_code, self._detail(resp))
         return None if resp.status_code == 204 else resp.json()
 
-    # ----- 장소 (places 모듈) -----
+    def _stream(self, path: str, body: dict | None = None) -> Iterator[tuple[str, dict]]:
+        """SSE 이벤트를 (이름, 데이터) 로 오는 대로 내준다."""
+        with self._http.stream("POST", path, json=body, timeout=httpx.Timeout(10, read=None)) as resp:
+            if resp.is_error:
+                resp.read()
+                raise PlannerApiError(resp.status_code, self._detail(resp))
+            event, data = "message", []
+            for line in resp.iter_lines():
+                if line.startswith("event:"):
+                    event = line[6:].strip()
+                elif line.startswith("data:"):
+                    data.append(line[5:].strip())
+                elif not line and data:
+                    yield event, json.loads("\n".join(data))
+                    event, data = "message", []
+
+    # ----- 장소 (places) -----
     def search_places(self, q: str | None = None, tags: list[str] | None = None, content_type: str | None = None,
                       area: str | None = None, lat: float | None = None, lng: float | None = None,
                       radius_m: float | None = None, limit: int = 20) -> dict:
@@ -89,12 +118,28 @@ class PlannerClient:
     def delete_constraint(self, plan_id: int, constraint_id: int) -> dict:
         return self._req("DELETE", f"/planner/plans/{plan_id}/constraints/{constraint_id}")
 
-    # ----- 제안 (planner) -----
+    # ----- 변경 제안 (planner 직접) -----
     def list_proposals(self, plan_id: int, status: str | None = None) -> list[dict]:
         return self._req("GET", f"/planner/plans/{plan_id}/proposals", params={"status": status} if status else None)
 
     def get_proposal(self, plan_id: int, proposal_id: int) -> dict:
         return self._req("GET", f"/planner/plans/{plan_id}/proposals/{proposal_id}")
+
+    def plan_accept_proposal(self, plan_id: int, proposal_id: int, mode: str = "auto") -> dict:
+        return self._req("POST", f"/planner/plans/{plan_id}/proposals/{proposal_id}/accept", json={"mode": mode})
+
+    def plan_reject_proposal(self, plan_id: int, proposal_id: int) -> dict:
+        return self._req("POST", f"/planner/plans/{plan_id}/proposals/{proposal_id}/reject")
+
+    # ----- 장소 추천 (planner 직접) -----
+    def list_recommendations(self, plan_id: int) -> list[dict]:
+        return self._req("GET", f"/planner/plans/{plan_id}/recommendations")
+
+    def get_recommendation(self, plan_id: int, rec_id: int) -> dict:
+        return self._req("GET", f"/planner/plans/{plan_id}/recommendations/{rec_id}")
+
+    def plan_candidate(self, plan_id: int, rec_id: int, cand_id: int, action: str) -> dict:
+        return self._req("POST", f"/planner/plans/{plan_id}/recommendations/{rec_id}/candidates/{cand_id}/{action}")
 
     # ----- Agent -----
     def agent_info(self) -> dict:
@@ -110,28 +155,18 @@ class PlannerClient:
         return self._req("GET", f"/agent/sessions/{session_id}")
 
     def chat_stream(self, session_id: str, message: str) -> Iterator[tuple[str, dict]]:
-        """SSE 이벤트를 (이름, 데이터) 로 오는 대로 내준다. 이벤트 종류는 backend/app/agent/schemas.py 참고."""
-        with self._http.stream("POST", f"/agent/sessions/{session_id}/chat", json={"message": message},
-                               timeout=httpx.Timeout(10, read=None)) as resp:
-            if resp.is_error:
-                resp.read()
-                try:
-                    detail = resp.json().get("detail", resp.text)
-                except ValueError:
-                    detail = resp.text
-                raise PlannerApiError(resp.status_code, detail)
-            event, data = "message", []
-            for line in resp.iter_lines():
-                if line.startswith("event:"):
-                    event = line[6:].strip()
-                elif line.startswith("data:"):
-                    data.append(line[5:].strip())
-                elif not line and data:
-                    yield event, json.loads("\n".join(data))
-                    event, data = "message", []
+        return self._stream(f"/agent/sessions/{session_id}/chat", {"message": message})
 
-    def accept_proposal(self, session_id: str, proposal_id: int) -> dict:
-        return self._req("POST", f"/agent/sessions/{session_id}/proposals/{proposal_id}/accept")
+    def accept_proposal(self, session_id: str, proposal_id: int, mode: str = "auto") -> dict:
+        """409 base_changed 면 PlannerApiError (detail 에 since_proposal·overwrite_effect)."""
+        return self._req("POST", f"/agent/sessions/{session_id}/proposals/{proposal_id}/accept", json={"mode": mode})
 
     def reject_proposal(self, session_id: str, proposal_id: int) -> dict:
         return self._req("POST", f"/agent/sessions/{session_id}/proposals/{proposal_id}/reject")
+
+    def repropose_stream(self, session_id: str, proposal_id: int) -> Iterator[tuple[str, dict]]:
+        return self._stream(f"/agent/sessions/{session_id}/proposals/{proposal_id}/repropose")
+
+    def candidate(self, session_id: str, rec_id: int, cand_id: int, action: str) -> dict:
+        """action: add | remove"""
+        return self._req("POST", f"/agent/sessions/{session_id}/recommendations/{rec_id}/candidates/{cand_id}/{action}")
