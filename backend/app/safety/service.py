@@ -287,9 +287,12 @@ class SafetyService:
         prepared = []
         for v in req.visits:
             lat, lng, label, notes, indoor = v.lat, v.lng, v.label, [], v.indoor
+            if v.path is not None:  # 이동 경로: 장소를 찾지 않는다. 차 안은 실내처럼 (비·바람은 참고까지)
+                lat, lng = v.path[0]
+                indoor = v.mode == "car"
             if indoor is None and v.content_type:
                 indoor = v.content_type in risk.INDOOR_TYPES
-            if v.place_id and (lat is None or lng is None or indoor is None):
+            if v.path is None and v.place_id and (lat is None or lng is None or indoor is None):
                 try:
                     p = self.places.get(v.place_id)
                 except PlacesUnavailable as e:
@@ -308,7 +311,7 @@ class SafetyService:
             end = datetime.combine(v.date, v.end, KST) if v.end else start + timedelta(minutes=60)
             prepared.append((v, lat, lng, label, notes, indoor, start, end,
                              risk.classify(start, end, now, last, fc.ok)))
-        if any(v.place_id for v, *_ in prepared):
+        if any(v.place_id and v.path is None for v, *_ in prepared):
             data["places"] = SourceStatus(ok=place_error is None, error=place_error)
 
         # 필요한 데이터만 부른다 (먼 날짜만 있으면 실측·특보는 부르지 않는다)
@@ -324,7 +327,13 @@ class SafetyService:
 
         results = []
         for v, lat, lng, label, notes, indoor, start, end, t in prepared:
-            sens = risk.sensitivity(lat, lng)
+            pts = geo.densify(v.path) if v.path is not None else None
+            if pts is not None:
+                sens = risk.path_sensitivity(pts)
+                if v.mode == "car":
+                    sens &= {"flood"}  # 차는 방파제에 들어가지 않는다. 침수 구역(잠긴 길)은 그대로
+            else:
+                sens = risk.sensitivity(lat, lng)
             hazards: list[Hazard] = []
             sensor_hz: list[Hazard] = []
             # 장소 조회 장애로 좌표를 모르면 방파제·침수 구역 여부를 판단할 수 없다 -> 낮게 판단하지 않고 판단 보류
@@ -342,8 +351,8 @@ class SafetyService:
                         missing = True
                 if lat is not None and sensors is not None:
                     if sensors.ok and sensors.value:
-                        sensor_hz = risk.sensor_hazards(sensors.value, lat, lng, sensors.fetched_at)
-                        if t.horizon == "now" and risk.sensor_unknown_near(sensors.value, lat, lng):
+                        sensor_hz = risk.sensor_hazards(sensors.value, lat, lng, sensors.fetched_at, pts)
+                        if t.horizon == "now" and risk.sensor_unknown_near(sensors.value, lat, lng, pts):
                             missing = True  # 반경 안 센서가 등급을 주지 않음
                     elif t.horizon == "now" and "flood" in sens:
                         missing = True
@@ -351,7 +360,8 @@ class SafetyService:
                     hazards += sensor_hz
                     if lat is not None and "breakwater" in sens:
                         if bw is not None and bw.ok and bw.value is not None:
-                            hazards += risk.breakwater_hazards(bw.value, risk.nearest_breakwater_side(lat, lng), now)
+                            at = next((q for q in pts if geo.zones_at(q, geo.BREAKWATERS)), (lat, lng)) if pts else (lat, lng)
+                            hazards += risk.breakwater_hazards(bw.value, risk.nearest_breakwater_side(*at), now)
                         else:
                             missing = True  # 방파제 CCTV 를 받지 못함
             hazards.sort(key=lambda h: -risk.ORDER.index(h.level))
@@ -383,11 +393,14 @@ class SafetyService:
                 searched = True
                 better = self._better_times(fc.value, end - start, sens, bool(indoor), active, now, sensor_hz)
             results.append(VisitAssessment(
-                key=v.key, place_id=v.place_id, label=label, start=start, end=end, indoor=indoor,
+                key=v.key, kind="travel" if v.path is not None else "visit", mode=v.mode,
+                place_id=v.place_id, label=label, start=start, end=end, indoor=None if v.path is not None else indoor,
                 horizon=t.horizon, forecast_available=t.forecast_available, confidence=t.confidence, risk=level,
                 unassessed_reason=unassessed, data_missing=missing, hazards=hazards,
-                sensitivity=[risk.SENS_LABEL[s] for s in sorted(sens)] + (["실내"] if indoor else []), notes=notes,
-                advice=risk.visit_advice(t, level, sens, now, start, hazards, missing, bool(indoor), better, searched),
+                sensitivity=[risk.SENS_LABEL[s] for s in sorted(sens)] + (["실내"] if indoor and v.path is None else []),
+                notes=notes,
+                advice=risk.visit_advice(t, level, sens, now, start, hazards, missing, bool(indoor), better, searched,
+                                         travel=v.mode),
                 better_times=[TimeWindow(start=a, end=b, has_info=info) for a, b, info in better],
                 recheck_from=t.recheck_from))
         if tides:

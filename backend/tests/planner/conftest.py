@@ -38,10 +38,18 @@ class FakeLookup:
 fake = FakeLookup()
 
 
+class RoadEstimate(travel.EstimateTravel):
+    """직선거리 근사값을 '실제 길(road)' 로 표시한다. 시간 기대값은 고정하면서 travel_estimated 경고는 내지 않게."""
+
+    def legs(self, pairs, mode):
+        return [travel.TravelLeg(g.minutes, g.distance_m, "road") for g in super().legs(pairs, mode)]
+
+
 @pytest.fixture(autouse=True, scope="session")
 def _estimate_travel():
-    """이동시간 기대값을 고정하기 위해 routing 대신 직선거리 근사를 쓴다 (routing 연동은 tests/routing)."""
-    saved, travel._lookup = travel._lookup, travel.EstimateTravel()
+    """이동시간 기대값을 고정하기 위해 routing 대신 직선거리 근사를 쓴다 (routing 연동은 tests/routing).
+    근사 구간 경고(travel_estimated)는 test_travel_modes.py 에서 따로 확인한다."""
+    saved, travel._lookup = travel._lookup, RoadEstimate()
     yield
     travel._lookup = saved
 

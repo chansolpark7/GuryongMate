@@ -6,10 +6,20 @@ import re
 from datetime import time, timedelta
 
 from app.planner.models import PlannerConstraint, PlannerItem, PlannerPlan
-from app.planner.schemas import DayView, ItemView, PlaceInfo, Violation
+from app.planner.schemas import DayView, ItemView, PlaceInfo, TravelOption, Violation
 from app.planner.travel import TravelLeg, estimate_leg
 
 WEEKDAYS = "월화수목금토일"
+MODES = ("walk", "car")
+MODE_LABEL = {"walk": "도보", "car": "차량"}
+# 기본 검사 기준. 같은 종류의 사용자 규칙(max_walk_minutes, max_daily_walk_minutes)이 있으면 그 규칙으로만 본다
+LONG_WALK_MIN = 30  # 도보 구간 하나
+DAILY_WALK_MIN = 90  # 하루 도보 합계
+
+
+def leg_mode(plan: PlannerPlan, item: PlannerItem) -> str:
+    """직전 장소에서 이 항목까지 오는 수단. 항목에 정한 값, 없으면 계획 기본."""
+    return item.travel_mode or plan.travel_mode
 
 
 def to_min(t: time) -> int:
@@ -74,19 +84,28 @@ def travel_pairs(plan: PlannerPlan, places: dict[str, PlaceInfo | None]) -> list
     return pairs
 
 
-TravelTable = dict[tuple[str, str], TravelLeg]  # (출발 place_id, 도착 place_id) -> 이동
+TravelTable = dict[tuple[str, str, str], TravelLeg]  # (출발 place_id, 도착 place_id, 수단) -> 이동
+
+
+class Leg:
+    """구간 하나 (직전 장소 -> item). 검증 규칙이 쓴다."""
+
+    def __init__(self, item: PlannerItem, day: int, mode: str, options: dict[str, TravelLeg], name: str):
+        self.item, self.day, self.mode, self.options, self.name = item, day, mode, options, name
+        self.leg = options[mode]
 
 
 def build_schedule(
     plan: PlannerPlan, places: dict[str, PlaceInfo | None], travel: TravelTable | None = None,
 ) -> tuple[list[DayView], list[Violation]]:
     """plan.items 를 날짜별로 배치해 도착·시작·종료 시각을 계산하고 위반 목록을 만든다.
-    이동시간은 travel (travel_pairs 의 구간을 routing 에 물은 결과) 에서 찾고, 없으면 직선거리로 근사한다."""
+    이동시간은 travel (travel_pairs 의 구간을 수단별로 routing 에 물은 결과) 에서 찾고, 없으면 직선거리로 근사한다.
+    구간 수단은 항목마다 다를 수 있다 (leg_mode). 비교용으로 도보·차량 시간을 모두 붙인다."""
     travel = travel or {}
     violations: list[Violation] = []
     days: list[DayView] = []
     day_start, day_end = to_min(plan.day_start), to_min(plan.day_end)
-    legs: list[tuple[PlannerItem, int]] = []  # (도착 항목, 이동분) — 이동시간 규칙 검사용
+    legs: list[Leg] = []  # 이동 규칙 검사용
 
     for d in range(1, plan.num_days + 1):
         date = plan.start_date + timedelta(days=d - 1)
@@ -102,13 +121,15 @@ def build_schedule(
                 violations.append(Violation(code="place_unavailable", severity="warning", day=d, item_id=it.id,
                                             message=f"장소 '{it.place_id}' 정보를 불러오지 못해 이동시간을 계산하지 않았습니다."))
             if it.status == "skipped":
-                views.append(_view(it, place, None, None, None, None))
+                views.append(_view(it, place, None, None, None, None, None, None))
                 continue
 
-            leg = None
+            leg = mode = options = None
             if prev is not None and place is not None:
-                leg = travel.get((prev.id, place.id)) or estimate_leg(prev, place, plan.travel_mode)
-                legs.append((it, leg.minutes))
+                options = {m: travel.get((prev.id, place.id, m)) or estimate_leg(prev, place, m) for m in MODES}
+                mode = leg_mode(plan, it)
+                leg = options[mode]
+                legs.append(Leg(it, d, mode, options, name))
             arrive = cursor + (leg.minutes if leg else 0)
             start = arrive
             if it.start_time is not None:
@@ -131,7 +152,7 @@ def build_schedule(
                         code="outside_open_hours", severity="warning", day=d, item_id=it.id,
                         message=f"'{name}' 방문 {fmt(start)}~{fmt(end)} 이 운영시간({fmt(hours[0])}~{fmt(hours[1])}) 밖입니다."))
 
-            views.append(_view(it, place, leg, arrive, start, end))
+            views.append(_view(it, place, leg, arrive, start, end, mode, options))
             cursor = last_end = end
             prev = place if place is not None else prev
 
@@ -142,17 +163,62 @@ def build_schedule(
         days.append(DayView(day=d, date=date, weekday=WEEKDAYS[date.weekday()],
                             end_at=fmt(last_end) if last_end is not None else None, items=views))
 
+    violations.extend(_check_travel(plan, legs))
     for c in plan.constraints:
         violations.extend(_check_constraint(c, plan, days, legs, places))
     return days, violations
 
 
-def _view(it: PlannerItem, place, leg: TravelLeg | None, arrive, start, end) -> ItemView:
+def _check_travel(plan: PlannerPlan, legs: list[Leg]) -> list[Violation]:
+    """이동 기본 검사: 긴 도보 구간, 하루 도보 합계, 직선거리로 추정한 구간. 이미 다녀온 항목으로 간 이동은 뺀다."""
+    out: list[Violation] = []
+    legs = [g for g in legs if g.item.status != "done"]
+    rules = {c.type for c in plan.constraints}
+    if "max_walk_minutes" not in rules:
+        for g in legs:
+            if g.mode == "walk" and g.leg.minutes > LONG_WALK_MIN:
+                car = g.options["car"]
+                out.append(Violation(
+                    code="long_walk", severity="warning", day=g.day, item_id=g.item.id,
+                    message=f"'{g.name}' 까지 도보 {g.leg.minutes}분입니다 ({LONG_WALK_MIN}분 초과). "
+                            f"차량이면 약 {car.minutes}분이라 이 구간만 차량으로 바꿀 수 있습니다."))
+    if "max_daily_walk_minutes" not in rules:
+        for d, total in _daily_walk(legs).items():
+            if total > DAILY_WALK_MIN:
+                out.append(Violation(
+                    code="daily_walk_total", severity="warning", day=d,
+                    message=f"{d}일차 도보 이동이 모두 {total}분입니다 ({DAILY_WALK_MIN}분 초과). "
+                            "먼 구간을 차량으로 바꾸거나 가까운 장소로 묶으세요."))
+    estimated: dict[int, list[Leg]] = {}
+    for g in legs:
+        if g.leg.source == "estimate" and g.leg.minutes > 0:
+            estimated.setdefault(g.day, []).append(g)
+    for d, gs in estimated.items():
+        names = ", ".join(f"'{g.name}'" for g in gs[:3]) + (" 등" if len(gs) > 3 else "")
+        out.append(Violation(
+            code="travel_estimated", severity="warning", day=d, item_id=gs[0].item.id,
+            message=f"{d}일차 {names} 까지 이동 {len(gs)}구간은 길찾기를 쓰지 못해 직선거리로 추정했습니다. "
+                    "실제 시간과 다를 수 있습니다."))
+    return out
+
+
+def _daily_walk(legs: list[Leg]) -> dict[int, int]:
+    total: dict[int, int] = {}
+    for g in legs:
+        if g.mode == "walk":
+            total[g.day] = total.get(g.day, 0) + g.leg.minutes
+    return total
+
+
+def _view(it: PlannerItem, place, leg: TravelLeg | None, arrive, start, end, mode, options) -> ItemView:
     return ItemView(
         id=it.id, day=it.day, order=it.position, place_id=it.place_id, place=place,
         stay_minutes=it.stay_minutes, start_time=it.start_time, memo=it.memo, status=it.status,
+        travel_mode=it.travel_mode, leg_mode=mode,
         travel_minutes=leg and leg.minutes, travel_distance_m=leg and leg.distance_m,
         travel_source=leg and leg.source,
+        travel_options={m: TravelOption(minutes=o.minutes, distance_m=o.distance_m, source=o.source)
+                        for m, o in options.items()} if options else None,
         arrive_at=None if arrive is None else fmt(arrive),
         start_at=None if start is None else fmt(start),
         end_at=None if end is None else fmt(end),
@@ -160,8 +226,8 @@ def _view(it: PlannerItem, place, leg: TravelLeg | None, arrive, start, end) -> 
 
 
 def _check_constraint(
-    c: PlannerConstraint, plan: PlannerPlan, days: list[DayView],
-    legs: list[tuple[PlannerItem, int]], places: dict[str, PlaceInfo | None],
+    c: PlannerConstraint, plan: PlannerPlan, days: list[DayView], legs: list[Leg],
+    places: dict[str, PlaceInfo | None],
 ) -> list[Violation]:
     sev = "error" if c.hard else "warning"
     p = c.params
@@ -187,7 +253,16 @@ def _check_constraint(
                 out.append(v(f"{d.day}일차 일정이 {d.end_at} 에 끝나 {p['time']} 전 종료 규칙을 어깁니다.", day=d.day))
         return out
     elif c.type == "max_travel_minutes":
-        return [v(f"'{_name(places.get(i.place_id), i.place_id)}' 까지 이동 {m}분으로 상한 {p['minutes']}분을 넘습니다.",
-                  day=i.day, item_id=i.id)
-                for i, m in legs if m > p["minutes"]]
+        return [v(f"'{g.name}' 까지 이동 {g.leg.minutes}분({MODE_LABEL[g.mode]})으로 상한 {p['minutes']}분을 넘습니다.",
+                  day=g.day, item_id=g.item.id)
+                for g in legs if g.leg.minutes > p["minutes"]]
+    elif c.type == "max_walk_minutes":
+        legs = [g for g in legs if g.item.status != "done"]
+        return [v(f"'{g.name}' 까지 도보 {g.leg.minutes}분으로 도보 상한 {p['minutes']}분을 넘습니다. "
+                  f"차량이면 약 {g.options['car'].minutes}분입니다.", day=g.day, item_id=g.item.id)
+                for g in legs if g.mode == "walk" and g.leg.minutes > p["minutes"]]
+    elif c.type == "max_daily_walk_minutes":
+        legs = [g for g in legs if g.item.status != "done"]
+        return [v(f"{d}일차 도보 이동이 모두 {total}분으로 하루 도보 상한 {p['minutes']}분을 넘습니다.", day=d)
+                for d, total in _daily_walk(legs).items() if total > p["minutes"]]
     return []

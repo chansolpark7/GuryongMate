@@ -113,6 +113,16 @@ def classify(start: datetime, end: datetime, now: datetime, forecast_last: datet
     return Timing("long_range", "none", False, recheck)
 
 
+def path_sensitivity(points: list[tuple[float, float]], flood_zones=geo.STATIC_FLOOD_ZONES) -> set[str]:
+    """경로(촘촘히 한 점들)가 지나는 장소 성질의 합."""
+    out: set[str] = set()
+    for p in points:
+        out |= sensitivity(*p, flood_zones=flood_zones)
+        if out == {"breakwater", "flood"}:
+            break
+    return out
+
+
 def sensitivity(lat: float | None, lng: float | None, flood_zones=geo.STATIC_FLOOD_ZONES) -> set[str]:
     if lat is None or lng is None:
         return set()
@@ -275,10 +285,13 @@ def sensor_risk(r: SensorReading) -> tuple[str, str | None]:
     return "none", None
 
 
-def sensor_hazards(readings: list[SensorReading], lat: float, lng: float, at: datetime | None) -> list[Hazard]:
+def sensor_hazards(readings: list[SensorReading], lat: float, lng: float, at: datetime | None,
+                   points: list[tuple[float, float]] | None = None) -> list[Hazard]:
+    """반경 안 침수 센서의 실측 근거. points 를 주면 경로의 어느 점이든 반경 안이면 본다."""
+    pts = points or [(lat, lng)]
     out = []
     for r in readings:
-        if r.type not in geo.FLOOD_SENSOR_TYPES or geo.distance_m((lat, lng), (r.lat, r.lng)) > geo.FLOOD_RADIUS_M:
+        if r.type not in geo.FLOOD_SENSOR_TYPES or not geo.near_any(pts, (r.lat, r.lng), geo.FLOOD_RADIUS_M):
             continue
         lv, why = sensor_risk(r)
         if why and lv in ORDER and lv != "none":
@@ -286,10 +299,12 @@ def sensor_hazards(readings: list[SensorReading], lat: float, lng: float, at: da
     return out
 
 
-def sensor_unknown_near(readings: list[SensorReading], lat: float, lng: float) -> bool:
+def sensor_unknown_near(readings: list[SensorReading], lat: float, lng: float,
+                        points: list[tuple[float, float]] | None = None) -> bool:
     """반경 안 침수 센서 중 등급 값이 없는 것이 있는지 (있으면 그 근거로는 판단할 수 없다)."""
+    pts = points or [(lat, lng)]
     return any(r.type in geo.FLOOD_SENSOR_TYPES and r.level is None
-               and geo.distance_m((lat, lng), (r.lat, r.lng)) <= geo.FLOOD_RADIUS_M for r in readings)
+               and geo.near_any(pts, (r.lat, r.lng), geo.FLOOD_RADIUS_M) for r in readings)
 
 
 def breakwater_hazards(rows: list[BreakwaterHour], side: str, now: datetime) -> list[Hazard]:
@@ -345,8 +360,12 @@ def windows_text(wins: list[tuple[datetime, datetime, bool]]) -> str:
 
 def visit_advice(t: Timing, risk: Level | None, sens: set[str], now: datetime, start: datetime,
                  hazards: list[Hazard], data_missing: bool, indoor: bool = False,
-                 better: list[tuple[datetime, datetime, bool]] | None = None, searched: bool = False) -> str:
-    """risk: 3단계 또는 None(판단하지 않음). searched: 다른 시간대를 찾아봤는지 (예보가 있어 찾을 수 있었을 때만 True)."""
+                 better: list[tuple[datetime, datetime, bool]] | None = None, searched: bool = False,
+                 travel: str | None = None) -> str:
+    """risk: 3단계 또는 None(판단하지 않음). searched: 다른 시간대를 찾아봤는지 (예보가 있어 찾을 수 있었을 때만 True).
+    travel: 이동 경로 평가면 수단 (walk | car). 문구를 '방문' 대신 '이동' 으로 바꾼다."""
+    if travel and t.horizon not in ("past", "medium_range", "long_range") and risk is not None:
+        return _travel_advice(t, risk, sens, hazards, travel, better)
     sens_txt = ", ".join(SENS_LABEL[s] for s in sorted(sens))
     if t.horizon == "past":
         return "이미 지난 시간이라 평가하지 않았다."
@@ -383,6 +402,23 @@ def visit_advice(t: Timing, risk: Level | None, sens: set[str], now: datetime, s
     if hazards:  # safe 인데 참고(info) 신호가 있다
         return f"안전 단계지만 참고할 것: {top}. 일정을 바꿀 정도는 아니며, 일정을 짤 때 참고하면 된다."
     return f"{forecast_word}상 특별한 위험 신호가 없다." + (" 예보는 바뀔 수 있다." if t.horizon == "short_range" else "")
+
+
+def _travel_advice(t: Timing, risk: Level, sens: set[str], hazards: list[Hazard], mode: str,
+                   better: list[tuple[datetime, datetime, bool]] | None) -> str:
+    top = "; ".join(h.reason for h in hazards[:3])
+    hedge = " 예보는 바뀔 수 있으니 단정하지 마라." if t.horizon == "short_range" else ""
+    where = ", ".join(SENS_LABEL[s] for s in sorted(sens)) or "야외"
+    how = "걸어서" if mode == "walk" else "차로"
+    if risk in ("danger", "caution"):
+        alt = f" 이 경로에 신호가 없는 시간대: {windows_text(better)}." if better else ""
+        fix = ("다른 길로 돌아가거나(우회), 이동 시간을 바꾸거나, 차량으로 바꾸는 것을 제안하라." if mode == "walk"
+               else "다른 길로 돌아가거나 이동 시간을 바꾸는 것을 제안하라.")
+        head = "위험" if risk == "danger" else "주의"
+        return f"{head}: {how} 이동하는 경로가 {where}을(를) 지난다. {top}. {fix}" + alt + hedge
+    if hazards:
+        return f"이동은 안전 단계지만 참고할 것: {top}. 일정을 바꿀 정도는 아니다."
+    return f"{how} 이동하는 경로에 특별한 위험 신호가 없다." + (" 예보는 바뀔 수 있다." if t.horizon == "short_range" else "")
 
 
 def assess_guidance(horizons: list[Horizon], risks: list[Level | None], recheck: date | None,

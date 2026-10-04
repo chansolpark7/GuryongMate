@@ -112,3 +112,18 @@ def zone_polygon(zone: Zone, radius_m: float | None = None) -> list[tuple[float,
 
 def zones_at(p: tuple[float, float], zones) -> list[Zone]:
     return [z for z in zones if distance_to_zone(p, z) <= z.radius_m]
+
+
+def densify(path: list[tuple[float, float]], step_m: float = 20) -> list[tuple[float, float]]:
+    """경로 (lat, lng) 점 사이를 step_m 이하 간격으로 채운다 (구역 반경보다 촘촘해야 지나가는 구역을 놓치지 않는다)."""
+    if len(path) < 2:
+        return list(path)
+    out = [path[0]]
+    for a, b in zip(path, path[1:]):
+        n = max(1, math.ceil(distance_m(a, b) / step_m))
+        out += [(a[0] + (b[0] - a[0]) * k / n, a[1] + (b[1] - a[1]) * k / n) for k in range(1, n + 1)]
+    return out
+
+
+def near_any(points: list[tuple[float, float]], target: tuple[float, float], radius_m: float) -> bool:
+    return any(distance_m(p, target) <= radius_m for p in points)

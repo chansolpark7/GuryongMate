@@ -51,7 +51,16 @@ def print_plan(p: dict) -> None:
         rows = []
         for i in d["items"]:
             place = i["place"]["title"] if i["place"] else "(정보 없음)"
-            move = "-" if i["travel_minutes"] is None else f"{i['travel_minutes']}분/{i['travel_distance_m']}m"
+            move = "-"
+            if i["travel_minutes"] is not None:
+                mode = {"walk": "도보", "car": "차량"}.get(i.get("leg_mode"), "")
+                approx = "약 " if i.get("travel_source") == "estimate" else ""
+                move = f"{mode} {approx}{i['travel_minutes']}분/{i['travel_distance_m']}m"
+                other = {"walk": "car", "car": "walk"}.get(i.get("leg_mode"))
+                if other and (i.get("travel_options") or {}).get(other):
+                    move += f" ({'차량' if other == 'car' else '도보'} {i['travel_options'][other]['minutes']}분)"
+                if i.get("travel_mode"):
+                    move += " *"  # 이 구간만 수단을 정함
             span = "건너뜀" if i["status"] == "skipped" else f"{i['start_at']}~{i['end_at']}"
             notes = [f"{i['start_time']} 고정"] if i["start_time"] else []
             if i["status"] not in ("planned", "skipped"):
@@ -60,7 +69,7 @@ def print_plan(p: dict) -> None:
                 notes.append(i["memo"])
             rows.append([str(i["order"]), str(i["id"]), i["arrive_at"] or "-", span, f"{i['stay_minutes']}분", move,
                          f"{place} [{i['place_id']}]", " · ".join(notes)])
-        table(["순서", "id", "도착", "시간", "체류", "이동", "장소", "비고"], rows)
+        table(["순서", "id", "도착", "시간", "체류", "이동 (* 구간 지정)", "장소", "비고"], rows)
     if p["constraints"]:
         print("\n 규칙")
         for c in p["constraints"]:
@@ -138,7 +147,7 @@ def cmd_place(c, a):
 
 
 def cmd_add(c, a):
-    print_plan(c.add_item(a.plan, a.place_id, a.day, a.order, a.stay, a.at, a.memo))
+    print_plan(c.add_item(a.plan, a.place_id, a.day, a.order, a.stay, a.at, a.memo, a.mode))
 
 
 def cmd_edit(c, a):
@@ -146,9 +155,38 @@ def cmd_edit(c, a):
                                  "status": a.status}.items() if v is not None}
     if a.at is not None:
         changes["start_time"] = None if a.at.lower() == "none" else a.at
+    if a.mode is not None:
+        changes["travel_mode"] = None if a.mode == "default" else a.mode
     if not changes:
-        raise SystemExit("바꿀 값을 하나 이상 지정하세요 (--day/--order/--stay/--at/--memo/--status).")
+        raise SystemExit("바꿀 값을 하나 이상 지정하세요 (--day/--order/--stay/--at/--memo/--status/--mode).")
     print_plan(c.update_item(a.plan, a.item, **changes))
+
+
+LEVEL = {"safe": "안전", "caution": "주의", "danger": "위험", None: "판단 안 함"}
+
+
+def cmd_safety(c, a):
+    r = c.check_safety(a.plan)
+    print(f"안전 점검 ({r['checked_at'][:16]}): 전체 {LEVEL[r['overall_risk']]}  {r['counts']}")
+    for i in r["items"]:
+        what = f"이동({'도보' if i['mode'] == 'walk' else '차량'}) {i['title']}" if i["kind"] == "travel" else i["title"]
+        level = LEVEL[i["risk"]] + (f"({i['unassessed_reason']})" if i["risk"] is None else "")
+        print(f"  {i['day']}일차 {i['start_at']}~{i['end_at']} {what} — {level}")
+        for h in i["hazards"][:3]:
+            print(f"      [{h['level']}] {h['reason']}")
+        if i["detour"]:
+            print(f"      우회하면 {i['detour']['detour_minutes']}분 더: {', '.join(i['detour']['avoided'])}")
+    print(f"\n{r['guidance']}")
+
+
+def cmd_alerts(c, a):
+    alerts = c.safety_alerts(a.plan, a.status)
+    if not alerts:
+        print("경고 없음")
+    for x in alerts:
+        print(f"#{x['id']} {x['created_at'][:16]} [{x['status']}] {LEVEL[x['level']]}"
+              + (" (조치 필요)" if x["needs_action"] else ""))
+        print("   " + x["message"].replace("\n", "\n   "))
 
 
 def cmd_rm(c, a):
@@ -628,6 +666,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--stay", type=int, default=60, help="체류 시간(분)")
     p.add_argument("--at", help="시작 시각 고정 HH:MM")
     p.add_argument("--memo", default="")
+    p.add_argument("--mode", choices=["walk", "car"], help="직전 장소에서 여기까지 수단 (생략 시 계획 기본)")
 
     p = add("edit", cmd_edit, "일정 수정 (순서·날짜 이동·시간·상태)")
     p.add_argument("plan", type=int)
@@ -638,6 +677,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--at", help="시작 시각 고정 HH:MM, 'none' 이면 해제")
     p.add_argument("--memo")
     p.add_argument("--status", choices=["planned", "visiting", "done", "skipped"])
+    p.add_argument("--mode", choices=["walk", "car", "default"], help="여기까지 오는 수단 (default: 계획 기본으로)")
+
+    p = add("safety", cmd_safety, "안전 점검 (방문·이동 구간별 위험 단계)")
+    p.add_argument("plan", type=int)
+
+    p = add("alerts", cmd_alerts, "안전 경고 목록")
+    p.add_argument("plan", type=int)
+    p.add_argument("--status", choices=["new", "seen"])
 
     p = add("rm", cmd_rm, "일정 삭제")
     p.add_argument("plan", type=int)
@@ -648,7 +695,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = add("rule", cmd_rule, "규칙 추가  예) rule 1 end_before time=18:00 / rule 1 must_include place_id=kto-123")
     p.add_argument("plan", type=int)
-    p.add_argument("type", choices=["must_include", "exclude", "end_before", "max_travel_minutes"])
+    p.add_argument("type", choices=["must_include", "exclude", "end_before", "max_travel_minutes", "max_walk_minutes",
+                                    "max_daily_walk_minutes"])
     p.add_argument("params", nargs="*", help="key=value ...")
     p.add_argument("--soft", action="store_true", help="위반 시 warning (기본 error)")
     p.add_argument("--note", default="")

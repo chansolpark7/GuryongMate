@@ -5,7 +5,8 @@ level
 - should : 가능하면 고친다 (운영시간·휴무, 긴 이동, 식사 시간에 식당 없음, 같은 날 중복)
 - info   : 참고 (하루가 일찍 끝나 시간이 많이 남음)
 """
-LONG_TRAVEL_MIN = {"walk": 25, "car": 40}
+LONG_CAR_MIN = 40  # 차량 구간 (도보 구간은 planner 검증의 long_walk·daily_walk_total 이 본다)
+SKIP_CODES = {"place_unavailable", "travel_estimated"}  # 일정을 바꿔서 고칠 수 있는 문제가 아님
 MEALS = [("점심", 11 * 60 + 30, 13 * 60 + 30), ("저녁", 17 * 60 + 30, 19 * 60 + 30)]
 FOOD_TYPES = {"음식점"}
 SPARE_MIN = 120
@@ -30,13 +31,12 @@ def review(plan: dict) -> list[dict]:
     """plan: planner PlanDetail (dict). 반환: [{"level", "message", "item_id"?, "day"?}]"""
     issues: list[dict] = []
     for v in plan["violations"]:
-        if v["code"] == "place_unavailable":
+        if v["code"] in SKIP_CODES:
             continue
         issues.append({"level": "must" if v["severity"] == "error" else "should", "message": v["message"],
                        **({"item_id": v["item_id"]} if v.get("item_id") else {}),
                        **({"day": v["day"]} if v.get("day") else {})})
 
-    limit = LONG_TRAVEL_MIN.get(plan["travel_mode"], 25)
     day_end = _min(plan["day_end"])
     for d in plan["days"]:
         active = [i for i in d["items"] if i["status"] != "skipped"]
@@ -45,11 +45,11 @@ def review(plan: dict) -> list[dict]:
             issues.append({"level": "should", "day": d["day"], "message": f"{d['day']}일차에 일정이 하나도 없습니다."})
             continue
         for i in active:
-            if i["travel_minutes"] and i["travel_minutes"] > limit:
+            mode = i.get("leg_mode") or plan["travel_mode"]
+            if mode == "car" and i["travel_minutes"] and i["travel_minutes"] > LONG_CAR_MIN:
                 issues.append({"level": "should", "day": d["day"], "item_id": i["id"],
-                               "message": f"{d['day']}일차 '{_title(i)}'까지 이동 {i['travel_minutes']}분 "
-                                          f"({'도보' if plan['travel_mode'] == 'walk' else '차량'} {limit}분 초과). "
-                                          "가까운 곳으로 바꾸거나 순서를 조정하세요."})
+                               "message": f"{d['day']}일차 '{_title(i)}'까지 차량 이동 {i['travel_minutes']}분 "
+                                          f"({LONG_CAR_MIN}분 초과). 가까운 곳으로 바꾸거나 순서를 조정하세요."})
         seen: dict[str, int] = {}
         for i in active:
             if i["place_id"] in seen:

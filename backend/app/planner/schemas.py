@@ -12,7 +12,8 @@ HHMM = Annotated[time, PlainSerializer(lambda t: t.strftime("%H:%M"), return_typ
 
 TravelMode = Literal["walk", "car"]
 ItemStatus = Literal["planned", "visiting", "done", "skipped"]
-RuleType = Literal["must_include", "exclude", "end_before", "max_travel_minutes"]
+RuleType = Literal["must_include", "exclude", "end_before", "max_travel_minutes", "max_walk_minutes",
+                   "max_daily_walk_minutes"]
 Severity = Literal["error", "warning"]
 Source = Literal["llm", "user", "event"]
 
@@ -58,7 +59,7 @@ class PlanCreate(Strict):
     end_date: date | None = Field(None, description="생략하면 당일치기 (start_date 와 같음)")
     day_start: HHMM = Field(time(10, 0), description="매일 일정 시작 시각")
     day_end: HHMM = Field(time(18, 0), description="매일 일정 종료 목표 시각")
-    travel_mode: TravelMode = "walk"
+    travel_mode: TravelMode = Field("walk", description="구간 기본 이동 수단. 항목마다 travel_mode 로 바꿀 수 있다")
     memo: Memo = ""
 
 
@@ -81,12 +82,14 @@ class ItemCreate(Strict):
     stay_minutes: Stay = 60
     start_time: HHMM | None = Field(None, description="이 시각에 시작하도록 고정 (생략하면 자동 계산)")
     memo: Memo = ""
+    travel_mode: TravelMode | None = Field(
+        None, description="직전 장소에서 여기까지 오는 이동 수단. 생략(null)하면 계획 기본 travel_mode")
 
 
 class ItemUpdate(PartialUpdate):
-    """보낸 필드만 바꾼다. start_time 에 null 을 보내면 시각 고정을 해제한다 (null 이 허용되는 유일한 필드)."""
+    """보낸 필드만 바꾼다. null 이 허용되는 필드: start_time (시각 고정 해제), travel_mode (계획 기본 수단으로)."""
 
-    NULLABLE: ClassVar[set[str]] = {"start_time"}
+    NULLABLE: ClassVar[set[str]] = {"start_time", "travel_mode"}
 
     day: Day | None = Field(None, description="다른 날로 이동")
     order: Order | None = Field(None, description="순서 변경 (day 와 함께 주면 그 날의 해당 순서)")
@@ -94,6 +97,7 @@ class ItemUpdate(PartialUpdate):
     start_time: HHMM | None = None
     memo: Memo | None = None
     status: ItemStatus | None = None
+    travel_mode: TravelMode | None = Field(None, description="여기까지 오는 이동 수단. null 이면 계획 기본으로")
 
 
 class _PlaceRule(Strict):
@@ -114,6 +118,8 @@ RULE_PARAMS: dict[str, type[BaseModel]] = {
     "exclude": _PlaceRule,
     "end_before": _EndBefore,
     "max_travel_minutes": _MaxTravel,
+    "max_walk_minutes": _MaxTravel,
+    "max_daily_walk_minutes": _MaxTravel,
 }
 
 
@@ -122,7 +128,9 @@ class ConstraintCreate(Strict):
 
     - must_include / exclude: {"place_id": "kto-..."}
     - end_before: {"time": "18:00", "day": 1 (생략 시 매일)}
-    - max_travel_minutes: {"minutes": 20}
+    - max_travel_minutes: {"minutes": 20}         구간 이동시간 상한 (수단 무관)
+    - max_walk_minutes: {"minutes": 15}           도보 구간 하나의 상한 (예: 어르신 동행)
+    - max_daily_walk_minutes: {"minutes": 60}     하루 도보 이동 합계 상한
     """
 
     type: RuleType
@@ -204,6 +212,12 @@ class Violation(BaseModel):
     constraint_id: int | None = None
 
 
+class TravelOption(BaseModel):
+    minutes: int = Field(description="차량은 주차·승하차 5분 포함")
+    distance_m: int
+    source: Literal["road", "estimate"]
+
+
 class ItemView(BaseModel):
     id: int
     day: int
@@ -214,10 +228,14 @@ class ItemView(BaseModel):
     start_time: HHMM | None = Field(description="고정 시작 시각 (없으면 자동 계산)")
     memo: str
     status: ItemStatus
-    travel_minutes: int | None = Field(description="직전 장소에서 이동시간 (첫 일정·건너뜀은 null)")
+    travel_mode: TravelMode | None = Field(None, description="항목에 지정한 이동 수단 (null 이면 계획 기본)")
+    leg_mode: TravelMode | None = Field(None, description="직전 장소에서 여기까지 실제로 계산한 수단 (첫 일정·건너뜀은 null)")
+    travel_minutes: int | None = Field(description="직전 장소에서 이동시간 (leg_mode 기준. 첫 일정·건너뜀은 null)")
     travel_distance_m: int | None
     travel_source: Literal["road", "estimate"] | None = Field(
         None, description="road: 실제 길로 계산 / estimate: 길찾기를 못 써서 직선거리로 근사 (앱은 '약'으로 표시)")
+    travel_options: dict[TravelMode, "TravelOption"] | None = Field(
+        None, description="같은 구간을 도보·차량으로 갈 때 각각 (수단 비교용). 구간이 없으면 null")
     arrive_at: str | None = Field(description="계산된 도착 시각 HH:MM (건너뜀은 null)")
     start_at: str | None
     end_at: str | None
@@ -414,16 +432,27 @@ class SafetyWindow(BaseModel):
     has_info: bool = Field(description="참고 신호(약한 비 등)가 있는 구간인지")
 
 
-class SafetyItem(BaseModel):
-    """일정 항목 하나의 안전 점검 결과 (safety /safety/assess 결과를 일정 기준으로 정리)."""
+class SafetyDetour(BaseModel):
+    """지금(실측) 피할 위험 구역을 지나는 이동이면, 우회하면 어떻게 되는지 (routing hazards=avoid)."""
 
-    item_id: int
+    on_route: list[str] = Field(description="원래 경로가 지나는 위험 구역")
+    avoided: list[str] = Field(description="우회로 피한 구역")
+    detour_minutes: int | None = Field(description="우회하면 늘어나는 시간 (분)")
+    note: str | None = None
+
+
+class SafetyItem(BaseModel):
+    """일정 항목 하나(방문 또는 그 항목까지 오는 이동)의 안전 점검 결과."""
+
+    item_id: int = Field(description="방문 항목 id. 이동이면 도착 항목 id")
+    kind: Literal["visit", "travel"] = Field("visit", description="travel: 직전 장소에서 이 항목까지 이동 구간")
+    mode: TravelMode | None = Field(None, description="이동 수단 (travel)")
     day: int
     date: date
     place_id: str
-    title: str
-    start_at: str
-    end_at: str
+    title: str = Field(description="장소 이름. 이동이면 '출발 → 도착'")
+    start_at: str = Field(description="방문 시작 / 이동 출발 시각")
+    end_at: str = Field(description="방문 종료 / 이동 도착 시각")
     risk: SafetyLevel | None = Field(description=SAFETY_LEVEL_DOC)
     unassessed_reason: Literal["past", "beyond_forecast", "data_missing"] | None = None
     data_missing: bool = Field(False, description="근거 일부를 받지 못함. risk 가 있으면 실제로는 더 높을 수 있다")
@@ -434,6 +463,7 @@ class SafetyItem(BaseModel):
     sensitivity: list[str] = Field(description="방파제, 침수 감시 구역, 실내 등 장소 성질")
     notes: list[str] = Field(description="참고 정보 (조위·계절). 일정 변경 근거가 아니다")
     recheck_from: date | None = None
+    detour: SafetyDetour | None = Field(None, description="3시간 안 이동이 주의·위험일 때 우회 정보 (routing)")
 
 
 class SafetyCounts(BaseModel):
@@ -454,7 +484,7 @@ class SafetyCheck(BaseModel):
         description="주의·위험 항목이 있으면 그중 최고. 없는데 판단하지 않은 미래 항목이 있으면 null")
     counts: SafetyCounts
     guidance: str = Field(description="결과를 어떻게 다뤄야 하는지 (Agent 용)")
-    items: list[SafetyItem] = Field(description="방문 순서대로. 건너뜀·완료 항목과 시각을 계산할 수 없는 항목은 뺀다")
+    items: list[SafetyItem] = Field(description="일정 순서대로 (이동 → 방문). 건너뜀·완료 항목과 시각을 계산할 수 없는 항목은 뺀다")
     data_ok: dict[str, bool] = Field(description="safety 가 쓴 데이터 소스별 수신 여부")
 
 

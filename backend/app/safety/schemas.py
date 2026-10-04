@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field, model_validator
 Level = Literal["safe", "caution", "danger"]  # 위험 3단계
 HazardLevel = Literal["info", "caution", "danger"]  # 근거 등급. info 는 참고 (단계를 올리지 않음)
 Unassessed = Literal["past", "beyond_forecast", "data_missing"]
+MAX_PATH_POINTS = 5000  # 이동 경로 점 수 상한
 Horizon = Literal["past", "now", "short_range", "medium_range", "long_range"]
 Confidence = Literal["high", "medium", "low", "none"]
 
@@ -49,11 +50,21 @@ class Visit(BaseModel):
                                                   "(문화시설·음식점·쇼핑·숙박 = 실내)")
     content_type: str | None = Field(None, max_length=20, description="장소 종류 (관광지·음식점…). 주면 places 조회 없이 "
                                                                       "실내를 추정한다")
+    path: list[tuple[float, float]] | None = Field(
+        None, min_length=2, max_length=MAX_PATH_POINTS,
+        description="이동 경로 평가: (lat, lng) 점 목록 (길찾기 경로선). 주면 장소 대신 이 경로를 start~end 동안 지나는 것으로 본다")
+    mode: Literal["walk", "car"] | None = Field(
+        None, description="이동 수단 (path 와 함께). walk: 야외 기준 / car: 차 안이라 비·바람은 참고까지, 침수 구역은 그대로")
 
     @model_validator(mode="after")
     def _check(self):
-        if self.place_id is None and (self.lat is None or self.lng is None):
-            raise ValueError("place_id 또는 lat·lng 가 필요합니다.")
+        if self.path is not None:
+            if self.mode is None:
+                raise ValueError("path 를 주면 mode(walk | car) 가 필요합니다.")
+        elif self.mode is not None:
+            raise ValueError("mode 는 path(이동 경로) 와 함께만 씁니다.")
+        elif self.place_id is None and (self.lat is None or self.lng is None):
+            raise ValueError("place_id 또는 lat·lng (이동이면 path) 가 필요합니다.")
         if self.end is not None and self.end <= self.start:
             raise ValueError("end 는 start 보다 뒤여야 합니다.")
         return self
@@ -72,6 +83,8 @@ class TimeWindow(BaseModel):
 
 class VisitAssessment(BaseModel):
     key: str | None
+    kind: Literal["visit", "travel"] = Field("visit", description="travel: 이동 경로 평가 (요청에 path)")
+    mode: Literal["walk", "car"] | None = Field(None, description="이동 수단 (travel 일 때)")
     place_id: str | None
     label: str | None
     start: datetime

@@ -14,7 +14,10 @@ from app.agent.api import ApiError, ServiceApi
 from app.agent.review import review, summarize
 
 CONTENT_TYPES = ["관광지", "음식점", "문화시설", "쇼핑", "레포츠", "숙박", "축제공연행사"]
-RULE_TYPES = ["must_include", "exclude", "end_before", "max_travel_minutes"]
+RULE_TYPES = ["must_include", "exclude", "end_before", "max_travel_minutes", "max_walk_minutes",
+              "max_daily_walk_minutes"]
+MODE_DESC = ("직전 장소에서 여기까지 오는 이동 수단 (walk 도보 | car 차량). 생략하면 계획 기본 수단. "
+             "view_plan 의 travel 에 두 수단 시간이 있으니 먼 구간만 차량으로 바꿀 때 쓴다")
 
 
 def _fn(name: str, description: str, properties: dict | None = None, required: list[str] | None = None) -> dict:
@@ -48,8 +51,10 @@ TOOL_SPECS = [
         "order": {"type": "integer", "description": "그날 몇 번째 (1부터). 생략하면 맨 뒤"},
         "stay_minutes": {"type": "integer", "description": "체류 시간(분), 기본 60"},
         "memo": {"type": "string", "description": "추천 이유 등 짧은 메모"},
+        "travel_mode": {"type": "string", "enum": ["walk", "car"], "description": MODE_DESC},
     }, ["place_id"]),
-    _fn("update_item", "일정 항목을 수정한다: 순서 변경, 다른 날로 이동, 체류 시간, 시작 시각 고정/해제, 메모, 상태.", {
+    _fn("update_item", "일정 항목을 수정한다: 순서 변경, 다른 날로 이동, 체류 시간, 시작 시각 고정/해제, 메모, 상태, "
+                       "여기까지 오는 이동 수단.", {
         "item_id": {"type": "integer", "description": "view_plan 의 item_id (방금 추가한 항목은 음수 임시 id)"},
         "day": {"type": "integer"},
         "order": {"type": "integer"},
@@ -57,9 +62,11 @@ TOOL_SPECS = [
         "start_time": {"type": "string", "description": "HH:MM 고정 (사용자가 요구할 때만), \"none\" 이면 고정 해제"},
         "memo": {"type": "string"},
         "status": {"type": "string", "enum": ["planned", "visiting", "done", "skipped"]},
+        "travel_mode": {"type": "string", "enum": ["walk", "car", "default"],
+                        "description": MODE_DESC + ". default 면 계획 기본 수단으로 되돌린다"},
     }, ["item_id"]),
     _fn("remove_item", "일정 항목을 삭제한다.", {"item_id": {"type": "integer"}}, ["item_id"]),
-    _fn("update_plan", "계획 설정 변경: 제목, 기간, 하루 시작/종료 시각, 이동 수단.", {
+    _fn("update_plan", "계획 설정 변경: 제목, 기간, 하루 시작/종료 시각, 기본 이동 수단(구간마다 따로 정하지 않은 곳에 적용).", {
         "title": {"type": "string"},
         "start_date": {"type": "string", "description": "YYYY-MM-DD"},
         "end_date": {"type": "string", "description": "YYYY-MM-DD"},
@@ -69,12 +76,14 @@ TOOL_SPECS = [
     }),
     _fn("add_rule", "사용자의 조건을 규칙으로 등록한다. 이후 모든 변경이 이 규칙으로 검사된다. "
                     "must_include(place_id: 꼭 포함), exclude(place_id: 제외), "
-                    "end_before(time, day?: 그 시각 전 종료), max_travel_minutes(minutes: 이동시간 상한).", {
+                    "end_before(time, day?: 그 시각 전 종료), max_travel_minutes(minutes: 구간 이동시간 상한), "
+                    "max_walk_minutes(minutes: 도보 구간 하나의 상한, 예: 어르신 동행), "
+                    "max_daily_walk_minutes(minutes: 하루 도보 합계 상한).", {
         "type": {"type": "string", "enum": RULE_TYPES},
         "place_id": {"type": "string"},
         "time": {"type": "string", "description": "HH:MM (end_before)"},
         "day": {"type": "integer", "description": "end_before 적용 일차 (생략 시 매일)"},
-        "minutes": {"type": "integer", "description": "max_travel_minutes"},
+        "minutes": {"type": "integer", "description": "max_travel_minutes / max_walk_minutes / max_daily_walk_minutes"},
         "hard": {"type": "boolean", "description": "반드시 지킬 조건이면 true(기본), 선호면 false"},
         "note": {"type": "string", "description": "사용자가 말한 이유"},
     }, ["type"]),
@@ -133,8 +142,15 @@ def compact_plan(plan: dict, changes: list[str] | None = None, pending: int = 0)
                   "place": i["place"]["title"] if i["place"] else i["place_id"], "place_id": i["place_id"],
                   "time": "건너뜀" if i["status"] == "skipped" else f"{i['start_at']}~{i['end_at']}",
                   "stay": i["stay_minutes"]}
-            if i["travel_minutes"]:
-                it["travel_min"] = i["travel_minutes"]
+            if i["travel_minutes"] is not None and i.get("leg_mode"):
+                # 이 구간 수단과 시간, 다른 수단이면 얼마나 걸리는지 (구간별 수단 선택용)
+                mode = {"walk": "도보", "car": "차량"}
+                opts = i.get("travel_options") or {}
+                other = "car" if i["leg_mode"] == "walk" else "walk"
+                it["travel"] = f"{mode[i['leg_mode']]} {i['travel_minutes']}분" + (
+                    f" ({mode[other]}면 {opts[other]['minutes']}분)" if other in opts else "")
+                if i.get("travel_mode"):
+                    it["travel_mode_set"] = i["travel_mode"]
             if i["start_time"]:
                 it["fixed_start"] = i["start_time"]
             if i["status"] not in ("planned", "skipped"):
@@ -211,7 +227,8 @@ class Toolbox:
                 raise ValueError("arguments 는 JSON 객체여야 합니다")
         except ValueError as e:
             return ToolOutcome(False, _dump({"error": f"인자 JSON 을 해석할 수 없습니다: {e}"}), "인자 오류")
-        args = {k: v for k, v in args.items() if v is not None or (name == "update_item" and k == "start_time")}
+        args = {k: v for k, v in args.items()
+                if v is not None or (name == "update_item" and k in ("start_time", "travel_mode"))}
         handler = getattr(self, f"_t_{name}", None)
         if handler is None:
             return ToolOutcome(False, _dump({"error": f"알 수 없는 도구: {name}"}), "알 수 없는 도구")
@@ -288,10 +305,12 @@ class Toolbox:
         return ToolOutcome(True, _dump({"result": note, "plan_after": view}), detail, history=_dump(short))
 
     async def _t_add_item(self, place_id: str, day: int = 1, order: int | None = None, stay_minutes: int = 60,
-                          memo: str = "", **ignored) -> ToolOutcome:
+                          memo: str = "", travel_mode: str | None = None, **ignored) -> ToolOutcome:
         # 모델이 없는 인자(start_time, near_place_id 등)를 붙여도 실패시키지 않되, 무시했다고 알려준다
         op = {"op": "add_item", "place_id": place_id, "day": day, "order": order, "stay_minutes": stay_minutes,
               "memo": memo}
+        if travel_mode and not _blank(travel_mode) and travel_mode != "default":
+            op["travel_mode"] = travel_mode
         notice = ""
         if self.last_plan and 1 <= day <= len(self.last_plan["days"]) and any(
                 i["place_id"] == place_id for i in self.last_plan["days"][day - 1]["items"]):
@@ -306,7 +325,7 @@ class Toolbox:
         return outcome
 
     async def _t_update_item(self, item_id: int, **changes) -> ToolOutcome:
-        allowed = {"day", "order", "stay_minutes", "start_time", "memo", "status"}
+        allowed = {"day", "order", "stay_minutes", "start_time", "memo", "status", "travel_mode"}
         unknown = set(changes) - allowed
         if unknown:
             raise TypeError(f"알 수 없는 인자 {sorted(unknown)}")
@@ -314,6 +333,8 @@ class Toolbox:
             raise TypeError("바꿀 값을 하나 이상 지정하세요")
         if "start_time" in changes and _blank(changes["start_time"]):
             changes["start_time"] = None
+        if "travel_mode" in changes and (changes["travel_mode"] == "default" or _blank(changes["travel_mode"])):
+            changes["travel_mode"] = None
         outcome = await self._stage({"op": "update_item", "item_id": item_id, **changes}, "")
         outcome.detail = f"{_item_title(self.last_plan, item_id)} 수정" + outcome.detail
         return outcome
@@ -338,6 +359,8 @@ class Toolbox:
         outcome.detail = {
             "must_include": f"'{name}' 꼭 포함", "exclude": f"'{name}' 제외",
             "end_before": f"{params.get('time')} 전 종료", "max_travel_minutes": f"이동 {params.get('minutes')}분 이내",
+            "max_walk_minutes": f"도보 구간 {params.get('minutes')}분 이내",
+            "max_daily_walk_minutes": f"하루 도보 {params.get('minutes')}분 이내",
         }.get(type, type)
         return outcome
 

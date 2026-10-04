@@ -137,3 +137,101 @@ _lookup: TravelLookup = HttpTravelLookup(settings.routing_base_url, settings.rou
 def get_travel_lookup() -> TravelLookup:
     """일정 계산이 쓰는 이동시간 조회. 테스트에서는 이 모듈의 _lookup 을 바꿔 끼운다."""
     return _lookup
+
+
+# ---------- 경로선 (안전 점검용) ----------
+
+class RouteLookup(Protocol):
+    def path(self, a: PlaceInfo, b: PlaceInfo, mode: str) -> list[tuple[float, float]] | None:
+        """a → b 경로선 (lat, lng) 점 목록. 못 구하면 None (호출 쪽이 직선으로 대신한다)."""
+        ...
+
+    def detour(self, a: PlaceInfo, b: PlaceInfo, mode: str) -> dict | None:
+        """지금 위험 구역을 피해 가면 어떻게 되는지 (routing 의 hazards=avoid 결과 요약). 못 구하면 None."""
+        ...
+
+
+MAX_PATH_POINTS = 2000  # safety 로 보낼 경로 점 수 (넘으면 솎는다)
+
+
+class HttpRouteLookup:
+    """routing POST /routing/route. 경로선은 하루 캐시, 우회 결과는 지금 위험 구역에 따라 바뀌어 캐시하지 않는다."""
+
+    def __init__(self, base_url: str, timeout: float, retry_sec: float, cache_size: int, ttl_sec: float):
+        self._client = httpx.Client(base_url=base_url, timeout=timeout)
+        self._retry, self._size, self._ttl = retry_sec, cache_size, ttl_sec
+        self._down_until = 0.0
+        self._cache: dict[tuple, tuple[float, list[tuple[float, float]] | None]] = {}
+
+    def _route(self, a: PlaceInfo, b: PlaceInfo, mode: str, hazards: str) -> dict | None:
+        if _time.monotonic() < self._down_until:
+            return None
+        body = {"mode": mode, "stops": [{"lat": a.lat, "lng": a.lng}, {"lat": b.lat, "lng": b.lng}],
+                "hazards": hazards, "steps": False}
+        try:
+            resp = self._client.post("/routing/route", json=body)
+        except httpx.HTTPError:
+            self._down_until = _time.monotonic() + self._retry
+            return None
+        if resp.status_code >= 500:
+            self._down_until = _time.monotonic() + self._retry
+            return None
+        if resp.is_error:  # 이 구간 요청만 문제 (다른 구간은 계속 묻는다)
+            return None
+        try:
+            return resp.json()
+        except ValueError:
+            return None
+
+    def path(self, a, b, mode):
+        key = (mode, round(a.lat, 6), round(a.lng, 6), round(b.lat, 6), round(b.lng, 6))
+        now = _time.monotonic()
+        hit = self._cache.get(key)
+        if hit and now - hit[0] < self._ttl:
+            return hit[1]
+        r = self._route(a, b, mode, "ignore")
+        if not r:
+            return None
+        if r.get("source") != "road":
+            if (r.get("engine") or {}).get("ok"):  # 엔진은 살아 있는데 길이 없음 -> 다시 물어도 같다
+                self._cache[key] = (now, None)
+            return None
+        coords = [(lat, lng) for lng, lat in r["geometry"]["coordinates"]]
+        if len(coords) > MAX_PATH_POINTS:
+            step = math.ceil(len(coords) / MAX_PATH_POINTS)
+            coords = coords[::step] + [coords[-1]]
+        if len(coords) < 2:
+            return None
+        if len(self._cache) >= self._size:
+            self._cache.clear()
+        self._cache[key] = (now, coords)
+        return coords
+
+    def detour(self, a, b, mode):
+        r = self._route(a, b, mode, "avoid")
+        if not r or not r.get("hazards", {}).get("checked"):
+            return None
+        h = r["hazards"]
+        return {"on_route": [z["name"] for z in h.get("on_route", [])],
+                "avoided": [z["name"] for z in h.get("avoided", [])],
+                "detour_minutes": h.get("detour_minutes"), "note": h.get("note")}
+
+
+class StraightRoutes:
+    """경로선 없이 (직선으로 대신). 테스트·routing 없이 단독 실행."""
+
+    def path(self, a, b, mode):
+        return None
+
+    def detour(self, a, b, mode):
+        return None
+
+
+_routes: RouteLookup = HttpRouteLookup(settings.routing_base_url, settings.routing_timeout_sec,
+                                       settings.routing_retry_sec, settings.routing_cache_size,
+                                       settings.routing_cache_ttl_sec)
+
+
+def get_route_lookup() -> RouteLookup:
+    """FastAPI 의존성. 테스트에서는 dependency_overrides 로 바꾼다."""
+    return _routes

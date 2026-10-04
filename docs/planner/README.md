@@ -74,8 +74,11 @@
   - `start_time`이 있는 항목은 그 시각에 고정된다. 일찍 도착하면 기다리고, 늦으면 `fixed_time_missed` 위반이다.
   - `status=skipped` 항목은 타임라인에서 빠진다(시각 `null`).
 - 이동시간은 **routing 서비스**(OSM 포항 데이터로 직접 띄운 길찾기, `docs/routing/README.md`)로 실제 길을 따라 계산한다.
+  - **이동 수단은 구간마다 정한다.** 항목의 `travel_mode`(직전 장소에서 여기까지 오는 수단, `walk`|`car`)가 있으면 그 수단,
+    없으면(`null`) 계획의 `travel_mode`(기본 수단)를 쓴다. 실제로 계산에 쓴 수단은 `leg_mode`다.
+  - 비교용으로 **모든 구간에 도보·차량 시간을 둘 다** 계산해 `travel_options`에 준다 ("이 구간만 차로 가면 22분").
   - 도보는 4.2km/h(70m/분). 차량은 엔진의 주행 시간에 주차·승하차 5분을 더한다.
-  - 일정을 계산할 때 필요한 구간(그날 직전에 알려진 장소 → 다음 장소)을 모아 **한 번에** 묻고, 결과는 하루 동안 캐시한다.
+  - 일정을 계산할 때 필요한 구간(그날 직전에 알려진 장소 → 다음 장소)을 모아 수단별로 **한 번씩** 묻고, 결과는 하루 동안 캐시한다.
   - routing이 응답하지 않거나 그 구간의 길을 못 찾으면 이전 방식으로 근사한다: `직선거리 × 1.3`을 도보 70m/분, 차량 500m/분 + 5분으로 나눈 값. 이때 항목의 `travel_source`가 `estimate`다.
   - routing이 죽었을 때는 20초 동안 묻지 않고 바로 근사한다 (요청마다 타임아웃을 기다리지 않도록).
   - 위험 구역 우회는 일정 시간에 넣지 않는다. 우회는 여행 중 경로 안내(`/routing/route`)에서만 쓴다.
@@ -91,7 +94,8 @@
 ```jsonc
 // PlanSummary
 {"id": 3, "user_id": "seoyun", "title": "엄마랑 구룡포", "start_date": "2026-10-10", "end_date": "2026-10-10",
- "day_start": "12:30", "day_end": "18:00", "travel_mode": "walk", "memo": "", "version": 7,
+ "day_start": "12:30", "day_end": "18:00", "travel_mode": "walk",   // 구간 기본 수단
+ "memo": "", "version": 7,
  "item_count": 4, "created_at": "...", "updated_at": "..."}
 
 // PlanDetail = PlanSummary + 아래
@@ -105,8 +109,12 @@
  "place": {"id": "kto-2660046", "title": "구룡포과메기문화관", "content_type": "문화시설", "lat": 35.99, "lng": 129.55,
            "addr": "...", "open_hours": "09:00~18:00", "rest_date": "매주 월요일"},   // 못 불러오면 null
  "stay_minutes": 60, "start_time": null, "memo": "", "status": "planned",
- "travel_minutes": 10, "travel_distance_m": 584,                                     // 첫 항목·건너뜀은 null
+ "travel_mode": null,                          // 이 항목에 정한 '여기까지 오는 수단'. null = 계획 기본
+ "leg_mode": "walk",                           // 실제로 계산한 수단 (첫 항목·건너뜀은 null)
+ "travel_minutes": 10, "travel_distance_m": 584,                                     // leg_mode 기준. 첫 항목·건너뜀은 null
  "travel_source": "road",                     // road: 실제 길 / estimate: 직선거리 근사 (앱은 "약 10분") / 첫 항목·건너뜀은 null
+ "travel_options": {"walk": {"minutes": 10, "distance_m": 584, "source": "road"},   // 같은 구간 도보·차량 비교
+                    "car": {"minutes": 8, "distance_m": 628, "source": "road"}},     // 첫 항목·건너뜀은 null
  "arrive_at": "14:43", "start_at": "15:00", "end_at": "16:00"}                      // 건너뜀은 null
 
 // ConstraintView
@@ -125,6 +133,11 @@
 | `closed_day` | warning | 휴무 원문에서 뽑은 "매주 ○요일" 휴무에 해당 (격주·명절은 판단하지 않음) |
 | `outside_open_hours` | warning | 운영시간 원문에 시간 범위가 하나뿐일 때 방문이 그 범위를 벗어남 |
 | `place_unavailable` | warning | 장소 정보를 불러오지 못함 |
+| `long_walk` | warning | 도보 구간 하나가 30분 초과. 메시지에 차량 시간을 함께 준다 (`max_walk_minutes` 규칙이 있으면 그 규칙으로만 본다) |
+| `daily_walk_total` | warning | 그날 도보 이동 합계가 90분 초과 (`max_daily_walk_minutes` 규칙이 있으면 그 규칙으로만 본다) |
+| `travel_estimated` | warning | 길찾기를 쓰지 못해 직선거리로 추정한 구간이 있음 (그날 하나로 묶음, 시간이 실제와 다를 수 있음) |
+
+이동 검사(`long_walk`·`daily_walk_total`·`travel_estimated`·도보 규칙)는 이미 다녀온(`done`) 항목으로 간 이동을 빼고 본다.
 | 규칙 `type` | hard→error, soft→warning | 아래 규칙 위반 |
 
 | 규칙 type | params | 의미 |
@@ -132,7 +145,9 @@
 | `must_include` | `{"place_id"}` | 반드시 포함 |
 | `exclude` | `{"place_id"}` | 포함하지 않음 |
 | `end_before` | `{"time": "HH:MM", "day"?: n}` | 그날(생략 시 매일) 이 시각 전에 끝남 |
-| `max_travel_minutes` | `{"minutes": n}` | 장소 간 이동시간 상한 |
+| `max_travel_minutes` | `{"minutes": n}` | 구간 이동시간 상한 (수단 무관) |
+| `max_walk_minutes` | `{"minutes": n}` | 도보 구간 하나의 상한 (예: 어르신 동행). 위반 메시지에 차량 시간 |
+| `max_daily_walk_minutes` | `{"minutes": n}` | 그날 도보 이동 합계 상한 |
 
 params에 정의되지 않은 키가 있으면 422 `invalid_request`다.
 
@@ -163,7 +178,7 @@ params에 정의되지 않은 키가 있으면 422 `invalid_request`다.
 ```jsonc
 // PlanCreate
 {"title": "1~200자", "start_date": "2026-10-10", "end_date": "생략 시 start_date",
- "day_start": "기본 10:00", "day_end": "기본 18:00", "travel_mode": "walk|car (기본 walk)", "memo": "0~500자"}
+ "day_start": "기본 10:00", "day_end": "기본 18:00", "travel_mode": "walk|car (구간 기본 수단, 기본 walk)", "memo": "0~500자"}
 // PlanUpdate: 위 필드 중 바꿀 것만. 하나도 없으면 422, null 은 422. 병합한 결과로 invalid_range·range_conflict 를 검사한다.
 ```
 
@@ -183,13 +198,15 @@ params에 정의되지 않은 키가 있으면 422 `invalid_request`다.
 ```jsonc
 // ItemCreate
 {"place_id": "kto-…", "day": 1, "order": "1 이상, 생략 시 맨 뒤 (그날 항목 수보다 크면 맨 뒤)",
- "stay_minutes": "5~720 (기본 60)", "start_time": "HH:MM, 생략 시 자동 계산", "memo": "0~500자"}
-// ItemUpdate: 보낸 필드만 바꾼다. 하나도 없으면 422.
+ "stay_minutes": "5~720 (기본 60)", "start_time": "HH:MM, 생략 시 자동 계산", "memo": "0~500자",
+ "travel_mode": "walk|car — 직전 장소에서 여기까지 오는 수단. 생략·null 이면 계획 기본"}
+// ItemUpdate: 보낸 필드만 바꾼다. 하나도 없으면 422. null 이 허용되는 필드는 start_time·travel_mode 둘뿐.
 {"day": "다른 날로 이동", "order": "순서 (day 와 함께 주면 그 날의 해당 순서)", "stay_minutes": 30,
- "start_time": "HH:MM 고정 | null = 고정 해제 (null 이 허용되는 유일한 필드)", "memo": "...",
- "status": "planned|visiting|done|skipped"}
+ "start_time": "HH:MM 고정 | null = 고정 해제", "memo": "...",
+ "status": "planned|visiting|done|skipped",
+ "travel_mode": "walk|car | null = 계획 기본 수단으로"}
 // ConstraintCreate
-{"type": "must_include|exclude|end_before|max_travel_minutes", "params": {...}, "hard": true,
+{"type": "must_include|exclude|end_before|max_travel_minutes|max_walk_minutes|max_daily_walk_minutes", "params": {...}, "hard": true,
  "source": "user|llm (기본 user)", "note": "0~300자"}
 ```
 
@@ -332,7 +349,7 @@ LLM이 고른 장소 후보 묶음이다. 사용자가 후보마다 [추가]/[�
 
 ## 7. 안전 점검 (Safety)
 
-방문 장소·시각만으로 위험 단계를 매긴다. **판단은 safety 서비스가 하고, planner 는 일정 기준으로 묻고 정리하고 기록한다.**
+방문과 **그 사이 이동 구간**의 위험 단계를 매긴다. **판단은 safety 서비스가 하고, planner 는 일정 기준으로 묻고 정리하고 기록한다.**
 safety 는 안전 정보만 관리하고, 어떤 일정이 있는지는 모른다. 검증(`validation.py`)과는 별개 파일(`safety.py`)이다.
 
 ```
@@ -341,7 +358,15 @@ planner ── GET /safety/situation (fingerprint) ──▶ safety      바뀌�
         ◀─ 항목별 위험 단계·근거·행동 지침 ─────────
 ```
 
-지금은 **방문지만** 본다. 이동 경로(침수 도로를 지나는지 등)는 나중에 추가한다.
+**이동 구간**: 직전 장소에서 다음 장소로 가는 길을 routing 의 실제 경로선(`POST /routing/route`)으로 받아,
+그 구간 시간(출발 = 도착 − 이동시간 ~ 도착) 동안 그 길을 지나는 것으로 safety 에 묻는다 (`/safety/assess` 의 `path`).
+- 도보: 야외 기준. 경로가 지나는 방파제·침수 감시 구역을 그대로 적용한다.
+- 차량: 차 안이라 비·바람·특보는 참고(`info`)까지. 침수 감시 구역(잠긴 길)은 그대로, 방파제는 차가 들어가지 않으므로 보지 않는다.
+- 경로선을 못 받으면(routing 장애) 두 장소를 잇는 직선으로 대신한다.
+- 경로선은 **오늘~4일 뒤 이동만** 받는다 (그 뒤는 예보가 없어 판단하지 않으므로 직선으로 충분). 하루 캐시하고,
+  엔진이 길을 못 찾은 구간도 캐시한다. 연결 장애·5xx 면 20초 동안 묻지 않고, 한 구간의 4xx 는 그 구간만 직선으로 대신한다.
+- 3시간 안의 이동이 주의·위험이면 routing 의 우회(`hazards=avoid`)를 물어 `detour`(피한 구역, 늘어나는 시간)를 붙인다.
+  routing 은 실측이 오른 센서 주변 80m 만 막으므로, 그 안을 지나지 않으면 `detour` 는 없다 (판단 반경 200m 와 다름).
 
 ### 7.1 위험 단계
 
@@ -362,7 +387,7 @@ planner ── GET /safety/situation (fingerprint) ──▶ safety      바뀌�
 | `GET` | `/planner/plans/{id}/safety` | 지금 일정 점검 → `SafetyCheck` (저장 안 함) |
 | `POST` | `/planner/plans/{id}/safety/preview` | 본문 `{"ops": [...]}` 를 적용했다고 치고 점검 (저장 안 함, 새 항목 `item_id` 는 음수). 변경안 초안용 |
 
-- 점검 대상: 계산된 시작·종료 시각이 있는 항목. **건너뜀(`skipped`)·완료(`done`) 항목은 뺀다.**
+- 점검 대상: 계산된 시작·종료 시각이 있는 항목과 그 항목까지 오는 이동. **건너뜀(`skipped`)·완료(`done`) 항목(과 그 항목까지의 이동)은 뺀다.**
   시작이 자정을 넘는 항목은 날짜가 애매해 빼고, 종료만 자정을 넘으면 60분 방문으로 본다.
 - `preview` 의 ops 오류는 `/preview` 와 같다 (`op_index` 포함).
 - safety 에 접근할 수 없으면 `503 safety_unavailable`. 일부 데이터 소스만 실패하면 200 이고 해당 항목이 `risk=null (data_missing)`, `data_ok` 에 실패 소스가 `false`.
@@ -372,17 +397,21 @@ planner ── GET /safety/situation (fingerprint) ──▶ safety      바뀌�
 {
   "plan_id": 344, "plan_version": 5, "checked_at": "2026-10-04T18:52:00+09:00",
   "overall_risk": "caution",
-  "counts": {"safe": 2, "caution": 2, "danger": 0, "unassessed": 0, "info": 2},
+  "counts": {"safe": 5, "caution": 4, "danger": 0, "unassessed": 0, "info": 3},   // 방문 + 이동 구간
   "guidance": "주의·위험 2곳: 1일차 13:07 구룡포항(주의), … 항목별 advice 를 따르고 …",
   "items": [
-    {"item_id": 1201, "day": 1, "date": "2026-10-05", "place_id": "kto-2610501", "title": "구룡포항",
+    {"item_id": 1201, "kind": "visit", "mode": null, "day": 1, "date": "2026-10-05", "place_id": "kto-2610501", "title": "구룡포항",
      "start_at": "13:07", "end_at": "14:07", "risk": "caution", "unassessed_reason": null, "data_missing": false,
      "horizon": "short_range",
      "hazards": [{"type": "wind", "level": "caution", "reason": "10/05 13~15시 풍속 최대 15m/s 예보", "source": "기상청 단기예보"}],
      "advice": "주의: … 시간 조정이나 대안을 함께 제시하라. 이 장소에 주의·위험 신호가 없는 시간대: …",
      "better_times": [{"start": "2026-10-05T08:00:00+09:00", "end": "2026-10-05T12:00:00+09:00", "has_info": false}],
      "sensitivity": ["침수 감시 구역"], "notes": [], "recheck_from": null},
-    {"item_id": 1203, "title": "구룡포 근대문화역사관", "risk": "safe",
+    {"item_id": 1203, "kind": "travel", "mode": "walk", "title": "구룡포 일본인 가옥거리 → 구룡포 근대문화역사관",
+     "start_at": "12:09", "end_at": "12:12", "risk": "caution",            // 출발 ~ 도착
+     "hazards": [{"type": "wind", "level": "caution", "reason": "10/05 12시 풍속 15m/s 예보", "source": "기상청 단기예보"}],
+     "detour": null, "…": "…"},
+    {"item_id": 1203, "kind": "visit", "title": "구룡포 근대문화역사관", "risk": "safe",
      "hazards": [{"type": "wind", "level": "info", "reason": "… (실내라 이동할 때만 영향)", "source": "기상청 단기예보"}], "…": "…"}
   ],
   "data_ok": {"forecast": true, "warnings": true, "sensors": true, "breakwater": true, "places": true}
@@ -390,7 +419,9 @@ planner ── GET /safety/situation (fingerprint) ──▶ safety      바뀌�
 ```
 - `overall_risk`: 주의·위험이 있으면 그중 최고, 없는데 판단하지 않은 미래 항목이 있으면 `null`, 아니면 `safe` (항목이 없어도 `safe`).
 - `counts.info`: `safe` 이면서 참고 신호가 있는 항목 수.
-- `items` 는 방문 순서. `better_times` 는 caution·danger 일 때 같은 장소에 신호가 없는 시간대.
+- `items` 는 일정 순서 (그 항목까지 오는 이동 → 방문). 이동의 `item_id`·`place_id` 는 도착 항목 기준이다.
+- `better_times` 는 caution·danger 일 때 같은 장소(이동이면 같은 길)에 신호가 없는 시간대.
+- `detour` (이동만): `{"on_route": [...], "avoided": [...], "detour_minutes": 4, "note": null}` — 3시간 안 위험 이동에서 우회할 구역이 있을 때.
 
 ### 7.3 경고 (Alert)
 
@@ -404,7 +435,8 @@ planner ── GET /safety/situation (fingerprint) ──▶ safety      바뀌�
 
 - 판단하지 않은 항목(`risk=null`, 데이터 장애 등)은 **지난 단계를 유지**한다. 장애를 '해제'로 오인하지 않는다.
 - 근거 일부가 빠진 결과(`data_missing: true`)로는 단계를 **내리지 않는다** (올리는 것만 반영).
-- 항목은 `item_id@날짜` 로 구분한다. 앞 항목을 고쳐 시작 시각이 밀려도 같은 방문이라, 단계가 같으면 다시 경고하지 않는다.
+- 항목은 `item_id@날짜` 로, 이동은 `item_id@날짜#수단` 으로 구분한다. 앞 항목을 고쳐 시작 시각이 밀려도 같은 방문이라,
+  단계가 같으면 다시 경고하지 않는다. 구간 수단을 바꾸면 새 구간으로 본다.
   다른 날로 옮기면 새 방문으로 본다. 점검할 방문이 없어지면(모두 건너뜀·완료) 지난 상태를 지운다.
 - 한 번의 점검에서 바뀐 항목을 계획별로 묶어 경고 하나를 만든다. 바뀐 게 없으면 경고도 없다.
 
@@ -506,18 +538,17 @@ python scripts/planner/cli.py shell
 search 구룡포 --type 관광지 / place kto-2660046
 new "엄마랑 구룡포" --start 2026-10-10 --from 12:30 --to 18:00 [--end ..] [--car]
 plans / show 1 [--json] / set 1 --end 2026-10-11 --mode car / drop 1
-add 1 kto-2660046 --stay 60 [--day 1] [--order 2] [--at 15:00] [--memo ..]
-edit 1 7 --order 1 | --day 2 | --stay 40 | --at 15:00 | --at none | --status skipped
+add 1 kto-2660046 --stay 60 [--day 1] [--order 2] [--at 15:00] [--memo ..] [--mode car]
+edit 1 7 --order 1 | --day 2 | --stay 40 | --at 15:00 | --at none | --status skipped | --mode car | --mode default
 rm 1 7
 rule 1 must_include place_id=kto-2660046 --note "엄마가 꼭 보고 싶어함" / rules 1 / unrule 1 3 / check 1
 proposals 1 [--status pending] / proposal 1 5 [--full] / accept 1 5 [--overwrite] / reject 1 5
 recs 1 / rec 1 2 / rec-add 1 2 11 / rec-remove 1 2 11
+safety 1 / alerts 1 [--status new]            안전 점검 (방문·이동 구간) / 주기 점검 경고
 chat 1                                          Planner Agent 와 대화 (docs/agent/README.md)
 ```
 
 ## 11. 다음 단계
 - 운영시간·휴무 구조화: places가 파싱해 제공하면 `validation.py`를 그 값으로 바꾼다.
-- 구간별 이동 수단: 지금은 계획 하나에 `walk` 또는 `car`. "걷기 상한(예: 15분)"을 두고 먼 구간만 차량으로 계산하려면 `travel_mode`를 "쓸 수 있는 수단 + 상한"으로 바꾸고 `ItemView`에 구간 수단을 더한다.
 - 걷기 편한 길: routing의 `easy_walk`(계단·언덕 회피, 3.6km/h)를 계획 설정으로 노출한다 ("오래 걷기 부담" 사용자).
-- 안전 점검에 이동 경로 추가: 경로가 침수 감시 구역을 지나는지 (경로 API 이후).
 - 경고 → Guide Agent 호출 (`needs_action` 경고), Planning Agent 도구 `check_safety` (§7.2 를 그대로 부름).
