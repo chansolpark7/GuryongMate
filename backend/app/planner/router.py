@@ -9,11 +9,12 @@
 from datetime import datetime, timezone
 from typing import Annotated
 
-from fastapi import APIRouter, Body, Depends, Header, Query, Response
+from fastapi import APIRouter, Body, Depends, Query, Response
 from pydantic import TypeAdapter
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.core.auth import CurrentUser
 from app.db import get_db
 from app.planner import ops as engine
 from app.planner import recommend
@@ -60,8 +61,8 @@ router = APIRouter(prefix="/planner", tags=["planner"], route_class=PlannerRoute
 
 DbSession = Annotated[Session, Depends(get_db)]
 Places = Annotated[PlaceLookup, Depends(get_place_lookup)]
-# 로그인(account) 서비스가 생기기 전까지는 헤더로 소유자만 구분한다.
-UserId = Annotated[str, Header(alias="X-User-Id", min_length=1, max_length=64, description="사용자 ID")]
+# 사용자: Authorization: Bearer <access 토큰> (개발 모드 AUTH_REQUIRED=false 면 X-User-Id 헤더). app.core.auth
+UserId = CurrentUser
 
 _ops_adapter = TypeAdapter(list[PlanOp])
 
@@ -384,3 +385,14 @@ def remove_candidate(plan_id: int, recommendation_id: int, candidate_id: int, db
         raise PlannerError(409, "not_in_plan", f"{cand.day}일차 일정에 이 장소가 없습니다.")
     detail = _apply(db, plan, [RemoveItemOp(op="remove_item", item_id=matched.id)], places)
     return RecommendationActionResult(recommendation=recommend.recommendation_view(detail, rec, places), plan=detail)
+
+
+# ---------- 탈퇴 ----------
+
+@router.delete("/me", status_code=204)
+def delete_my_data(db: DbSession, user_id: UserId) -> Response:
+    """이 사용자의 계획을 모두 지운다 (일정·규칙·제안·추천 포함). account 탈퇴가 부른다."""
+    for plan in db.scalars(select(PlannerPlan).where(PlannerPlan.user_id == user_id)):
+        db.delete(plan)
+    db.commit()
+    return Response(status_code=204)

@@ -40,9 +40,10 @@ class ApiError(RuntimeError):
 
 
 class ServiceApi:
-    def __init__(self, http: httpx.AsyncClient, user_id: str):
+    def __init__(self, http: httpx.AsyncClient, auth: dict[str, str]):
+        """auth: 사용자의 인증 헤더 (받은 Authorization 그대로, 개발 모드면 X-User-Id) — app.core.auth.ForwardAuth"""
         self._http = http
-        self._headers = {"X-User-Id": user_id}
+        self._headers = auth
 
     async def _req(self, method: str, path: str, **kw) -> Any:
         try:

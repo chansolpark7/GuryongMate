@@ -17,10 +17,19 @@ def invalid(resp) -> dict:
     return d
 
 
-def test_user_header_required(client, pid):
-    invalid(client.get(f"/planner/plans/{pid}"))
-    invalid(client.get("/planner/plans", headers={"X-User-Id": ""}))
+def test_user_identity(client, pid, monkeypatch):
+    """사용자 = 토큰의 sub. 개발 모드(AUTH_REQUIRED=false)에서 토큰이 없으면 X-User-Id, 그것도 없으면 anonymous."""
+    from app.core import auth
+    err(client.get(f"/planner/plans/{pid}"), 404, "plan_not_found")       # anonymous 의 계획이 아님
     invalid(client.get("/planner/plans", headers={"X-User-Id": "x" * 65}))
+    token = {"Authorization": f"Bearer {auth.issue_token(H['X-User-Id'])}"}
+    assert client.get(f"/planner/plans/{pid}", headers=token).status_code == 200   # 같은 사용자의 토큰
+    other = {"Authorization": f"Bearer {auth.issue_token('test-planner-other')}"}
+    err(client.get(f"/planner/plans/{pid}", headers=other | H), 404, "plan_not_found")  # 토큰이 X-User-Id 보다 우선
+    err(client.get("/planner/plans", headers={"Authorization": "Bearer garbage"}), 401, "unauthorized")
+    monkeypatch.setattr(auth.settings, "auth_required", True)                     # 로그인 필수 모드
+    err(client.get(f"/planner/plans/{pid}", headers=H), 401, "unauthorized")
+    assert client.get(f"/planner/plans/{pid}", headers=token).status_code == 200
 
 
 def test_path_ids_must_be_integers(client, pid):

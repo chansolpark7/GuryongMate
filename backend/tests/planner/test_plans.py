@@ -205,3 +205,17 @@ def test_concurrent_edits_are_serialized(client):
     plan = get_plan(client, pid)
     assert plan["version"] == 5 and sorted(order(plan)) == sorted(places)
     assert [i["order"] for i in plan["days"][0]["items"]] == [1, 2, 3, 4]
+
+
+def test_delete_my_data(client):
+    from .conftest import USER
+    keep_h = {"X-User-Id": "test-planner-keep"}
+    keep = ok(client.post("/planner/plans", json={"title": "남김", "start_date": "2026-10-10"}, headers=keep_h), 201)
+    pid = new_plan(client)["id"]
+    add(client, pid, "p-house")
+    ok(client.post(f"/planner/plans/{pid}/proposals", json={"ops": [{"op": "add_item", "place_id": "p-food"}]},
+                   headers=H), 201)
+    assert client.delete("/planner/me", headers=H).status_code == 204
+    assert ok(client.get("/planner/plans", headers=H)) == []
+    assert [p["id"] for p in ok(client.get("/planner/plans", headers=keep_h))] == [keep["id"]]  # 다른 사용자는 그대로
+    assert USER == H["X-User-Id"]

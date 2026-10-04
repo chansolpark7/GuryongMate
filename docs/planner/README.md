@@ -16,7 +16,7 @@
 
 ### 1.1 요청
 - 경로 앞부분은 `/planner`다. 앱은 게이트웨이(`:8000`)로 접속한다.
-- **모든 요청에 `X-User-Id` 헤더(1~64자)가 필요하다.** 로그인(account 서비스)이 생기면 `Authorization: Bearer <JWT>`로 바뀐다. 다른 사용자의 계획은 존재하지 않는 것과 같게 404로 응답한다.
+- **사용자 인증**: `Authorization: Bearer <access 토큰>`(account 서비스가 발급, `docs/account/README.md`). 개발 모드(`AUTH_REQUIRED=false`)에서만 토큰 대신 `X-User-Id` 헤더를 쓸 수 있다. 토큰이 잘못되면 401 `unauthorized`이고, 다른 사용자의 계획은 존재하지 않는 것과 같게 404로 응답한다.
 - 본문은 JSON이다. **정의되지 않은 필드가 들어오면 422**로 거부한다(오타를 조용히 무시하지 않기 위해).
 - 시각은 `"HH:MM"`(24시간), 날짜는 `"YYYY-MM-DD"`다.
 - 경로의 id는 정수다. 정수가 아니면 422, 없으면 404다.
@@ -142,6 +142,7 @@ params에 정의되지 않은 키가 있으면 422 `invalid_request`다.
 | GET | `/planner/plans/{plan_id}` | | 200 `PlanDetail` | 404 `plan_not_found` |
 | PATCH | `/planner/plans/{plan_id}` | `PlanUpdate` | 200 `PlanDetail` | 404, 422 `invalid_request`·`invalid_range`, 409 `range_conflict` |
 | DELETE | `/planner/plans/{plan_id}` | | 204 (제안·추천도 함께 삭제) | 404 |
+| DELETE | `/planner/me` | | 204 — 이 사용자의 계획을 모두 삭제 (account 탈퇴가 부른다) | 401 |
 | GET | `/planner/plans/{plan_id}/validate` | | 200 `{"ok": bool, "violations": [...]}` (`ok` = error 위반 없음) | 404 |
 
 ```jsonc

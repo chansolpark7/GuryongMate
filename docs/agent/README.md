@@ -14,7 +14,7 @@ LLM은 일정을 직접 바꾸지 않는다. 결과는 두 종류의 **카드**�
 ## 1. 공통 규칙
 
 - 경로 앞부분은 `/agent`다. 앱은 게이트웨이(`:8000`)로 접속한다.
-- **모든 요청에 `X-User-Id` 헤더(1~64자)가 필요하다.** 세션은 만든 사용자만 볼 수 있고, 다른 사용자의 세션은 404다.
+- **사용자 인증**: `Authorization: Bearer <access 토큰>`(개발 모드에서만 `X-User-Id`). 세션은 만든 사용자만 볼 수 있고, 다른 사용자의 세션은 404다. Agent는 planner·places를 부를 때 받은 인증을 그대로 전달한다.
 - 본문은 JSON이고, 정의되지 않은 필드가 있으면 422다.
 - 오류 형식은 planner와 같다: `{"detail": {"code": "...", "message": "...", ...}}`
 
@@ -40,7 +40,8 @@ LLM은 일정을 직접 바꾸지 않는다. 결과는 두 종류의 **카드**�
 | GET | `/agent/sessions?plan_id=` | | 200 `SessionView[]` (최근 대화순) |
 | GET | `/agent/sessions/{session_id}` | | 200 `SessionDetail` |
 | DELETE | `/agent/sessions/{session_id}` | | 204 (대화 기록 삭제. 이미 만든 제안·추천은 planner에 남는다) |
-| GET | `/agent/info` | | 200 `{"provider": "local:qwen3.6:35b"}` (디버깅용) |
+| GET | `/agent/info` | | 200 `{"provider": "openai:gpt-5.4-mini"}` (디버깅용) |
+| DELETE | `/agent/me` | | 204 — 이 사용자의 세션·메시지를 모두 삭제 (account 탈퇴가 부른다) |
 
 ```jsonc
 // SessionView
