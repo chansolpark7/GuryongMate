@@ -17,7 +17,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-StepKind = Literal["search", "place", "plan", "edit", "rule", "review", "recommend", "proposal"]
+StepKind = Literal["search", "place", "plan", "edit", "rule", "review", "recommend", "proposal", "safety"]
 
 
 class Strict(BaseModel):

@@ -108,9 +108,10 @@ LLM은 일정을 직접 바꾸지 않는다. 결과는 두 종류의 **카드**�
 | `review` | 일정 검토 | `문제 2건` / `문제 없음` | 일정을 검토하고 있어요. |
 | `recommend` | 추천 정리 | `4곳` | 추천할 곳을 고르고 있어요. |
 | `proposal` | 변경안 만들기 | `running`: `잠시만요...` / `done`: `변경 3건` | 변경안을 만들고 있어요. |
+| `safety` | 안전 확인 | `위험 포함 2곳` / `위험 신호 없음` / `판단할 수 없는 일정 있음` / `10-11 주의 신호` | 날씨와 안전을 확인하고 있어요. |
 
 - 실패한 도구 호출은 그 단계를 `error`로 표시하고, `detail`에 짧은 사유를 넣는다. LLM은 오류를 받고 다시 시도할 수 있으므로 턴은 계속된다.
-- 날씨·DT 같은 도구가 생기면 같은 방식으로 `kind`가 늘어난다.
+- 새 도구가 생기면 같은 방식으로 `kind`가 늘어난다.
 
 ### 3.3 `ChatResult` (`stream=false`)
 
@@ -172,7 +173,9 @@ LLM은 일정을 직접 바꾸지 않는다. 결과는 두 종류의 **카드**�
 | `add_item` / `update_item` / `remove_item` / `update_plan` | 일정 변경 → **초안** | `edit` |
 | `add_rule` / `remove_rule` | 조건(규칙) → 초안 | `rule` |
 | `discard_changes` | 초안 비우기 | `edit` |
-| `review_plan` | 초안 일정을 검토해 문제 목록을 돌려준다 (`AGENT_REVIEW_ROUNDS` > 0 일 때만) | `review` |
+| `review_plan` | 초안 일정을 검토해 문제 목록을 돌려준다 (일정 규칙 + 안전). `AGENT_REVIEW_ROUNDS` > 0 일 때만 | `review` |
+| `check_safety` | 초안 일정(방문 + 이동 구간)의 안전 단계. planner `POST /plans/{id}/safety/preview` (초안 없으면 `GET /safety`) | `safety` |
+| `safety_outlook` | 날짜별 날씨·바다 전망 (`date`). safety `GET /safety/outlook` | `safety` |
 | `recommend_places` | 추천 카드를 **바로** 만든다 (planner `POST /recommendations`) | `recommend` |
 
 - 변경 도구는 일정을 바로 바꾸지 않고 초안에 쌓는다. 도구마다 planner `preview`로 결과와 위반을 계산해 LLM에 돌려준다.
@@ -184,8 +187,12 @@ LLM은 일정을 직접 바꾸지 않는다. 결과는 두 종류의 **카드**�
 ### 검토 루프 (계획 → 검토 → 수정 → 재검토)
 - `backend/app/agent/review.py`가 초안을 규칙으로 검토한다.
   - `must`: planner error 위반 (종료 시각 초과, 고정 시각 지각, 사용자 규칙)
-  - `should`: 운영시간 밖·휴무, 이동이 김 (도보 25분·차량 40분 초과), 점심(11:30~13:30)·저녁(17:30~19:30) 시간대에 식당 없음, 같은 날 중복, 그날 일정 없음
-  - `info`: 하루가 2시간 이상 일찍 끝남
+  - `should`: planner warning 위반 (운영시간 밖·휴무, 긴 도보 구간·하루 도보 합계 등), 차량 구간 40분 초과,
+    점심(11:30~13:30)·저녁(17:30~19:30) 시간대에 식당 없음, 같은 날 중복, 그날 일정 없음,
+    **안전 위험(danger) 방문·이동** (시간대 이동·실내 대체·수단 변경, 못 바꾸면 이유 설명)
+  - `info`: 하루가 2시간 이상 일찍 끝남, **안전 주의(caution)** (사용자에게 알림), 안전 정보를 확인하지 못함
+  - 넣지 않는 것: 직선거리 근사 경고(`travel_estimated`), 장소 정보 없음, 판단하지 않은 안전 항목(먼 날짜·데이터 장애 — 안전을 이유로 바꾸지 않는다)
+  - 안전은 planner 안전 점검(`docs/planner/README.md` §7)을 그대로 쓴다. safety 에 접근할 수 없으면 검토는 계속하고 `info` 로 알린다.
 - 프롬프트는 "조사 → 초안 → `review_plan` → 수정 → 재검토 → 답변" 순서를 지키게 한다.
 - **검토 관문**: 일정을 바꾼 턴에서 LLM이 답을 끝내려 하면 하네스가 직접 검토한다(`review` 단계). `must`·`should`가 남아 있으면 목록을 주고 다시 고치게 한다. 최대 `AGENT_REVIEW_ROUNDS`번 되돌려 보내고, 그래도 남으면 그대로 제안을 만든다.
 - 효과 비교: `scripts/planner/eval_agent.py`가 같은 시나리오를 돌려 최종 제안을 같은 규칙으로 채점한다.

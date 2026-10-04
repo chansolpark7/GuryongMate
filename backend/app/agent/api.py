@@ -77,6 +77,16 @@ class ServiceApi:
     async def preview(self, plan_id: int, ops: list[dict]) -> dict:
         return await self._req("POST", f"/planner/plans/{plan_id}/preview", json={"ops": ops})
 
+    # ----- planner: 안전 점검 · safety -----
+    async def check_safety(self, plan_id: int, ops: list[dict]) -> dict:
+        """초안(ops)이 있으면 적용했다고 치고, 없으면 지금 일정의 안전 점검 (방문 + 이동 구간)."""
+        if ops:
+            return await self._req("POST", f"/planner/plans/{plan_id}/safety/preview", json={"ops": ops})
+        return await self._req("GET", f"/planner/plans/{plan_id}/safety")
+
+    async def safety_outlook(self, day: str) -> dict:
+        return await self._req("GET", "/safety/outlook", params={"date": day})
+
     # ----- planner: 제안 -----
     async def list_proposals(self, plan_id: int, status: str | None = None) -> list[dict]:
         return await self._req("GET", f"/planner/plans/{plan_id}/proposals", params={"status": status} if status else None)

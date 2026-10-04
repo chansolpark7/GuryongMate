@@ -11,7 +11,7 @@ import json
 from dataclasses import dataclass, field
 
 from app.agent.api import ApiError, ServiceApi
-from app.agent.review import review, summarize
+from app.agent.review import LEVEL, review, safety_issues, safety_what, summarize
 
 CONTENT_TYPES = ["관광지", "음식점", "문화시설", "쇼핑", "레포츠", "숙박", "축제공연행사"]
 RULE_TYPES = ["must_include", "exclude", "end_before", "max_travel_minutes", "max_walk_minutes",
@@ -37,12 +37,20 @@ TOOL_SPECS = [
         "radius_m": {"type": "integer", "description": "near_place_id 기준 반경(m), 기본 1500"},
         "limit": {"type": "integer", "description": "최대 개수 (기본 8, 최대 15)"},
     }),
+    _fn("check_safety", "지금 초안 일정(방문 + 장소 사이 이동 구간)의 안전 단계를 본다 (침수 센서, 방파제, 기상 예보·특보). "
+                        "safe 안전 / caution 주의 / danger 위험 / 판단 안 함(먼 날짜·데이터 장애). "
+                        "날씨·안전을 묻거나 야외·해안 일정을 넣었을 때 쓴다. review_plan 도 위험 항목을 함께 알려준다."),
+    _fn("safety_outlook", "특정 날짜의 구룡포 날씨·바다 전망 (예보가 없는 먼 날짜는 만조 시각과 계절 경향만). "
+                          "\"그날 날씨 어때?\", \"비 와?\" 같은 질문에 쓴다.", {
+        "date": {"type": "string", "description": "YYYY-MM-DD"},
+    }, ["date"]),
     _fn("get_place", "장소 상세 (주소, 운영시간, 휴무일, 요금, 메뉴, 소개).", {
         "place_id": {"type": "string"},
     }, ["place_id"]),
     _fn("view_plan", "현재 일정(이번 대화에서 제안 중인 변경 포함)을 시간표와 위반 사항과 함께 본다."),
     _fn("review_plan", "지금 초안 일정을 검토해 문제 목록을 받는다: 운영시간·휴무, 종료 시각 초과, 긴 이동, "
-                       "식사 시간에 식당 없음, 중복, 사용자 규칙 위반. 일정을 바꾼 뒤 답하기 전에 반드시 호출하고, "
+                       "식사 시간에 식당 없음, 중복, 사용자 규칙 위반, 안전(위험·주의 방문과 이동). "
+                       "일정을 바꾼 뒤 답하기 전에 반드시 호출하고, "
                        "문제를 고친 뒤 다시 호출해 확인한다."),
     _fn("add_item", "일정에 장소를 추가한다 (변경 제안에 포함, 사용자 승인 후 반영). "
                     "시각은 앞 일정에 이어 자동 계산된다. 시각 고정이 꼭 필요하면 추가 후 update_item 으로.", {
@@ -106,6 +114,7 @@ TOOL_SPECS = [
 # 도구 -> 처리 단계 종류
 STEP_KIND = {
     "search_places": "search", "get_place": "place", "view_plan": "plan", "review_plan": "review",
+    "check_safety": "safety", "safety_outlook": "safety",
     "add_item": "edit", "update_item": "edit", "remove_item": "edit", "update_plan": "edit", "discard_changes": "edit",
     "add_rule": "rule", "remove_rule": "rule", "recommend_places": "recommend",
 }
@@ -170,6 +179,62 @@ def compact_plan(plan: dict, changes: list[str] | None = None, pending: int = 0)
         out["memo"] = plan["memo"]
     if pending:
         out["pending_changes"] = changes if changes is not None else pending
+    return out
+
+
+def compact_safety(check: dict) -> dict:
+    """안전 점검 결과의 LLM 용 압축: 주의·위험과 참고 신호가 있는 항목만 자세히, 나머지는 개수로."""
+    items, quiet, far, missing = [], 0, [], 0
+    for i in check["items"]:
+        if i["risk"] is None:
+            if i["unassessed_reason"] == "beyond_forecast":
+                far.append(i)
+            elif i["unassessed_reason"] == "data_missing":
+                missing += 1
+            continue
+        if i["risk"] == "safe" and not i["hazards"]:
+            quiet += 1
+            continue
+        it = {"item_id": i["item_id"], "what": safety_what(i), "time": f"{i['start_at']}~{i['end_at']}",
+              "risk": LEVEL[i["risk"]], "reasons": [f"[{'참고' if h['level'] == 'info' else LEVEL[h['level']]}] "
+                                                   f"{h['reason']}" for h in i["hazards"][:3]]}
+        if i["risk"] != "safe":
+            it["advice"] = i["advice"]
+            if i["better_times"]:
+                it["better_times"] = [f"{w['start'][5:16].replace('T', ' ')}~{w['end'][11:16]}"
+                                      for w in i["better_times"]]
+            if i.get("detour"):
+                it["detour"] = i["detour"]
+            if i.get("data_missing"):
+                it["note"] = "근거 일부를 받지 못해 실제로는 더 높을 수 있다"
+        items.append(it)
+    out = {"overall": LEVEL.get(check["overall_risk"], "판단 안 함"), "guidance": check["guidance"], "items": items}
+    if quiet:
+        out["safe_without_signals"] = f"나머지 {quiet}곳(방문·이동)은 신호 없음"
+    if far:
+        recheck = min((i["recheck_from"] for i in far if i.get("recheck_from")), default=None)
+        out["not_assessed"] = (f"{len(far)}곳은 예보 범위 밖이라 판단하지 않음 (안전하다는 뜻 아님, 안전을 이유로 바꾸지 마라)"
+                               + (f". {recheck}부터 판단 가능" if recheck else ""))
+    if missing:
+        out["data_missing"] = f"{missing}곳은 데이터를 받지 못해 판단하지 못함 (안전하다고 말하지 마라)"
+    return out
+
+
+def compact_outlook(o: dict) -> dict:
+    out = {"date": o["date"], "horizon": o["horizon"], "guidance": o["guidance"]}
+    if o.get("summary"):
+        out["summary"] = o["summary"]
+    if o["hazards"]:
+        out["signals"] = [f"[{'참고' if h['level'] == 'info' else LEVEL[h['level']]}] {h['reason']}" for h in o["hazards"][:6]]
+    if o["safe_windows"]:
+        kinds = {"breakwater": "방파제", "flood": "해안 저지대", "outdoor": "야외"}
+        out["ok_windows"] = [f"{kinds[w['place_kind']]} {w['start'][11:16]}~{w['end'][11:16]}" for w in o["safe_windows"]]
+    if o["warnings"]:
+        out["warnings"] = o["warnings"]
+    if o["tides"]:
+        out["tides"] = [f"{'만조' if t['kind'] == 'high' else '간조'} {t['time'][11:16]}" for t in o["tides"]]
+    if o["seasonal_notes"]:
+        out["seasonal"] = o["seasonal_notes"]
     return out
 
 
@@ -273,12 +338,43 @@ class Toolbox:
         return ToolOutcome(True, _dump(view), f"일정 {count}곳",
                            history=_dump({"result": "(당시 일정 조회 결과 생략. 최신 일정은 시스템 프롬프트 참고)"}))
 
+    async def _t_check_safety(self) -> ToolOutcome:
+        check = await self.api.check_safety(self.plan_id, self.draft.ops)
+        out = compact_safety(check)
+        risky = [i for i in check["items"] if i["risk"] in ("caution", "danger")]
+        if risky:
+            worst = "위험" if any(i["risk"] == "danger" for i in risky) else "주의"
+            detail = f"{worst} 포함 {len(risky)}곳"
+        elif any(i["risk"] is None and i["unassessed_reason"] != "past" for i in check["items"]):
+            detail = "판단할 수 없는 일정 있음"
+        elif not any(i["unassessed_reason"] != "past" for i in check["items"]):
+            detail = "점검할 앞으로의 일정 없음"
+        else:
+            detail = "위험 신호 없음"
+        return ToolOutcome(True, _dump(out), detail)
+
+    async def _t_safety_outlook(self, date: str) -> ToolOutcome:
+        o = await self.api.safety_outlook(date)
+        out = compact_outlook(o)
+        worst = max((h["level"] for h in o["hazards"]), key=["info", "caution", "danger"].index, default=None)
+        if o["horizon"] in ("medium_range", "long_range"):
+            detail = f"{date[5:]} 예보 전 (만조·계절 경향만)"
+        else:
+            detail = f"{date[5:]} " + ({"danger": "위험 신호", "caution": "주의 신호", "info": "참고 신호"}.get(worst, "특이사항 없음"))
+        return ToolOutcome(True, _dump(out), detail)
+
     # ----- 변경 (초안에 쌓음) -----
     async def review_now(self) -> list[dict]:
-        """지금 초안을 검토 (하네스의 검토 관문도 이걸 쓴다)."""
+        """지금 초안을 검토 (하네스의 검토 관문도 이걸 쓴다). 일정 규칙 검토 + 안전 점검(위험·주의)."""
         await self.current_view()
         self.reviewed_rev = self.rev
-        return review(self.last_plan)
+        issues = review(self.last_plan)
+        try:
+            issues += safety_issues(await self.api.check_safety(self.plan_id, self.draft.ops))
+        except ApiError:
+            issues.append({"level": "info", "kind": "safety",
+                           "message": "안전 정보를 확인하지 못했다 (서비스 장애). 안전하다고 단정하지 않는다."})
+        return issues
 
     async def _t_review_plan(self) -> ToolOutcome:
         issues = await self.review_now()
