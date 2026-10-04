@@ -35,9 +35,9 @@ LLM: 호스트의 Ollama 또는 OpenAI API (Docker 밖)
 | 서비스 | 하는 일 | 주요 기능 | 상세 문서 |
 |---|---|---|---|
 | **places** | 관광 자원 DB·검색 | 한국관광공사 TourAPI로 포항시 관광지·음식점 등 324곳과 오디오 가이드 해설 37편을 수집·DB화 / 키워드 검색(여러 단어·띄어쓰기·조사·동의어), **의미 검색·하이브리드 검색**(로컬 임베딩), 위치 반경·태그·종류·읍면 필터 / 장소 상세(운영시간·휴무·메뉴·이미지) / 현장 해설용 **근거 조각 검색(RAG)** | [docs/places/README.md](docs/places/README.md) |
-| **planner** | 여행 일정의 단일 원천 | 일정 생성·조회·편집 / 타임라인 계산과 **결정론적 위반 검사**(운영시간·휴무·종료 시각·이동시간·사용자 규칙) / **변경 제안(Proposal)** 미리보기·승인·거절(버전 충돌 감지) / 장소 추천 카드 | [docs/planner/README.md](docs/planner/README.md) |
-| **agent** | 대화형 여행 계획 Agent | 세션 기반 채팅(SSE 스트리밍) / LLM 도구 호출로 장소 검색·일정 검토·변경 / 결과를 **변경 제안·장소 추천 카드**로 전달 / 로컬 LLM(Ollama)·OpenAI 선택 | [docs/agent/README.md](docs/agent/README.md) |
-| **safety** | 구룡포 안전 정보 | 디지털 트윈(E-UM) 수위·방파제 실측과 기상청 예보·특보, 조위 예보를 "이 시각, 이 장소가 위험한가"로 해석 / 일정 항목별 위험 평가(`/safety/assess`), 날짜별 전망, 현재 상태, 감시 구역 / 키 없이 쓰는 mock 모드 | [docs/safety/README.md](docs/safety/README.md) |
+| **planner** | 여행 일정의 단일 원천 | 일정 생성·조회·편집 / 타임라인 계산과 **결정론적 위반 검사**(운영시간·휴무·종료 시각·이동시간·긴 도보·사용자 규칙) / **구간별 이동 수단**(도보·차량, 두 수단 시간 비교) / **변경 제안(Proposal)** 미리보기·승인·거절(버전 충돌 감지) / 장소 추천 카드 / **안전 점검**(방문과 이동 경로의 위험 3단계)과 상황이 바뀌면 남기는 **안전 경고** | [docs/planner/README.md](docs/planner/README.md) |
+| **agent** | 대화형 여행 계획 Agent | 세션 기반 채팅(SSE 스트리밍) / LLM 도구 호출로 장소 검색·일정 변경 / **계획 → 검토 → 수정** 루프(일정 규칙 + 안전) / 안전 점검·날씨 전망, 장소 사이 도보·차량 시간과 "지금 출발해도 안전한지" / 결과를 **변경 제안·장소 추천 카드**로 전달 / 로컬 LLM(Ollama)·OpenAI 선택 | [docs/agent/README.md](docs/agent/README.md) |
+| **safety** | 구룡포 안전 정보 | 디지털 트윈(E-UM) 수위·방파제 실측과 기상청 예보·특보, 조위 예보를 "이 시각, 이 장소(또는 이 경로)가 위험한가"로 해석 / 위험 3단계(안전·주의·위험)와 참고 정보 / 방문·이동 경로 평가(`/safety/assess`), 날짜별 전망, 현재 상태, 상황 변화 감지(`/safety/situation`) / 키 없이 쓰는 mock 모드와 **가상 상황**(`/safety/sim`) | [docs/safety/README.md](docs/safety/README.md) |
 | **routing** | 길찾기 (외부 지도 API 없이) | OSM 포항 데이터로 직접 띄운 Valhalla로 **도보·차량** 이동시간 계산(planner 일정에 사용) / 경로선(GeoJSON)과 **한국어 회전 안내** / safety의 침수 센서 실측을 받아 **위험 구역을 피하는 경로**와 원래 경로 비교 / 엔진이 없으면 직선거리 근사로 대체 | [docs/routing/README.md](docs/routing/README.md) |
 | **account** | 로그인·토큰 | Google 로그인, ID/비밀번호 가입·로그인 / JWT access(1시간)·refresh(30일, rotation) 발급 / 다른 서비스는 공용 코드(`app.core.auth`)로 토큰만 검증 | [docs/account/README.md](docs/account/README.md) |
 | **embedding** | 임베딩 모델 서버 | `intfloat/multilingual-e5-base` (CPU, TEI 호환 `/embed` API) | [services/embedding/app.py](services/embedding/app.py), [docs/places/README.md](docs/places/README.md#임베딩-로컬-embedding-컨테이너) |
@@ -52,8 +52,7 @@ LLM: 호스트의 Ollama 또는 OpenAI API (Docker 밖)
 
 ### 아직 없는 것
 - **Flutter 앱**(`app/`): 지도·플래너·채팅 화면
-- **Agent ↔ safety 연동**: 계획 Agent가 안전 정보를 쓰는 도구, 여행 중 위험 이벤트를 감지해 먼저 제안하는 선제 개입
-- **Agent ↔ routing 연동**: 경로 조회 도구 ("침수 구역을 피하면 4분 더 걸려요" 같은 설명)
+- **선제 개입 (Guide Agent)**: planner가 남기는 안전 경고(`needs_action`)를 받아 여행 중 먼저 알리고 대안을 제안하는 부분
 - **대중교통 길찾기**: 도보·차량만 지원
 - **여행 중 동행**: 현재 위치·지연 추적, 도착 시 현장 해설(음성), 데모 시뮬레이터
 
