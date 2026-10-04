@@ -551,4 +551,4 @@ chat 1                                          Planner Agent 와 대화 (docs/a
 ## 11. 다음 단계
 - 운영시간·휴무 구조화: places가 파싱해 제공하면 `validation.py`를 그 값으로 바꾼다.
 - 걷기 편한 길: routing의 `easy_walk`(계단·언덕 회피, 3.6km/h)를 계획 설정으로 노출한다 ("오래 걷기 부담" 사용자).
-- 경고 → Guide Agent 호출 (`needs_action` 경고), Planning Agent 도구 `check_safety` (§7.2 를 그대로 부름).
+- 경고 → Guide Agent 호출 (`needs_action` 경고). Planning Agent 는 §7.2 를 `check_safety` 도구·검토 관문으로 이미 쓴다 (`docs/agent/README.md` §5).
