@@ -10,6 +10,7 @@ Flutter 앱 ──► gateway (:API_PORT, 기본 8000)   Caddy. URL 앞부분으
                 ├─ /places*   ──► places      관광지 검색·상세·근거 검색
                 ├─ /planner*  ──► planner     일정·검증·변경 제안
                 ├─ /agent*    ──► agent       LLM 채팅 (SSE) · 도구 실행
+                ├─ /safety*   ──► safety      구룡포 안전 정보 (디지털트윈 실측 + 기상 예보·특보)
                 └─ /auth* /users* ──► account (예정) 로그인·사용자 프로필
                embedding   임베딩 모델 서버 (내부 전용, places 가 호출)
                places-init 시작 시 장소 데이터·임베딩이 비어 있으면 채우고 종료
@@ -23,6 +24,7 @@ LLM: 호스트의 Ollama(host.docker.internal:11434) 또는 OpenAI API — Docke
 | embedding | 관광지 담당 | `services/embedding/` | `services/embedding/` | 없음 | 내부 `http://embedding/info` |
 | planner | 플래너 담당 | `backend/app/planner/` | `backend/app/planner/`, `backend/requirements/planner.txt`, `backend/tests/planner/`, `scripts/planner/`, `docs/planner/` | `planner_*` | `/planner/docs` |
 | agent | Agent 담당 | `backend/app/agent/` | `backend/app/agent/`, `backend/tests/agent/`, `docs/agent/` | `agent_*` | `/agent/docs` |
+| safety | 안전 정보 담당 | `backend/app/safety/` | `backend/app/safety/`, `backend/tests/safety/`, `docs/safety/`, `docs/dt/`, `docs/external/` | 없음 | `/safety/docs` |
 | account (예정) | 미정 | `backend/app/account/` | `backend/app/account/`, `backend/tests/account/`, `docs/account/` | `account_*` | `/account/docs` |
 | gateway·db·공용 | 공용 | — | 아래 "공용 파일" | — | — |
 
@@ -96,10 +98,10 @@ docker compose run --rm planner pytest tests/planner   # 테스트 (어느 백�
 | 컨테이너 | 상주 메모리 |
 |---|---|
 | embedding | 약 1.0GB |
-| places · planner · agent | 각 약 110MB |
+| places · planner · agent · safety | 각 약 110MB |
 | db | 약 50MB |
 | gateway | 약 15MB |
-| **합계** | **약 1.5GB** |
+| **합계** | **약 1.6GB** |
 
 여러 worktree에서 전체 스택을 동시에 띄우면 그만큼 늘어난다. 필요한 서비스만 띄우는 것을 권장한다.
 
@@ -114,6 +116,7 @@ worktree마다 compose 프로젝트(컨테이너·DB 볼륨)가 따로 생긴다
 | `GuryongMate-wt/tour-data` | `API_PORT=8001`, `DB_PORT=5433` |
 | `GuryongMate-wt/planner` | `API_PORT=8002`, `DB_PORT=5434` |
 | `GuryongMate-wt/service-split` | `API_PORT=8003`, `DB_PORT=5435` |
+| `GuryongMate-wt/safety` | `API_PORT=8004`, `DB_PORT=5436` |
 
 API 키는 각 worktree의 `backend/.env`에 둔다 (`backend/.env.example` 참고).
 

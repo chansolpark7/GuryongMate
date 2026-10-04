@@ -22,6 +22,7 @@ x-backend-env: &backend-env
   DATABASE_URL: postgresql+psycopg://guryong:guryong@db:5432/guryongmate
   EMBEDDING_URL: http://embedding:80
   PLANNER_PLACES_BASE_URL: http://gateway   # 서비스끼리도 게이트웨이를 통해 호출
+  SAFETY_PLACES_BASE_URL: http://gateway
   AGENT_API_BASE_URL: http://gateway
 
 services:
@@ -35,6 +36,7 @@ services:
       - places
       - planner
       - agent
+      - safety
 
   db:
     image: pgvector/pgvector:pg16
@@ -95,6 +97,16 @@ services:
     environment:
       <<: *backend-env
       SERVICE: planner
+    depends_on:
+      db:
+        condition: service_healthy
+
+  # 구룡포 안전 정보 (E-UM 디지털트윈 실측 + 기상청·해양조사원 예보). 키 없이 쓰려면 SAFETY_SOURCE=mock
+  safety:
+    <<: *backend
+    environment:
+      <<: *backend-env
+      SERVICE: safety
     depends_on:
       db:
         condition: service_healthy
