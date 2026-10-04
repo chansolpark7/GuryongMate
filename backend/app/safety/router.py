@@ -4,10 +4,13 @@
 - GET  /safety/outlook?date=   특정 날짜 전망 (계획 단계에서 '그날 어때?')
 - POST /safety/assess          일정 항목(장소+시각)별 위험도와 행동 지침 (계획 Agent 용)
 - GET  /safety/zones           방파제·침수 감시 구역 위치 (지도 표시용)
+- GET  /safety/situation       지금 상황 요약 + fingerprint (planner 가 바뀌었을 때만 일정을 다시 점검)
+- GET/PUT /safety/sim          가상 상황 (SAFETY_SOURCE=mock 일 때만): 시나리오·가상 시각 바꾸기
 
-여행일까지 많이 남았으면 날씨를 판단하지 않고 risk=unknown 과 '바꾸지 말라'는 지침을 돌려준다 (risk.py).
+위험 단계는 safe / caution / danger 3단계. 여행일까지 많이 남았으면 판단하지 않고(risk=null) '바꾸지 말라'는 지침을
+돌려준다 (risk.py).
 """
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 from functools import lru_cache
 from typing import Annotated
 
@@ -16,9 +19,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from app.safety import geo
 from app.safety.config import settings
 from app.safety.places import PlaceLookup, get_place_lookup
-from app.safety.schemas import AssessRequest, AssessResult, Outlook, Status, ZoneView
+from app.safety.schemas import AssessRequest, AssessResult, Outlook, SimState, SimUpdate, Situation, Status, ZoneView
 from app.safety.service import SafetyService
-from app.safety.sources import Sources, build_sources
+from app.safety.sources import KST, MOCK_SCENARIOS, MockSources, Sources, build_sources
 
 router = APIRouter(prefix="/safety", tags=["safety"])
 
@@ -70,3 +73,45 @@ def assess(body: AssessRequest, svc: Service) -> AssessResult:
 def zones() -> list[ZoneView]:
     return [ZoneView(id=z.id, name=z.name, kind=z.kind, path=list(z.path), radius_m=z.radius_m)
             for z in (*geo.BREAKWATERS, *geo.STATIC_FLOOD_ZONES)]
+
+
+@router.get("/situation", response_model=Situation)
+def situation(svc: Service, now: NowParam = None) -> Situation:
+    """지금 상황 요약. fingerprint 가 지난번과 같으면 일정 위험 판단도 같다 (planner 의 일정 재점검 기준)."""
+    return svc.situation(now)
+
+
+# ---------- 가상 상황 (mock 전용) ----------
+
+def _mock(sources: Sources) -> MockSources:
+    if not isinstance(sources, MockSources):
+        raise HTTPException(404, {"code": "sim_disabled",
+                                  "message": "가상 상황은 SAFETY_SOURCE=mock 일 때만 쓸 수 있습니다."})
+    return sources
+
+
+def _sim_state(src: MockSources) -> SimState:
+    return SimState(scenario=src.scenario, now=src.now(), offset_minutes=round(src.offset.total_seconds() / 60),
+                    scenarios=MOCK_SCENARIOS)
+
+
+@router.get("/sim", response_model=SimState)
+def get_sim(sources: Annotated[Sources, Depends(get_sources)]) -> SimState:
+    return _sim_state(_mock(sources))
+
+
+@router.put("/sim", response_model=SimState)
+def put_sim(body: SimUpdate, sources: Annotated[Sources, Depends(get_sources)]) -> SimState:
+    """시나리오와 가상 시각을 바꾼다. 가상 시각은 설정한 뒤 실제 시간만큼 흘러간다 (서비스를 다시 띄우면 초기화)."""
+    src = _mock(sources)
+    if body.scenario is not None:
+        if body.scenario not in MOCK_SCENARIOS:
+            raise HTTPException(422, {"code": "unknown_scenario", "message": f"알 수 없는 시나리오: {body.scenario}",
+                                      "scenarios": sorted(MOCK_SCENARIOS)})
+        src.scenario = body.scenario
+    if body.reset_clock:
+        src.offset = timedelta(0)
+    if body.now is not None:
+        when = body.now if body.now.tzinfo else body.now.replace(tzinfo=KST)
+        src.offset = when - src._clock()
+    return _sim_state(src)

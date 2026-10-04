@@ -5,7 +5,11 @@
 
 - 코드: `backend/app/safety/` · 테스트: `backend/tests/safety/` · API 문서: `/safety/docs`
 - 데이터 명세: [`docs/dt/DT_API.md`](../dt/DT_API.md) (E-UM), [`docs/external/WEATHER_WAVE_API.md`](../external/WEATHER_WAVE_API.md) (기상·조위)
-- 현재 범위: **데이터 가공 + 위험 정보 조회.** 이벤트 발행(선제 개입)과 여행 중 Guide Agent 연동은 아직 없다 (§7).
+- 현재 범위: **데이터 가공 + 위험 정보 조회.** safety 는 안전 정보만 관리하고 조회에 답한다.
+  일정 점검·경고는 planner 가 주도한다 (planner 가 `situation` 을 보고 필요할 때만 `assess` 를 부른다,
+  [`docs/planner/README.md` §7](../planner/README.md)). 여행 중 Guide Agent 연동은 아직 없다.
+- **위험 단계는 3단계: `safe` 안전 / `caution` 주의 / `danger` 위험.** 판단하지 않은 경우는 단계가 아니라 `risk=null` (§3).
+  약한 비처럼 단계를 올리지 않는 정보도 근거(`hazards`)에 `info`(참고)로 남겨 사람·LLM 이 일정 조정에 쓸 수 있게 한다.
 
 ## 1. 엔드포인트
 
@@ -15,8 +19,10 @@
 | `GET` | `/safety/outlook?date=YYYY-MM-DD` | 특정 날짜 전망 (요약·위험 시간대·만조·특보) | 계획 Agent ("그날 날씨 어때?") |
 | `GET` | `/safety/status` | 지금 구역별 위험도, 센서 실측, 방파제 CCTV 집계, 특보 | 앱 지도, 현재 상황 |
 | `GET` | `/safety/zones` | 방파제·침수 감시 구역 위치 | 앱 지도 |
+| `GET` | `/safety/situation` | 지금 상황 요약 + `fingerprint` (상황이 바뀌면 달라짐) | planner 주기 점검 |
+| `GET`·`PUT` | `/safety/sim` | 가상 상황: 시나리오·가상 시각 바꾸기 (`SAFETY_SOURCE=mock` 일 때만) | 시연·테스트 |
 
-모든 조회에 `now`(기준 시각 덮어쓰기)를 줄 수 있다. 테스트·시연에서 "여행 당일이라고 치고" 볼 때 쓴다.
+모든 조회에 `now`(기준 시각 덮어쓰기)를 줄 수 있다. 주지 않으면 지금 시각이고, mock 에서 가상 시각을 설정했으면 그 시각이다 (§1.6).
 
 ### POST /safety/assess
 ```json
@@ -35,14 +41,14 @@
 응답 (요약)
 ```json
 {
-  "overall_risk": "unknown",
-  "guidance": "1곳은 예보 범위 밖이라 날씨 위험을 판단하지 않았다(risk=unknown, 안전하다는 뜻 아님). 이 항목들은 안전을 이유로 바꾸지 마라. 2027-01-12부터 다시 확인하면 된다.",
+  "overall_risk": null,
+  "guidance": "1곳은 예보 범위 밖이라 날씨 위험을 판단하지 않았다(risk=null, 안전하다는 뜻 아님). 이 항목들은 안전을 이유로 바꾸지 마라. 2027-01-12부터 다시 확인하면 된다.",
   "visits": [
     {"key": "12", "horizon": "short_range", "forecast_available": true, "confidence": "medium",
-     "risk": "none", "hazards": [], "sensitivity": ["방파제"], "notes": [],
+     "risk": "safe", "unassessed_reason": null, "hazards": [], "sensitivity": ["방파제"], "notes": [],
      "advice": "예보상 특별한 위험 신호가 없다. 예보는 바뀔 수 있다."},
     {"key": "13", "horizon": "long_range", "forecast_available": false, "confidence": "none",
-     "risk": "unknown", "hazards": [], "sensitivity": ["방파제"],
+     "risk": null, "unassessed_reason": "beyond_forecast", "hazards": [], "sensitivity": ["방파제"],
      "notes": ["겨울철 동해안은 강풍과 높은 파도가 잦다 (평년 경향이며 예보가 아님)."],
      "advice": "103일 뒤 일정이라 날씨·바다 상태를 예측할 수 없다. 안전을 이유로 이 일정을 바꾸거나 빼지 마라. …",
      "recheck_from": "2027-01-12"}
@@ -51,36 +57,81 @@
   "assumptions": ["E-UM 수위 등급: 1 평상시, 2 주의, 3 이상 위험으로 해석 …"]
 }
 ```
-위험 신호가 있으면 `hazards` 에 근거가 들어간다.
+위험 신호가 있으면 `hazards` 에 근거가 들어간다. `level` 은 `info`(참고) / `caution` / `danger`.
+**`info` 는 단계를 올리지 않는다** — 단계가 `safe` 여도 `hazards` 에 남아 있으면 참고할 것이 있다는 뜻이다.
 ```json
 {"type": "wind", "level": "danger", "reason": "10/05 14~19시 풍속 최대 16m/s 예보", "source": "기상청 단기예보", "at": "…"}
 {"type": "warning", "level": "danger", "reason": "풍랑주의보 발효 중 (동해남부북쪽안쪽먼바다, 동해남부북쪽바깥먼바다)", "source": "기상특보"}
 {"type": "flood", "level": "caution", "reason": "구룡포파출소_지표면 수위계 수위 등급 2 (주의)", "source": "E-UM 수위센서 (실측)"}
+{"type": "rain", "level": "info", "reason": "10/05 13~15시 강수 최대 5mm/h 예보", "source": "기상청 단기예보"}
 ```
 
 악천후 예시 (storm mock, 기준 시각 10/04 10:00) — 같은 날씨에서 장소마다 판단이 다르다.
 ```json
 {"label": "북방파제", "indoor": null, "risk": "danger", "sensitivity": ["방파제"],
- "better_times": [{"start": "2026-10-05T15:00+09:00", "end": "2026-10-05T19:00+09:00", "risk": "none"},
-                  {"start": "2026-10-06T08:00+09:00", "end": "2026-10-06T19:00+09:00", "risk": "none"}],
+ "better_times": [{"start": "2026-10-05T15:00+09:00", "end": "2026-10-05T19:00+09:00", "has_info": false},
+                  {"start": "2026-10-06T08:00+09:00", "end": "2026-10-06T19:00+09:00", "has_info": false}],
  "advice": "위험: 10/04 14시 풍속 16m/s 예보; … 이 시간대 방문은 피하는 것이 좋다. … 이 장소에 주의·위험 신호가 없는 시간대: 10/05 15:00~19:00, 10/06 08:00~19:00 (better_times). 예보는 바뀔 수 있으니 단정하지 마라."}
-{"label": "구룡포 근대문화역사관", "indoor": true, "risk": "low", "sensitivity": ["실내"],
- "hazards": [{"level": "low", "reason": "10/04 15~17시 강수 최대 35mm/h 예보 (실내라 이동할 때만 영향)"}, …],
+{"label": "구룡포 근대문화역사관", "indoor": true, "risk": "safe", "sensitivity": ["실내"],
+ "hazards": [{"level": "info", "reason": "10/04 15~17시 강수 최대 35mm/h 예보 (실내라 이동할 때만 영향)"}, …],
  "advice": "실내 장소라 방문 자체는 괜찮다. 이동할 때 비·바람만 조심하면 되고, 야외 일정의 대안으로 적합하다."}
 ```
 - `better_times`: `risk` 가 caution/danger 일 때만, 예보 범위 안에서 **같은 장소·같은 체류 시간**으로 주의·위험 신호가 없는
-  시간대 (08~19시, 이른 순 최대 3개). 비어 있으면 `advice` 가 "괜찮은 시간대가 없으니 실내 같은 대체 장소를 제안하라"고 한다.
+  시간대 (08~19시, 이른 순 최대 3개). `has_info` 는 그 구간에 참고 신호(약한 비 등)가 있는지.
+  비어 있으면 `advice` 가 "괜찮은 시간대가 없으니 실내 같은 대체 장소를 제안하라"고 한다.
 
 ### GET /safety/outlook
 `date` (필수), `start`·`end` (볼 시간대, 기본 09:00~18:00), `detail=true` (시간별 예보 포함).
 지역 단위 조회라 방파제·해안 저지대를 가정하고 판단하며, 사유에 `(방파제 기준)` 같은 표시가 붙는다.
 `safe_windows`: 조회 시간대 안에서 장소 종류별(`breakwater` 방파제 / `flood` 해안 저지대 / `outdoor` 그 밖의 야외)로
-주의·위험 신호가 없는 구간. 예보가 없는 날짜는 비어 있다 (괜찮다고도 말하지 않는다). 실내는 대개 항상 괜찮아서 따로 주지 않는다.
+주의·위험 신호가 없는 구간 (`has_info`: 참고 신호 포함 여부). 예보가 없는 날짜는 비어 있다 (괜찮다고도 말하지 않는다).
+실내는 대개 항상 괜찮아서 따로 주지 않는다.
 먼 날짜에는 예보 대신 **만조·간조 시각**(천문 계산이라 먼 날짜도 정확)과 계절 경향만 준다.
 
 ### GET /safety/status
 지금 상태. 구역(북·남방파제, 침수 감시 구역 9곳)별 `risk`·`reasons`, 센서 10대 실측값, 방파제별 최근 1시간 CCTV 집계,
 자외선, 발효 중 특보, 앞으로 12시간 예보상 위험 신호. **지금 상태일 뿐이라 다른 날짜 일정 판단에는 쓰지 않는다.**
+구역·센서의 `risk` 는 3단계, 데이터를 받지 못해 판단하지 못한 구역은 `null`. 센서의 참고 신호(노면 수위 감지)는 `note`.
+
+### GET /safety/situation
+지금 상황 요약과 `fingerprint`. **이용자는 fingerprint 를 저장해 두었다가 바뀌었을 때만 일정을 다시 점검한다**
+(planner 주기 점검, [`docs/planner/README.md` §7.4](../planner/README.md)). safety 는 누가 어떤 일정을 가졌는지 모른다.
+```json
+{"now": "2026-10-04T18:52:00+09:00", "fingerprint": "8f2c61d0a4b7e913",
+ "forecast_until": "2026-10-07T15:00:00+09:00",
+ "zones": {"breakwater_north": "safe", "flood_4": "danger", "…": "…"},
+ "warnings": [],
+ "hours": [{"time": "2026-10-05T13:00:00+09:00",
+            "levels": {"breakwater": "danger", "flood": "caution", "outdoor": "caution", "indoor": "safe"},
+            "info": ["indoor"]}, "…"],
+ "data_ok": {"sensors": true, "breakwater": true, "uv": true, "forecast": true, "warnings": true}}
+```
+- `hours`: 예보가 있는 시각별, 장소 종류(방파제 / 침수 감시 구역 / 그 밖의 야외 / 실내)별 단계 (예보 + 그 시각에 적용되는 특보).
+  `info` 는 safe 지만 참고 신호가 있는 장소 종류.
+- `fingerprint` 에 들어가는 것: 예보 마지막 시각, 구역별 단계, 발효 특보, **신호(주의·위험·참고)가 있는 시각**의 단계, 데이터 소스 수신 여부.
+  - 아무 일 없는 시각이 지나가는 것만으로는 바뀌지 않는다.
+  - 새 예보가 발표돼 예보 범위가 늘면 바뀐다 (약 3시간마다) → 예보 범위에 새로 들어온 일정을 점검할 수 있다.
+  - 참고 신호만 바뀌어도 바뀐다 (약한 비 소식도 일정 조정에 참고할 수 있으니).
+  - 데이터 장애·복구도 바뀐다.
+
+### GET·PUT /safety/sim (가상 상황, mock 전용)
+`SAFETY_SOURCE=mock` 일 때만 열린다 (아니면 `404 sim_disabled`). 서비스를 다시 띄우면 초기화된다.
+```http
+PUT /safety/sim
+{"scenario": "wind_tomorrow", "now": "2026-10-05T10:30:00+09:00"}
+```
+- `scenario` (선택): 아래 시나리오 중 하나. 모르는 값은 `422 unknown_scenario`.
+- `now` (선택): 가상 시각. 설정한 뒤 실제 시간만큼 흘러간다. `now` 를 주지 않은 모든 조회가 이 시각을 쓴다.
+- `reset_clock: true`: 실제 시각으로 되돌린다. 정의되지 않은 필드는 422.
+- 응답: `{"scenario", "now", "offset_minutes", "scenarios": {이름: 설명}}`
+
+| 시나리오 | 내용 | 기대 결과 |
+|---|---|---|
+| `calm` | 평상시 | 모두 safe |
+| `rain` | 지금부터 2~9시간 뒤 시간당 5mm | 단계는 safe, 비 소식은 `info` |
+| `wind_tomorrow` | 내일 12~18시 풍속 15m/s·파고 3.2m (특보 없음) | 방파제 danger, 그 밖의 야외 caution, 실내 safe+info |
+| `flood` | 지금 침수 센서 상승 (수협 맨홀 등급 3, 파출소 지표면 등급 2) + 약한 비 | 센서 반경 200m 안 방문(3시간 안)만 caution·danger |
+| `storm` | 호우·강풍·풍랑 특보 + 센서 상승 + 30시간 악천후 | 방파제·침수 구역 danger, 야외 caution, 실내 safe+info |
 
 ## 2. 시점 정책 — 먼 날짜는 판단하지 않는다
 
@@ -90,13 +141,13 @@
 |---|---|---|---|---|
 | `now` | 3시간 안 (진행 중 포함) | E-UM 실측 + 발효 특보 + 단기예보 | high | O |
 | `short_range` | 단기예보가 있는 시각 (약 3일 안) | 단기예보 (+ 발효 특보, 아래) | 24h 안 high, 그 뒤 medium | O |
-| `medium_range` | 10일 안이지만 시간별 예보 없음 | 조위만 | low | **X → `unknown`** |
-| `long_range` | 10일 넘게 남음 | 조위 + 계절 경향 | none | **X → `unknown`** |
-| `past` | 이미 끝남 | — | none | X |
+| `medium_range` | 10일 안이지만 시간별 예보 없음 | 조위만 | low | **X → `risk=null` (`beyond_forecast`)** |
+| `long_range` | 10일 넘게 남음 | 조위 + 계절 경향 | none | **X → `risk=null` (`beyond_forecast`)** |
+| `past` | 이미 끝남 | — | none | X → `risk=null` (`past`) |
 
-- `medium_range`·`long_range` 는 `risk="unknown"` 과 함께 **"안전을 이유로 이 일정을 바꾸거나 빼지 마라"** 는 `advice`,
+- `medium_range`·`long_range` 는 `risk=null` 과 함께 **"안전을 이유로 이 일정을 바꾸거나 빼지 마라"** 는 `advice`,
   그리고 다시 확인할 날짜 `recheck_from` (방문일 3일 전)을 준다. 실측 센서·특보는 아예 부르지 않는다.
-- 지금 폭풍이어도 몇 달 뒤 일정에는 영향을 주지 않는다 (테스트 `test_far_future_is_unknown_and_says_do_not_change`).
+- 지금 폭풍이어도 몇 달 뒤 일정에는 영향을 주지 않는다 (테스트 `test_far_future_is_not_assessed_and_says_do_not_change`).
 - 중기예보(3~10일)는 아직 연동하지 않았다. 연동하면 `medium_range` 에서 일 단위 강수 확률 정도를 줄 수 있다.
 
 ### 발효 중 특보는 '지금' 상태다
@@ -105,23 +156,27 @@
 | 방문 시각까지 | 특보 적용 |
 |---|---|
 | 6시간 안 | 등급 그대로 |
-| 6~24시간 | `low` 참고로만. 사유에 "현재 발효 중, MM/DD HH시에는 해제될 수 있음" |
+| 6~24시간 | `info` 참고로만. 사유에 "현재 발효 중, MM/DD HH시에는 해제될 수 있음" |
 | 24시간 넘게 | 쓰지 않는다 |
 
-예: 지금 풍랑주의보가 발효 중이어도, 내일 오후 예보가 잠잠하면 내일 오후 방파제는 `none` 이다.
+예: 지금 풍랑주의보가 발효 중이어도, 내일 오후 예보가 잠잠하면 내일 오후 방파제는 `safe` 이다.
 
-## 3. 위험도
+## 3. 위험 단계 (3단계)
 
-| risk | 의미 | 계획 Agent 가 할 일 |
+| `risk` | 의미 | 계획 Agent 가 할 일 |
 |---|---|---|
-| `none` | 위험 신호 없음 | 그대로. 단 예보는 바뀔 수 있다고만 |
-| `low` | 참고 수준 (약한 비, 위험구역 접근 빈발 등) | 바꾸지 않음. 필요하면 한마디 |
+| `safe` | 주의·위험 신호 없음 | 그대로. 예보는 바뀔 수 있다고만. `hazards` 에 `info` 가 있으면 순서·시간을 정할 때 참고 |
 | `caution` | 주의 | 사용자에게 알리고 시간 조정·대안을 함께 제시 |
 | `danger` | 위험 | 그 시간대 방문을 피하고 대안 제시 (이유 설명) |
-| `unknown` | 판단 근거 없음 (먼 날짜, 데이터 장애) | **안전하다고 말하지 않음.** 안전을 이유로 바꾸지도 않음 |
+| `null` | **판단하지 않음** (단계가 아님) | **안전하다고 말하지 않음.** 안전을 이유로 바꾸지도 않음 |
 
-- `overall_risk`: 주의·위험이 하나라도 있으면 그중 최고 등급, 없는데 `unknown` 항목이 있으면 `unknown`.
-- 데이터 소스가 실패하면 그 근거가 필요한 판단은 `none` 이 아니라 `unknown` 이다. `data_status` 에 어떤 소스가 실패했는지 나온다.
+- 근거(`hazards[].level`)는 `info` / `caution` / `danger`. 방문 단계 = 근거 중 최고 (`info` 만 있으면 `safe`).
+  `info` 예: 약한 비, 실내라 이동할 때만 영향을 받는 비·바람, 6~24시간 뒤 해제될 수 있는 특보, 위험구역 접근 빈발, 노면 수위 감지.
+- `unassessed_reason` (`risk=null` 일 때): `past` 지난 일정 / `beyond_forecast` 예보 범위 밖 / `data_missing` 필요한 데이터를 받지 못함.
+- `overall_risk`: 주의·위험이 하나라도 있으면 그중 최고, 없는데 판단하지 않은 미래 항목이 있으면 `null`, 아니면 `safe`.
+- 데이터 소스가 실패하면 그 근거가 필요한 판단은 `safe` 가 아니라 `null` 이다. `data_status` 에 어떤 소스가 실패했는지 나온다.
+  단, 다른 근거로 주의·위험이 확인되면 그 단계를 준다.
+- 내부 계산은 신호 등급 `none < info < caution < danger` 로 하고, 응답에서 `none`·`info` 를 `safe` 로 바꾼다 (`risk.public`).
 
 ### 장소 성질 (`sensitivity`)
 같은 날씨라도 장소에 따라 위험이 다르다. 좌표로 판단한다.
@@ -130,8 +185,8 @@
 |---|---|---|
 | 방파제 | 북·남방파제 선(AI CCTV 좌표) 60m 안 | 바람·파고·풍랑특보를 그대로 적용 |
 | 침수 감시 구역 | 수위 센서(맨홀·지표면·하천) 200m 안 | 강수·호우특보·수위 실측 적용 (실내여도 그대로: 앞길이 잠길 수 있음) |
-| 실내 | `indoor` 또는 장소 종류(문화시설·음식점·쇼핑·숙박) | 비·바람·특보는 `low` 까지만 ("실내라 이동할 때만 영향"). 야외 일정의 대안 후보 |
-| (없음) | 그 밖의 야외 | 바람·강수는 한 단계 낮게, 파고·풍랑은 무시 |
+| 실내 | `indoor` 또는 장소 종류(문화시설·음식점·쇼핑·숙박) | 비·바람·특보는 `info` 까지만 ("실내라 이동할 때만 영향"). 야외 일정의 대안 후보 |
+| (없음) | 그 밖의 야외 | 바람·강수는 한 단계 낮게 (단, 비는 낮춰도 최소 `info` 로 남김), 파고·풍랑은 무시 |
 
 ### 판단 기준 (`assumptions` 로도 응답에 포함)
 | 항목 | 참고 | 주의 | 위험 | 근거 |
@@ -165,22 +220,23 @@
 
 ## 5. 계획 Agent 연동 가이드 (아직 연결하지 않음)
 
-agent 코드는 건드리지 않았다. 연결할 때 권장하는 방식:
+agent 코드는 건드리지 않았다. 일정 단위 점검은 planner 가 제공한다:
+`GET /planner/plans/{id}/safety` (지금 일정), `POST /planner/plans/{id}/safety/preview` (변경안 초안).
+Agent 도구는 이 둘을 부르면 된다 ([`docs/planner/README.md` §7](../planner/README.md)). 연결할 때 권장하는 방식:
 
 **도구 2개**
 ```python
 _fn("check_safety",
     "현재 일정(제안 중인 변경 포함)의 장소·시각별 안전 정보를 본다 (침수 센서, 방파제, 기상예보·특보). "
-    "결과의 risk 가 caution/danger 인 항목만 조정을 고려한다. "
-    "여행일이 약 3일 넘게 남았으면 날씨를 예측할 수 없어 risk=unknown 이 나오며, 그때는 안전을 이유로 일정을 바꾸지 않는다."),
+    "결과의 risk 가 caution/danger 인 항목만 조정을 고려한다. safe 항목의 hazards(info)는 순서·시간을 정할 때 참고만 한다. "
+    "여행일이 약 3일 넘게 남았으면 날씨를 예측할 수 없어 risk=null 이 나오며, 그때는 안전을 이유로 일정을 바꾸지 않는다."),
 _fn("safety_outlook", "특정 날짜의 구룡포 날씨·바다 전망 (예보가 없는 먼 날짜는 만조 시각과 계절 경향만).",
     {"date": {"type": "string", "description": "YYYY-MM-DD"}}, ["date"]),
 ```
 
-**check_safety 구현**: 초안이 있으면 `preview` 결과, 없으면 `get_plan` 결과의 `days[].items[]` 를
-`{"key": str(item.id), "place_id": item.place_id, "date": day.date, "start": item.start_at, "end": item.end_at}` 로 바꿔
-`POST /safety/assess` 에 보낸다 (`status == "skipped"` 는 제외). LLM 에는 `guidance` 와 항목별
-`key·label·horizon·risk·hazards[].reason·better_times·advice` 정도만 넘기면 충분하다.
+**check_safety 구현**: 초안이 있으면 `POST /planner/plans/{id}/safety/preview` (ops), 없으면 `GET /planner/plans/{id}/safety`.
+LLM 에는 `guidance` 와 항목별 `item_id·title·start_at·risk·unassessed_reason·hazards[].reason·better_times·advice`
+정도만 넘기면 충분하다.
 
 **시스템 프롬프트에 넣을 문구 (예시)**
 ```
@@ -188,7 +244,8 @@ _fn("safety_outlook", "특정 날짜의 구룡포 날씨·바다 전망 (예보�
 - 일정을 확정하기 전, 그리고 사용자가 날씨·안전을 물으면 check_safety 로 확인한다.
 - risk=caution/danger 인 항목만 조정을 제안한다. 근거(hazards)와 함께 설명하고, 대안을 함께 낸다.
   시간을 옮길 때는 better_times 안에서 고르고, 없으면 실내 장소(advice 가 '대안으로 적합'인 곳)로 바꾼다.
-- risk=unknown 은 '모른다'는 뜻이다. 안전하다고 말하지 말고, 안전을 이유로 일정을 바꾸지도 않는다.
+- risk=safe 여도 hazards 에 참고(info)가 있으면 순서·시간을 정할 때만 참고한다 (예: 비 오는 시간엔 실내를 먼저).
+- risk=null 은 '모른다'는 뜻이다. 안전하다고 말하지 말고, 안전을 이유로 일정을 바꾸지도 않는다.
 - 여행일이 3일 넘게 남았으면 날씨는 예측할 수 없다. "가까워지면 다시 확인해 드릴게요"라고만 말한다.
 - 예보 기반 판단(short_range)은 바뀔 수 있으니 단정하지 않는다.
 ```
@@ -202,8 +259,14 @@ docker compose up -d safety                                # db + safety
 docker compose exec safety pytest tests/safety             # DB·외부 API 없이 동작 (mock + 실제 응답 fixture)
 curl "localhost:${API_PORT:-8000}/safety/status"           # gateway 까지 띄운 경우
 ```
-- 키 없이 개발: `backend/.env` 에 `SAFETY_SOURCE=mock`. `SAFETY_MOCK_SCENARIO=storm` 이면 호우·강풍·풍랑 특보와 수위 상승 상황을 흉내 낸다
-  (응답 `data_status[*].note` 에 mock 표시).
+- 키 없이 개발: `backend/.env` 에 `SAFETY_SOURCE=mock`. 시작 시나리오는 `SAFETY_MOCK_SCENARIO` (기본 calm),
+  실행 중에는 `PUT /safety/sim` 으로 시나리오·가상 시각을 바꾼다 (§1, 응답 `data_status[*].note` 에 mock 표시).
+- 가상 상황 시연 (일정에 경고가 들어오는지):
+  ```bash
+  curl -X PUT localhost:8000/safety/sim -H 'content-type: application/json' -d '{"scenario":"wind_tomorrow"}'
+  curl -X POST localhost:8000/planner/safety/scan            # 주기(기본 60초)를 기다리지 않고 바로 점검 (개발 모드)
+  curl localhost:8000/planner/plans/1/safety/alerts -H 'X-User-Id: demo'
+  ```
 - 테스트 fixture(`tests/safety/fixtures/`)는 2026-10-04 실제 API 응답이다.
 
 ## 7. 이 정보만으로 LLM 이 판단할 수 있는가
@@ -211,17 +274,19 @@ curl "localhost:${API_PORT:-8000}/safety/status"           # gateway 까지 띄�
 | 질문 | 가능 여부 | 근거 |
 |---|---|---|
 | 이 일정 그대로 둬도 되나? | O | `risk` + 근거 `hazards` + `advice` |
-| 먼 날짜 일정을 날씨 때문에 바꿔야 하나? | O (바꾸지 않음) | `unknown` + 근거 없음 + "바꾸지 마라" |
+| 안전하지만 일정 순서에 참고할 게 있나? | O | `safe` + `hazards` 의 `info` (약한 비 등) |
+| 먼 날짜 일정을 날씨 때문에 바꿔야 하나? | O (바꾸지 않음) | `risk=null` + 근거 없음 + "바꾸지 마라" |
 | 위험하면 언제로 옮기나? | O | `better_times` (예보 범위 안) |
 | 어디로 바꾸나? | 부분 | 실내 판정으로 대안 적합 여부는 알 수 있음. 후보 장소 검색은 Agent 가 places 로 |
 | 이동 경로가 침수 도로를 지나나? | X | 장소 위치만 본다 |
 | 어르신·아이 동행이라 더 조심해야 하나? | X | 동행자·기온(폭염·한파)은 반영하지 않음. 자외선은 status 에만 |
-| 다음 주(3~10일 뒤) 날씨는? | X | 중기예보 미연동 → `unknown` |
+| 다음 주(3~10일 뒤) 날씨는? | X | 중기예보 미연동 → `risk=null` |
 
 ## 8. 한계와 다음 할 일
 
 - [ ] **E-UM 수위 등급 기준 확인** — 평상시 전부 1이라 2·3의 의미를 관측하지 못했다. 포털 문의 또는 악천후 관측.
-- [ ] Event 발행 (위험 단계가 바뀔 때 `dt_flood`/`dt_breakwater` → Event Policy → Agent 선제 개입) — Guide 설계와 함께
+- [x] 상황 변화 감지 — `GET /safety/situation` fingerprint. planner 가 가져가서 일정을 다시 점검하고 경고를 남긴다
+- [ ] 경고 → Guide Agent 선제 개입 — Guide 설계와 함께 (planner 의 `needs_action` 경고가 기준)
 - [ ] 수집 스냅샷 저장 (리플레이 시연, 방파제 CCTV 시간대별 평소값 계산) — 지금은 메모리 캐시만
 - [ ] 중기예보(3~10일) 연동 — `medium_range` 에 일 단위 강수 확률
 - [ ] 재난문자 (재난안전데이터공유플랫폼 승인 대기)

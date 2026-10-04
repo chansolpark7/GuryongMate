@@ -6,9 +6,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class SafetySettings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_prefix="SAFETY_", extra="ignore")
 
-    # live: 실제 API 호출 / mock: 키 없이 고정 데이터 (mock_scenario 로 평상시·악천후 선택)
+    # live: 실제 API 호출 / mock: 키 없이 가짜 데이터 (시나리오는 PUT /safety/sim 으로 실행 중에도 바꿀 수 있다)
     source: str = "live"
-    mock_scenario: str = Field("calm", description="calm | storm")
+    mock_scenario: str = Field("calm", description="시작 시나리오: calm | rain | wind_tomorrow | flood | storm")
 
     # E-UM 디지털트윈 포항 인증키. URL 인코딩된 값 그대로 (디코딩하면 40102)
     dt_service_key: str = Field("", validation_alias=AliasChoices("SAFETY_DT_SERVICE_KEY", "DT_SERVICE_KEY"))

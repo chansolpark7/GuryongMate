@@ -4,7 +4,9 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
 
-Risk = Literal["none", "low", "caution", "danger", "unknown"]
+Level = Literal["safe", "caution", "danger"]  # 위험 3단계
+HazardLevel = Literal["info", "caution", "danger"]  # 근거 등급. info 는 참고 (단계를 올리지 않음)
+Unassessed = Literal["past", "beyond_forecast", "data_missing"]
 Horizon = Literal["past", "now", "short_range", "medium_range", "long_range"]
 Confidence = Literal["high", "medium", "low", "none"]
 
@@ -12,8 +14,11 @@ HORIZON_DOC = (
     "now: 지금~3시간 이내(실측+특보+예보) / short_range: 기상청 단기예보가 있는 약 3일 이내 / "
     "medium_range: 10일 이내지만 시간별 예보 없음 / long_range: 10일 넘게 남음 (날씨 예측 불가) / past: 이미 지남"
 )
-RISK_DOC = ("none: 위험 신호 없음 / low: 참고 수준 / caution: 사용자에게 알리고 시간 조정·대안 고려 / "
-            "danger: 이 시간대 방문 피하고 대안 제시 / unknown: 판단 근거 없음 (안전하다는 뜻이 아님)")
+RISK_DOC = ("위험 3단계. safe: 주의·위험 신호 없음 (참고 신호는 hazards 에 info 로 있을 수 있음) / "
+            "caution: 사용자에게 알리고 시간 조정·대안 고려 / danger: 이 시간대 방문 피하고 대안 제시 / "
+            "null: 판단하지 않음 (unassessed_reason 참고. 안전하다는 뜻이 아님)")
+UNASSESSED_DOC = ("risk 가 null 인 이유. past: 이미 지남 / beyond_forecast: 예보 범위 밖 (약 3일 뒤) / "
+                  "data_missing: 필요한 데이터를 받지 못함")
 
 
 class SourceStatus(BaseModel):
@@ -25,7 +30,7 @@ class SourceStatus(BaseModel):
 
 class Hazard(BaseModel):
     type: Literal["flood", "breakwater", "rain", "wind", "wave", "warning"]
-    level: Risk
+    level: HazardLevel = Field(description="info: 참고 (단계를 올리지 않음, 일정 조정에 참고) / caution / danger")
     reason: str
     source: str = Field(description="근거 데이터 (예: E-UM 수위센서, 기상청 단기예보, 기상특보)")
     at: datetime | None = Field(None, description="측정 또는 예보 시각")
@@ -60,7 +65,7 @@ class AssessRequest(BaseModel):
 class TimeWindow(BaseModel):
     start: datetime
     end: datetime
-    risk: Risk = Field(description="구간 안 최고 등급 (none 또는 low)")
+    has_info: bool = Field(description="구간 안에 참고(info) 신호가 있는지 (예: 약한 비)")
 
 
 class VisitAssessment(BaseModel):
@@ -73,8 +78,9 @@ class VisitAssessment(BaseModel):
     horizon: Horizon = Field(description=HORIZON_DOC)
     forecast_available: bool = Field(description="이 시각의 기상 예보가 있는지. false 면 날씨 위험은 판단하지 않은 것")
     confidence: Confidence
-    risk: Risk = Field(description=RISK_DOC)
-    hazards: list[Hazard]
+    risk: Level | None = Field(description=RISK_DOC)
+    unassessed_reason: Unassessed | None = Field(None, description=UNASSESSED_DOC)
+    hazards: list[Hazard] = Field(description="근거. 위험 단계가 safe 여도 참고(info) 신호가 있으면 들어 있다")
     sensitivity: list[str] = Field(description="날씨에 따라 위험해지는 장소 특성 (방파제, 침수 감시 구역). 위험이 아니라 성질")
     notes: list[str] = Field(description="참고 정보 (조위, 계절 등). 일정 변경 근거로 쓰지 않는다")
     advice: str = Field(description="계획 Agent 에게 주는 행동 지침")
@@ -87,7 +93,7 @@ class VisitAssessment(BaseModel):
 
 class AssessResult(BaseModel):
     now: datetime
-    overall_risk: Risk
+    overall_risk: Level | None = Field(description="주의·위험이 있으면 그중 최고. 없는데 판단하지 않은 미래 항목이 있으면 null")
     guidance: str = Field(description="전체 결과를 어떻게 다뤄야 하는지 (계획 Agent 용)")
     visits: list[VisitAssessment]
     data_status: dict[str, SourceStatus]
@@ -126,7 +132,7 @@ class SafeWindow(BaseModel):
         description="breakwater 방파제 / flood 해안 저지대(침수 감시 구역) / outdoor 그 밖의 야외")
     start: datetime
     end: datetime
-    risk: Risk = Field(description="구간 안 최고 등급 (none 또는 low)")
+    has_info: bool = Field(description="구간 안에 참고(info) 신호가 있는지")
 
 
 class Outlook(BaseModel):
@@ -156,15 +162,16 @@ class SensorView(BaseModel):
     lng: float
     value: float | None = Field(None, description="측정값 (단위 미공개)")
     level: int | None = Field(None, description="E-UM 이 매긴 등급 (1 = 평상시)")
-    risk: Risk
+    risk: Level | None = Field(description="이 센서 값으로 본 단계. 등급 값이 없으면 null")
+    note: str | None = Field(None, description="참고 신호 (예: 노면 수위 감지)")
 
 
 class ZoneStatus(BaseModel):
     id: str
     name: str
     kind: Literal["breakwater", "flood"]
-    risk: Risk
-    reasons: list[str]
+    risk: Level | None = Field(description="null: 데이터를 받지 못해 판단하지 않음")
+    reasons: list[str] = Field(description="주의·위험 사유와 참고 신호")
 
 
 class BreakwaterActivity(BaseModel):
@@ -184,7 +191,7 @@ class UvView(BaseModel):
 
 class Status(BaseModel):
     now: datetime
-    overall_risk: Risk
+    overall_risk: Level | None
     zones: list[ZoneStatus]
     sensors: list[SensorView]
     breakwater_activity: list[BreakwaterActivity] = Field(description="방파제별 가장 최근 1시간 집계")
@@ -202,3 +209,39 @@ class ZoneView(BaseModel):
     kind: Literal["breakwater", "flood"]
     path: list[tuple[float, float]] = Field(description="(lat, lng). 점 하나면 원의 중심, 여러 개면 선")
     radius_m: float
+
+
+PlaceKind = Literal["breakwater", "flood", "outdoor", "indoor"]
+
+
+class SituationHour(BaseModel):
+    time: datetime
+    levels: dict[PlaceKind, Level] = Field(description="장소 종류별 그 시각 단계 (예보 + 발효 특보)")
+    info: list[PlaceKind] = Field(description="safe 지만 참고 신호가 있는 장소 종류")
+
+
+class Situation(BaseModel):
+    """지금 안전 상황 요약. planner 같은 이용자가 fingerprint 를 저장해 두었다가 바뀌었을 때만 일정을 다시 점검한다."""
+
+    now: datetime = Field(description="safety 의 기준 시각 (시뮬레이션 중이면 가상 시각)")
+    fingerprint: str = Field(description="아래 내용(참고 신호·데이터 장애 포함)의 해시. 상황이 바뀌면 달라진다")
+    forecast_until: datetime | None = Field(description="단기예보 마지막 시각. 이 시각까지 방문 위험을 판단할 수 있다")
+    zones: dict[str, Level | None] = Field(description="구역별 지금 단계 (status 와 같음)")
+    warnings: list[str] = Field(description="발효 중인 구룡포 해당 특보")
+    hours: list[SituationHour] = Field(description="예보가 있는 시각별 장소 종류 단계")
+    data_ok: dict[str, bool]
+
+
+class SimState(BaseModel):
+    scenario: str
+    now: datetime = Field(description="지금 가상 시각 (시뮬레이션 시각이 아니면 실제 시각)")
+    offset_minutes: int = Field(description="실제 시각과의 차이")
+    scenarios: dict[str, str] = Field(description="쓸 수 있는 시나리오와 설명")
+
+
+class SimUpdate(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    scenario: str | None = Field(None, description="바꿀 시나리오 (생략하면 그대로)")
+    now: datetime | None = Field(None, description="가상 시각. 이후 실제 시간만큼 흘러간다. 생략하면 그대로")
+    reset_clock: bool = Field(False, description="true 면 실제 시각으로 되돌린다")

@@ -1,9 +1,14 @@
 """수집한 데이터를 '이 시각, 이 장소가 위험한가'로 해석한다. 외부 호출 없는 순수 함수만 둔다.
 
+위험 단계는 3단계다: safe(안전) / caution(주의) / danger(위험).
+- 근거(Hazard)의 등급은 info(참고) / caution / danger. info 는 단계를 올리지 않지만 사람·LLM 이 일정을 조정할 때
+  참고하도록 그대로 돌려준다 (예: 약한 비, 실내라 이동할 때만 영향).
+- 내부 계산은 ORDER = none < info < caution < danger 로 하고, 응답에서 none·info 를 safe 로 바꾼다 (public).
+
 핵심 원칙
-- 예보는 시점이 멀수록 의미가 없다. 단기예보(약 3일)가 없는 시점은 날씨 위험을 판단하지 않고 'unknown' 으로 둔다.
-  'unknown' 은 안전하다는 뜻이 아니며, 그 시점에는 안전을 이유로 일정을 바꾸지 말라고 안내한다.
-- 판단 근거가 없으면(데이터 장애) 'none' 이 아니라 'unknown'.
+- 예보는 시점이 멀수록 의미가 없다. 단기예보(약 3일)가 없는 시점은 날씨 위험을 판단하지 않는다 (risk=null).
+  판단하지 않음은 안전하다는 뜻이 아니며, 그 시점에는 안전을 이유로 일정을 바꾸지 말라고 안내한다.
+- 판단 근거가 없으면(데이터 장애) safe 가 아니라 판단하지 않음.
 - 임계값 중 E-UM 등급 해석과 방파제 기준은 공식 기준이 없어 우리가 정한 가정이다 (ASSUMPTIONS).
 """
 from collections import Counter
@@ -11,12 +16,13 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 
 from app.safety import geo
-from app.safety.schemas import Confidence, Hazard, Horizon, Risk
+from app.safety.schemas import Confidence, Hazard, Horizon, Level
 from app.safety.sources import (
     ActiveWarning, BreakwaterHour, ForecastHour, SensorReading, TideEvent,
 )
 
-ORDER = ["none", "low", "caution", "danger"]
+ORDER = ["none", "info", "caution", "danger"]  # 내부 신호 등급. none·info 는 응답에서 safe
+LEVELS = ["safe", "caution", "danger"]
 NOW_WINDOW = timedelta(hours=3)  # 이 안이면 실측 센서를 그대로 적용
 # 특보는 '지금' 상태다. 가까운 시각에만 그대로 적용하고, 그 뒤는 예보로 판단한다 (특보는 참고로만 남긴다)
 WARNING_FULL = timedelta(hours=6)
@@ -30,7 +36,7 @@ MEDIUM_LIMIT = timedelta(days=10)  # 중기예보 범위. 아직 연동하지 �
 RECHECK_LEAD_DAYS = 3  # 여행일 며칠 전부터 단기예보로 판단 가능한지
 
 # (기준값, 등급). 위에서부터 처음 넘는 값
-RAIN_MM = [(30, "danger"), (10, "caution"), (3, "low")]  # 시간당 강수량. 30mm/h 는 기상청 '매우 강한 비'
+RAIN_MM = [(30, "danger"), (10, "caution"), (3, "info")]  # 시간당 강수량. 30mm/h 는 기상청 '매우 강한 비'
 WIND_MS = [(14, "danger"), (9, "caution")]  # 방파제 기준. 14m/s 는 육상 강풍주의보 기준
 WAVE_M = [(3.0, "danger"), (1.5, "caution")]  # 방파제 기준. 3m 는 풍랑주의보 기준
 
@@ -46,9 +52,19 @@ PTY = {0: "없음", 1: "비", 2: "비/눈", 3: "눈", 4: "소나기", 5: "빗방
 SENS_LABEL = {"breakwater": "방파제", "flood": "침수 감시 구역"}
 
 
-def worst(levels) -> Risk:
+def worst(levels) -> str:
+    """내부 신호 등급 중 최고 (ORDER 에 없는 값은 무시, 없으면 none)."""
     known = [lv for lv in levels if lv in ORDER]
     return max(known, key=ORDER.index) if known else "none"
+
+
+def public(level: str) -> Level:
+    """내부 신호 등급 -> 응답 3단계. none·info 는 safe."""
+    return level if level in ("caution", "danger") else "safe"
+
+
+def worst_public(levels) -> Level:
+    return max(levels, key=LEVELS.index) if levels else "safe"
 
 
 def down(level: str, steps: int = 1) -> str:
@@ -109,25 +125,26 @@ def sensitivity(lat: float | None, lng: float | None, flood_zones=geo.STATIC_FLO
 
 # ---------- 예보 ----------
 
-def _cap_low(level: str) -> str:
-    return "low" if ORDER.index(level) > 1 else level
+def _cap_info(level: str) -> str:
+    return "info" if ORDER.index(level) > 1 else level
 
 
 def _hour_signals(h: ForecastHour, sens: set[str], indoor: bool = False) -> list[tuple[str, str, float, str, str, bool]]:
     """한 시간 예보 -> (type, level, 값, 항목명, 단위, 실내라 낮췄는지). 장소 성질에 따라 등급을 조정한다.
 
     - 방파제: 바람·파고·비 그대로 / 침수 감시 구역: 비 그대로 (실내여도 앞길이 잠기면 위험)
-    - 그 밖: 비·바람 한 단계 낮게, 파고 무시 / 그 밖의 실내: 비·바람은 '참고'까지만 (이동할 때만 영향)
+    - 그 밖: 비·바람 한 단계 낮게 (비는 낮춰도 '참고'로 남긴다), 파고 무시
+    - 그 밖의 실내: 비·바람은 '참고'까지만 (이동할 때만 영향)
     """
     out = []
     rain = grade(h.pcp_mm, RAIN_MM)
     if rain == "none" and h.pty in (1, 2, 4) and (h.pop or 0) >= 60:
-        rain = "low"
+        rain = "info"
     if rain != "none":
         hot = bool(sens & {"flood", "breakwater"})
-        lv = rain if hot else down(rain)
-        capped = indoor and not hot and lv != _cap_low(lv)
-        lv = _cap_low(lv) if indoor and not hot else lv
+        lv = rain if hot else worst([down(rain), "info"])  # 비가 오면 어디든 최소 '참고'
+        capped = indoor and not hot and lv != _cap_info(lv)
+        lv = _cap_info(lv) if indoor and not hot else lv
         if lv != "none":
             out.append(("flood" if "flood" in sens and ORDER.index(lv) >= 2 else "rain", lv, h.pcp_mm or 0.0,
                         "강수", "mm/h", capped))
@@ -135,8 +152,8 @@ def _hour_signals(h: ForecastHour, sens: set[str], indoor: bool = False) -> list
     if wind != "none":
         hot = "breakwater" in sens
         lv = wind if hot else down(wind)
-        capped = indoor and not hot and lv != _cap_low(lv)
-        lv = _cap_low(lv) if indoor and not hot else lv
+        capped = indoor and not hot and lv != _cap_info(lv)
+        lv = _cap_info(lv) if indoor and not hot else lv
         if lv != "none":
             out.append(("wind", lv, h.wsd or 0.0, "풍속", "m/s", capped))
     wave = grade(h.wav, WAVE_M)
@@ -171,13 +188,13 @@ def forecast_hazards(hours: list[ForecastHour], sens: set[str], indoor: bool = F
 
 # 특보 종류 -> (방파제, 침수 감시 구역, 그 밖) 의 (주의보 등급, 경보 등급)
 WARNING_IMPACT = {
-    "호우": (("caution", "danger"), ("caution", "danger"), ("low", "caution")),
-    "강풍": (("danger", "danger"), ("low", "caution"), ("low", "caution")),
+    "호우": (("caution", "danger"), ("caution", "danger"), ("info", "caution")),
+    "강풍": (("danger", "danger"), ("info", "caution"), ("info", "caution")),
     "풍랑": (("danger", "danger"), ("none", "none"), ("none", "none")),
     "태풍": (("danger", "danger"), ("danger", "danger"), ("caution", "danger")),
     "폭풍해일": (("danger", "danger"), ("danger", "danger"), ("caution", "caution")),
     "해일": (("danger", "danger"), ("danger", "danger"), ("caution", "caution")),
-    "대설": (("low", "caution"), ("low", "caution"), ("low", "caution")),
+    "대설": (("info", "caution"), ("info", "caution"), ("info", "caution")),
 }
 
 
@@ -190,11 +207,11 @@ def warning_hazards(active: list[ActiveWarning], sens: set[str], at: datetime | 
         idx = 1 if w.grade == "경보" else 0
         note = ""
         if impact is None:  # 건조·폭염·한파·황사 등: 참고로만
-            lv = "low"
+            lv = "info"
         else:
             other = impact[2][idx]
-            if indoor and other != _cap_low(other):
-                other, note = _cap_low(other), f", {INDOOR_NOTE}"
+            if indoor and other != _cap_info(other):
+                other, note = _cap_info(other), f", {INDOOR_NOTE}"
             levels = [impact[0][idx] if "breakwater" in sens else "none",
                       impact[1][idx] if "flood" in sens else "none", other]
             lv = worst(levels)
@@ -207,29 +224,29 @@ def warning_hazards(active: list[ActiveWarning], sens: set[str], at: datetime | 
 def timed_warning_hazards(active: list[ActiveWarning], sens: set[str], start: datetime, now: datetime,
                           at: datetime | None = None, indoor: bool = False) -> list[Hazard]:
     """특보를 방문 시각에 맞춰 적용한다. 특보는 '지금' 상태라
-    - 6시간 안: 그대로 / 24시간 안: 참고(low)로만, 그 시각 위험은 예보로 판단 / 그 뒤: 쓰지 않는다."""
+    - 6시간 안: 그대로 / 24시간 안: 참고(info)로만, 그 시각 위험은 예보로 판단 / 그 뒤: 쓰지 않는다."""
     lead = start - now
     if lead > WARNING_WINDOW:
         return []
     hz = warning_hazards(active, sens, at, indoor)
     if lead <= WARNING_FULL:
         return hz
-    return [h.model_copy(update={"level": "low", "reason": h.reason.replace(
+    return [h.model_copy(update={"level": "info", "reason": h.reason.replace(
         " 발효 중 (", f" 현재 발효 중, {start:%m/%d %H}시에는 해제될 수 있음 (")}) for h in hz]
 
 
-def safe_windows(levels: dict[datetime, str], duration: timedelta) -> list[tuple[datetime, datetime, str]]:
-    """시작 시각별 등급 {시각: 등급} -> 주의·위험이 없는 연속 구간 [(시작, 끝, 구간 최고 등급)].
-    끝은 마지막 시작 시각 + duration. 길이가 duration 보다 짧은 구간은 버린다."""
-    out: list[tuple[datetime, datetime, str]] = []
+def safe_windows(levels: dict[datetime, str], duration: timedelta) -> list[tuple[datetime, datetime, bool]]:
+    """시작 시각별 신호 등급 {시각: 등급} -> 주의·위험이 없는 연속 구간 [(시작, 끝, 참고 신호가 있는지)].
+    끝은 마지막 시작 시각 + duration."""
+    out: list[tuple[datetime, datetime, bool]] = []
     run: list[datetime] = []
 
     def flush():
         if run:
-            out.append((run[0], run[-1] + duration, worst(levels[t] for t in run)))
+            out.append((run[0], run[-1] + duration, any(levels[t] == "info" for t in run)))
 
     for t in sorted(levels):
-        ok = levels[t] in ("none", "low")
+        ok = levels[t] in ("none", "info")
         if ok and run and t - run[-1] == timedelta(hours=1):
             run.append(t)
         else:
@@ -241,7 +258,8 @@ def safe_windows(levels: dict[datetime, str], duration: timedelta) -> list[tuple
 
 # ---------- 실측 ----------
 
-def sensor_risk(r: SensorReading) -> tuple[Risk, str | None]:
+def sensor_risk(r: SensorReading) -> tuple[str, str | None]:
+    """(내부 신호 등급 또는 unknown, 사유)."""
     if r.type not in geo.FLOOD_SENSOR_TYPES:
         return "none", None
     if r.level is None:
@@ -251,7 +269,7 @@ def sensor_risk(r: SensorReading) -> tuple[Risk, str | None]:
     if r.level == 2:
         return "caution", f"{r.name} 수위 등급 {r.level} (주의)"
     if r.type == "ROAD" and (r.value or 0) > 0:
-        return "low", f"{r.name} 노면 수위 감지 ({r.value:g})"
+        return "info", f"{r.name} 노면 수위 감지 ({r.value:g})"
     return "none", None
 
 
@@ -279,7 +297,7 @@ def breakwater_hazards(rows: list[BreakwaterHour], side: str, now: datetime) -> 
         return [Hazard(type="breakwater", level="caution", source="E-UM AI CCTV (실측)", at=last.hour,
                        reason=f"{name} 위험구역 실족 감지 {last.fall}건 ({last.hour:%H}시)")]
     if last.intrusion + last.approach >= 20:
-        return [Hazard(type="breakwater", level="low", source="E-UM AI CCTV (실측)", at=last.hour,
+        return [Hazard(type="breakwater", level="info", source="E-UM AI CCTV (실측)", at=last.hour,
                        reason=f"{name} 위험구역 접근·침입 {last.intrusion + last.approach}건 ({last.hour:%H}시)")]
     return []
 
@@ -312,15 +330,15 @@ def seasonal_notes(d: date) -> list[str]:
 
 # ---------- 행동 지침 ----------
 
-def windows_text(wins: list[tuple[datetime, datetime, str]]) -> str:
+def windows_text(wins: list[tuple[datetime, datetime, bool]]) -> str:
     return ", ".join(f"{a:%m/%d %H:%M}~{b:%H:%M}" if a.date() == b.date() else f"{a:%m/%d %H:%M}~{b:%m/%d %H:%M}"
                      for a, b, _ in wins)
 
 
-def visit_advice(t: Timing, risk: Risk, sens: set[str], now: datetime, start: datetime, hazards: list[Hazard],
-                 data_missing: bool, indoor: bool = False,
-                 better: list[tuple[datetime, datetime, str]] | None = None, searched: bool = False) -> str:
-    """searched: 다른 시간대를 찾아봤는지 (예보가 있어 찾을 수 있었을 때만 True)."""
+def visit_advice(t: Timing, risk: Level | None, sens: set[str], now: datetime, start: datetime,
+                 hazards: list[Hazard], data_missing: bool, indoor: bool = False,
+                 better: list[tuple[datetime, datetime, bool]] | None = None, searched: bool = False) -> str:
+    """risk: 3단계 또는 None(판단하지 않음). searched: 다른 시간대를 찾아봤는지 (예보가 있어 찾을 수 있었을 때만 True)."""
     sens_txt = ", ".join(SENS_LABEL[s] for s in sorted(sens))
     if t.horizon == "past":
         return "이미 지난 시간이라 평가하지 않았다."
@@ -333,7 +351,7 @@ def visit_advice(t: Timing, risk: Risk, sens: set[str], now: datetime, start: da
             tail = (f" {sens_txt}처럼 날씨에 민감한 곳이라 사용자에게 날씨에 따라 바뀔 수 있다고만 알려도 된다."
                     + tail)
         return head + " 안전을 이유로 이 일정을 바꾸거나 빼지 마라." + tail
-    if data_missing and risk in ("none", "unknown"):
+    if risk is None:
         return "필요한 데이터를 받지 못해 판단하지 못했다. 안전하다고 말하지 말고, 필요하면 나중에 다시 확인한다."
     top = "; ".join(h.reason for h in hazards[:3])
     forecast_word = "실측·예보" if t.horizon == "now" else "예보"
@@ -354,12 +372,13 @@ def visit_advice(t: Timing, risk: Risk, sens: set[str], now: datetime, start: da
         return "실내 장소라 방문 자체는 괜찮다." + (
             " 이동할 때 비·바람만 조심하면 되고, 야외 일정의 대안으로 적합하다." if weather
             else " 날씨가 나쁜 날 야외 일정의 대안으로 쓸 수 있다.")
-    if risk == "low":
-        return f"참고: {top}. 일정을 바꿀 정도는 아니다."
+    if hazards:  # safe 인데 참고(info) 신호가 있다
+        return f"안전 단계지만 참고할 것: {top}. 일정을 바꿀 정도는 아니며, 일정을 짤 때 참고하면 된다."
     return f"{forecast_word}상 특별한 위험 신호가 없다." + (" 예보는 바뀔 수 있다." if t.horizon == "short_range" else "")
 
 
-def assess_guidance(horizons: list[Horizon], risks: list[Risk], recheck: date | None, missing: list[str]) -> str:
+def assess_guidance(horizons: list[Horizon], risks: list[Level | None], recheck: date | None,
+                    missing: list[str]) -> str:
     c = Counter(horizons)
     parts = []
     risky = sum(r in ("caution", "danger") for r in risks)
@@ -367,11 +386,11 @@ def assess_guidance(horizons: list[Horizon], risks: list[Risk], recheck: date | 
         parts.append(f"{risky}곳에 주의·위험 신호가 있다. 각 항목 advice 를 따르고, 바꾸기 전에 이유를 사용자에게 설명하라.")
     far = c["medium_range"] + c["long_range"]
     if far:
-        parts.append(f"{far}곳은 예보 범위 밖이라 날씨 위험을 판단하지 않았다(risk=unknown, 안전하다는 뜻 아님). "
+        parts.append(f"{far}곳은 예보 범위 밖이라 날씨 위험을 판단하지 않았다(risk=null, 안전하다는 뜻 아님). "
                      "이 항목들은 안전을 이유로 바꾸지 마라."
                      + (f" {recheck:%Y-%m-%d}부터 다시 확인하면 된다." if recheck else ""))
     if missing:
-        parts.append(f"일부 데이터({', '.join(missing)})를 받지 못해 관련 판단은 unknown 이다.")
+        parts.append(f"일부 데이터({', '.join(missing)})를 받지 못해 관련 판단을 하지 못했다(risk=null).")
     if not parts:
         if c["now"] + c["short_range"]:
             parts.append("예보·실측상 특별한 위험 신호가 없다. 예보는 바뀔 수 있으니 '안전이 보장된다'고 말하지 마라.")

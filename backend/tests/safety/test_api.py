@@ -2,7 +2,7 @@
 
     docker compose run --rm safety pytest tests/safety
 """
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
@@ -88,31 +88,33 @@ def test_zones(use):
     assert kinds.count("breakwater") == 2 and kinds.count("flood") == 9
 
 
-def test_far_future_is_unknown_and_says_do_not_change(use):
+def test_far_future_is_not_assessed_and_says_do_not_change(use):
     src = CountingMock("storm")  # 지금 폭풍이어도 몇 달 뒤 일정에는 영향 없다
     r = assess(use(src), visit("p-breakwater", "2027-01-15", "14:00"))
     v = r["visits"][0]
-    assert v["horizon"] == "long_range" and v["risk"] == "unknown" and v["forecast_available"] is False
+    assert v["horizon"] == "long_range" and v["risk"] is None and v["forecast_available"] is False
+    assert v["unassessed_reason"] == "beyond_forecast"
     assert v["confidence"] == "none" and v["hazards"] == []
     assert v["recheck_from"] == "2027-01-12" and "바꾸거나 빼지 마라" in v["advice"]
     assert v["sensitivity"] == ["방파제"]
     assert any("겨울철" in n for n in v["notes"])
-    assert r["overall_risk"] == "unknown" and "안전을 이유로 바꾸지 마라" in r["guidance"]
+    assert r["overall_risk"] is None and "안전을 이유로 바꾸지 마라" in r["guidance"]
     assert src.calls == []  # 실측·특보는 부르지 않는다
     assert "sensors" not in r["data_status"]
 
 
 def test_medium_range_waits_for_forecast(use):
     v = assess(use(CountingMock("storm")), visit("p-breakwater", "2026-10-11", "14:00"))["visits"][0]
-    assert v["horizon"] == "medium_range" and v["risk"] == "unknown" and v["recheck_from"] == "2026-10-08"
+    assert v["horizon"] == "medium_range" and v["risk"] is None and v["recheck_from"] == "2026-10-08"
 
 
-def test_calm_tomorrow_is_none_with_forecast(use):
+def test_calm_tomorrow_is_safe_with_forecast(use):
     r = assess(use(CountingMock()), visit("p-breakwater", "2026-10-05", "14:00", "15:00"))
     v = r["visits"][0]
-    assert (v["horizon"], v["forecast_available"], v["risk"]) == ("short_range", True, "none")
+    assert (v["horizon"], v["forecast_available"], v["risk"]) == ("short_range", True, "safe")
     assert v["label"] == "구룡포 북방파제" and "바뀔 수 있다" in v["advice"]
-    assert r["overall_risk"] == "none" and r["data_status"]["forecast"]["note"].startswith("mock")
+    assert v["unassessed_reason"] is None and v["hazards"] == []
+    assert r["overall_risk"] == "safe" and r["data_status"]["forecast"]["note"].startswith("mock")
 
 
 def test_storm_now_marks_breakwater_and_flood_zone_dangerous(use):
@@ -127,7 +129,7 @@ def test_storm_now_marks_breakwater_and_flood_zone_dangerous(use):
     police = by["p-police"]  # 옆 지표면 수위계가 등급 2(주의) + 호우주의보
     assert police["risk"] == "caution" and police["sensitivity"] == ["침수 감시 구역"]
     assert any(h["source"].startswith("E-UM") and h["level"] == "caution" for h in police["hazards"])
-    assert by["p-street"]["risk"] in ("low", "caution")  # 방파제·침수 구역이 아닌 곳은 낮게
+    assert by["p-street"]["risk"] == "caution"  # 방파제·침수 구역이 아닌 곳은 한 단계 낮게
     assert r["overall_risk"] == "danger" and "advice 를 따르고" in r["guidance"]
 
 
@@ -136,8 +138,9 @@ def test_indoor_place_is_an_alternative_not_a_problem(use):
                visit("p-restaurant", "2026-10-04", "15:00"))
     museum, restaurant = r["visits"]
     assert museum["indoor"] is True and "실내" in museum["sensitivity"]
-    assert museum["risk"] == "low" and "방문 자체는 괜찮다" in museum["advice"]
-    assert all(h["level"] == "low" for h in museum["hazards"]) and museum["better_times"] == []
+    assert museum["risk"] == "safe" and "방문 자체는 괜찮다" in museum["advice"]
+    # 단계는 안전이지만 비·바람·특보는 참고(info)로 그대로 남는다
+    assert museum["hazards"] and all(h["level"] == "info" for h in museum["hazards"]) and museum["better_times"] == []
     # 침수 감시 구역 안의 실내는 그대로 위험하다
     assert restaurant["indoor"] is True and restaurant["risk"] in ("caution", "danger")
 
@@ -148,7 +151,7 @@ def test_indoor_can_be_overridden(use):
     assert r["indoor"] is False and r["risk"] == "caution"
     r = assess(use(CountingMock("storm")), {"lat": 35.9821, "lng": 129.5421, "date": "2026-10-04", "start": "15:00",
                                            "indoor": True})["visits"][0]
-    assert r["risk"] == "low"
+    assert r["risk"] == "safe" and r["hazards"]
 
 
 def test_risky_visit_suggests_better_times(use):
@@ -175,18 +178,19 @@ def test_no_better_time_tells_to_find_another_place(use):
 def test_current_warning_does_not_decide_tomorrow(use):
     # 내일 오후(약 29시간 뒤)는 예보가 잠잠하므로, 지금 발효 중인 특보만으로 위험해지지 않는다
     v = assess(use(CountingMock("storm")), visit("p-breakwater", "2026-10-05", "15:00"))["visits"][0]
-    assert v["risk"] == "none" and v["hazards"] == []
+    assert v["risk"] == "safe" and v["hazards"] == []
     # 20시간 뒤는 특보를 참고로만 붙이고, 위험 판단은 예보가 한다
     v = assess(use(CountingMock("storm")), visit("p-breakwater", "2026-10-05", "06:00"))["visits"][0]
     warn = [h for h in v["hazards"] if h["type"] == "warning"]
-    assert warn and all(h["level"] == "low" and "해제될 수 있음" in h["reason"] for h in warn)
+    assert warn and all(h["level"] == "info" and "해제될 수 있음" in h["reason"] for h in warn)
     assert v["risk"] == "danger"  # 예보(풍속·파고) 때문
 
 
-def test_forecast_failure_is_unknown_not_safe(use):
+def test_forecast_failure_is_not_assessed_not_safe(use):
     r = assess(use(ForecastDown()), visit("p-breakwater", "2026-10-05", "14:00"))
     v = r["visits"][0]
-    assert (v["horizon"], v["forecast_available"], v["risk"]) == ("short_range", False, "unknown")
+    assert (v["horizon"], v["forecast_available"], v["risk"]) == ("short_range", False, None)
+    assert v["unassessed_reason"] == "data_missing"
     assert "안전하다고 말하지 말고" in v["advice"]
     assert r["data_status"]["forecast"]["ok"] is False and "기상 예보" in r["guidance"]
 
@@ -226,7 +230,7 @@ def test_outlook_storm_tomorrow(use):
     assert r["summary"]["max_wave_m"] == 3.5 and len(r["hourly"]) == 4
     assert any(h["level"] == "danger" and "방파제 기준" in h["reason"] for h in r["hazards"])
     assert r["warnings"]  # 내일은 현재 특보도 함께 보여주되
-    assert all(h["level"] == "low" for h in r["hazards"] if h["type"] == "warning")  # 그날 위험은 예보로 판단
+    assert all(h["level"] == "info" for h in r["hazards"] if h["type"] == "warning")  # 그날 위험은 예보로 판단
     assert "대안" in r["guidance"] and "safe_windows" in r["guidance"]
 
 
@@ -251,7 +255,7 @@ def test_outlook_rejects_bad_window(use):
 
 def test_status_calm_and_storm(use):
     calm = ok(use(CountingMock()).get("/safety/status", params={"now": NOW.isoformat()}))
-    assert calm["overall_risk"] == "none" and len(calm["sensors"]) == 10 and calm["uv"]["index"] == 4.0
+    assert calm["overall_risk"] == "safe" and len(calm["sensors"]) == 10 and calm["uv"]["index"] == 4.0
     assert {a["side"] for a in calm["breakwater_activity"]} == {"north", "south"}
     storm = ok(use(CountingMock("storm")).get("/safety/status", params={"now": NOW.isoformat()}))
     assert storm["overall_risk"] == "danger" and len(storm["warnings"]) == 3
@@ -261,23 +265,121 @@ def test_status_calm_and_storm(use):
     assert storm["next_hours"]
 
 
-def test_status_without_sensors_is_unknown(use):
+def test_status_without_sensors_is_not_assessed(use):
     class SensorsDown(CountingMock):
         def sensors(self):
             return Fetched(None, NOW, "SourceError: 40104")
 
     r = ok(use(SensorsDown()).get("/safety/status", params={"now": NOW.isoformat()}))
     flood = [z for z in r["zones"] if z["kind"] == "flood"]
-    assert flood and all(z["risk"] == "unknown" for z in flood)
-    assert r["overall_risk"] == "unknown" and "단정하지 마라" in r["guidance"]
+    assert flood and all(z["risk"] is None for z in flood)
+    assert r["overall_risk"] is None and "단정하지 마라" in r["guidance"]
     assert r["data_status"]["sensors"]["ok"] is False and "침수 센서" in r["guidance"]
 
 
-def test_overall_is_unknown_when_some_visits_not_assessed(use):
+def test_overall_is_null_when_some_visits_not_assessed(use):
     r = assess(use(CountingMock()), visit("p-street", "2026-10-05", "14:00"), visit("p-street", "2027-01-15", "14:00"))
-    assert [v["risk"] for v in r["visits"]] == ["none", "unknown"] and r["overall_risk"] == "unknown"
+    assert [v["risk"] for v in r["visits"]] == ["safe", None] and r["overall_risk"] is None
 
 
 def test_dates_are_kst(use):
     v = assess(use(CountingMock()), visit("p-street", "2026-10-05", "14:00"))["visits"][0]
     assert v["start"].endswith("+09:00") and date.fromisoformat(v["start"][:10]) == date(2026, 10, 5)
+
+
+# ---------- 3단계 + 참고 정보 ----------
+
+def test_rain_scenario_is_safe_but_keeps_info(use):
+    # 약한 비: 단계는 안전이지만 비 소식은 참고(info)로 남아 사람·LLM 이 일정 조정에 쓸 수 있다
+    v = assess(use(CountingMock("rain")), visit("p-street", "2026-10-04", "14:00"))["visits"][0]
+    assert v["risk"] == "safe" and v["unassessed_reason"] is None
+    assert [(h["type"], h["level"]) for h in v["hazards"]] == [("rain", "info")] and "5mm" in v["hazards"][0]["reason"]
+    assert "참고할 것" in v["advice"] and v["better_times"] == []
+
+
+def test_wind_tomorrow_scenario_depends_on_place(use):
+    src = CountingMock("wind_tomorrow")
+    r = assess(use(src), visit("p-breakwater", "2026-10-05", "14:00"), visit("p-street", "2026-10-05", "14:00"),
+               visit("p-museum", "2026-10-05", "14:00"), visit("p-breakwater", "2026-10-05", "10:00", key="am"))
+    by = {v["key"]: v for v in r["visits"]}
+    assert by["p-breakwater"]["risk"] == "danger" and by["p-street"]["risk"] == "caution"
+    assert by["p-museum"]["risk"] == "safe" and {h["level"] for h in by["p-museum"]["hazards"]} == {"info"}
+    assert by["am"]["risk"] == "safe"  # 같은 장소라도 바람이 없는 오전은 안전
+    # 같은 날 오전이 better_times 로 나온다
+    assert by["p-breakwater"]["better_times"][0]["start"].startswith("2026-10-04")
+    assert r["overall_risk"] == "danger"
+
+
+def test_flood_scenario_only_flood_zone(use):
+    r = assess(use(CountingMock("flood")), visit("p-police", "2026-10-04", "10:30"),
+               visit("p-breakwater", "2026-10-04", "10:30"), visit("p-street", "2026-10-04", "10:30"))
+    by = {v["key"]: v for v in r["visits"]}
+    assert by["p-police"]["risk"] == "caution"  # 옆 지표면 수위계 등급 2
+    assert any(h["source"].startswith("E-UM") for h in by["p-police"]["hazards"])
+    assert by["p-street"]["risk"] == "safe"
+
+
+# ---------- 상황 요약 ----------
+
+def situation(client, now=NOW):
+    return ok(client.get("/safety/situation", params={"now": now.isoformat()}))
+
+
+def test_situation_fingerprint_changes_only_when_situation_changes(use):
+    src = CountingMock()
+    client = use(src)
+    calm = situation(client)
+    assert calm["zones"]["breakwater_north"] == "safe" and calm["warnings"] == []
+    assert calm["hours"] and all(set(h["levels"].values()) == {"safe"} for h in calm["hours"])
+    assert calm["forecast_until"] and all(calm["data_ok"].values())
+    # 같은 상황이면 시간이 조금 흘러도 같다
+    assert situation(client, NOW + timedelta(minutes=30))["fingerprint"] == calm["fingerprint"]
+    src.scenario = "wind_tomorrow"
+    wind = situation(client)
+    assert wind["fingerprint"] != calm["fingerprint"]
+    risky = [h for h in wind["hours"] if h["levels"]["breakwater"] == "danger"]
+    assert risky and all(h["time"].startswith("2026-10-05") for h in risky)
+    assert all(h["levels"]["outdoor"] == "caution" and "indoor" in h["info"] for h in risky)
+    src.scenario = "rain"
+    rain = situation(client)
+    assert rain["fingerprint"] not in (calm["fingerprint"], wind["fingerprint"])
+    assert any("outdoor" in h["info"] for h in rain["hours"])  # 참고 신호 변화도 감지한다
+    src.scenario = "storm"
+    storm = situation(client)
+    assert storm["zones"]["breakwater_north"] == "danger" and len(storm["warnings"]) == 3
+
+
+def test_situation_data_failure_changes_fingerprint(use):
+    calm = situation(use(CountingMock()))
+    down = situation(use(ForecastDown()))
+    assert down["fingerprint"] != calm["fingerprint"] and down["data_ok"]["forecast"] is False and down["hours"] == []
+
+
+# ---------- 가상 상황 ----------
+
+def test_sim_changes_scenario_and_clock(use):
+    src = CountingMock()
+    client = use(src)
+    st = ok(client.get("/safety/sim"))
+    assert st["scenario"] == "calm" and st["offset_minutes"] == 0 and "storm" in st["scenarios"]
+    st = ok(client.put("/safety/sim", json={"scenario": "storm", "now": "2026-10-05T09:00:00+09:00"}))
+    assert st["scenario"] == "storm" and st["now"].startswith("2026-10-05T09:00") and st["offset_minutes"] == 23 * 60
+    # now 를 주지 않은 조회는 가상 시각을 쓴다
+    r = ok(client.post("/safety/assess", json={"visits": [visit("p-breakwater", "2026-10-05", "10:00")]}))
+    assert r["now"].startswith("2026-10-05T09:00") and r["visits"][0]["horizon"] == "now"
+    assert ok(client.get("/safety/situation"))["now"].startswith("2026-10-05T09:00")
+    st = ok(client.put("/safety/sim", json={"reset_clock": True}))
+    assert st["offset_minutes"] == 0 and st["scenario"] == "storm"
+
+
+def test_sim_rejects_bad_requests(use):
+    client = use(CountingMock())
+    r = client.put("/safety/sim", json={"scenario": "tsunami"})
+    assert r.status_code == 422 and r.json()["detail"]["code"] == "unknown_scenario"
+    assert client.put("/safety/sim", json={"scenrio": "storm"}).status_code == 422  # 모르는 필드
+
+    class Live:  # mock 이 아닌 소스
+        pass
+
+    r = use(Live()).put("/safety/sim", json={"scenario": "storm"})
+    assert r.status_code == 404 and r.json()["detail"]["code"] == "sim_disabled"

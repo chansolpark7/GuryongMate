@@ -4,7 +4,7 @@
 - 예보·특보·조위: 기상청 단기예보, 기상특보 발효 현황, 국립해양조사원 조석예보 (docs/external/WEATHER_WAVE_API.md)
 
 각 호출은 예외를 던지지 않고 Fetched(값, 수집 시각, 오류)를 돌려준다. 한 소스가 죽어도 나머지로 판단하고,
-판단할 근거가 없으면 위험도를 'unknown' 으로 둔다 (risk.py).
+판단할 근거가 없으면 위험 단계를 판단하지 않는다 (risk=null, risk.py).
 """
 import json
 import threading
@@ -122,6 +122,7 @@ class TideEvent:
 
 
 class Sources(Protocol):
+    def now(self) -> datetime: ...
     def sensors(self) -> Fetched[list[SensorReading]]: ...
     def breakwater(self) -> Fetched[list[BreakwaterHour]]: ...
     def uv(self) -> Fetched[UvReading]: ...
@@ -308,6 +309,9 @@ class LiveSources:
         self.cache = _Cache()
         self.keywords = [k.strip() for k in cfg.warn_keywords.split(",") if k.strip()]
 
+    def now(self) -> datetime:
+        return now_kst()
+
     def _get(self, url: str, key: str, params: dict | None = None) -> httpx.Response:
         if not key:
             raise SourceError("인증키가 설정되지 않았습니다")
@@ -375,55 +379,82 @@ class LiveSources:
 
 # ---------- 키 없이 개발·시연할 때 ----------
 
+MOCK_SCENARIOS = {
+    "calm": "평상시. 맑고 바람 약함",
+    "rain": "약한 비 (지금부터 3~9시간 뒤, 시간당 5mm). 주의·위험은 없고 참고(info) 신호만",
+    "wind_tomorrow": "내일 12~18시 강풍·높은 파도 (풍속 15m/s, 파고 3.2m). 특보 없음 -> 방파제 위험, 그 밖의 야외 주의",
+    "flood": "지금 침수 센서 상승 (수협 맨홀 등급 3, 파출소 지표면 등급 2) + 약한 비. 침수 감시 구역만 위험",
+    "storm": "호우·강풍·풍랑 특보 + 침수 센서 상승 + 30시간 악천후 (계획 변경 흐름 확인용)",
+}
+
+
 class MockSources:
-    """calm: 평상시 / storm: 호우·강풍·풍랑 특보 + 침수 센서 상승 (계획 변경 흐름 확인용).
+    """키 없이 쓰는 가짜 데이터. 시나리오(MOCK_SCENARIOS)와 시각을 실행 중에 바꿀 수 있다 (PUT /safety/sim).
     값은 실제 응답 형태를 따르되 내용은 지어낸 것이다. 응답의 data_status 에 mock 임이 표시된다."""
 
     def __init__(self, scenario: str = "calm", clock: Callable[[], datetime] = now_kst):
-        self.storm = scenario == "storm"
-        self.clock = clock
+        if scenario not in MOCK_SCENARIOS:
+            raise ValueError(f"알 수 없는 시나리오: {scenario}")
+        self.scenario = scenario
+        self._clock = clock
+        self.offset = timedelta(0)  # 가상 시각 = 실제(clock) + offset
+
+    @property
+    def storm(self) -> bool:
+        return self.scenario == "storm"
+
+    def now(self) -> datetime:
+        return self._clock() + self.offset
+
+    clock = now  # 이전 이름
 
     def _f(self, value) -> Fetched:
-        return Fetched(value, self.clock())
+        return Fetched(value, self.now())
 
     def sensors(self) -> Fetched[list[SensorReading]]:
-        storm_level = {4: (3, 1650.0), 8: (2, 12.0), 1: (2, 1.8), 5: (2, 38.0)}
+        raised = {"storm": {4: (3, 1650.0), 8: (2, 12.0), 1: (2, 1.8), 5: (2, 38.0)},
+                  "flood": {4: (3, 1650.0), 8: (2, 12.0)}}.get(self.scenario, {})
         out = []
         for i, t, n, la, lo in geo.WATER_SENSORS:
-            level, value = (1, 1100.0 if t == "HOLE" else 0.0)
-            if self.storm and i in storm_level:
-                level, value = storm_level[i]
+            level, value = raised.get(i, (1, 1100.0 if t == "HOLE" else 0.0))
             out.append(SensorReading(i, t, n, la, lo, value, level))
         return self._f(out)
 
     def breakwater(self) -> Fetched[list[BreakwaterHour]]:
-        hour = self.clock().replace(minute=0, second=0, microsecond=0) - timedelta(hours=1)
+        hour = self.now().replace(minute=0, second=0, microsecond=0) - timedelta(hours=1)
         k = 3 if self.storm else 1
         return self._f([BreakwaterHour("north", hour, 1 if self.storm else 0, 2 * k, 5 * k, 1),
                         BreakwaterHour("south", hour, 0, 3 * k, 7 * k, 1)])
 
     def uv(self) -> Fetched[UvReading]:
-        return self._f(UvReading(self.clock(), 0.5 if self.storm else 4.0))
+        return self._f(UvReading(self.now(), 0.5 if self.storm else 4.0))
 
     def forecast(self, now: datetime) -> Fetched[Forecast]:
         base = kma_base(now)
         fc = Forecast(base=base)
         start = base + timedelta(hours=1)
+        calm = dict(pop=10, pcp_mm=0.0, pty=0, sky=1, wsd=3.0, wav=0.5, tmp=21.0)
+        tomorrow = base.date() + timedelta(days=1)
         for i in range(70):
             t = start + timedelta(hours=i)
+            lead = t - now  # 지금부터 몇 시간 뒤인지 (시나리오 시각은 지금 기준)
+            w = dict(calm)
             if self.storm and i < 30:
-                fc.hours[t] = ForecastHour(t, pop=90, pcp_mm=35.0 if 6 <= i < 14 else 8.0, pty=1, sky=4,
-                                           wsd=16.0, wav=3.5, tmp=18.0)
-            else:
-                fc.hours[t] = ForecastHour(t, pop=10, pcp_mm=0.0, pty=0, sky=1, wsd=3.0, wav=0.5, tmp=21.0)
+                w = dict(pop=90, pcp_mm=35.0 if 6 <= i < 14 else 8.0, pty=1, sky=4, wsd=16.0, wav=3.5, tmp=18.0)
+            elif self.scenario in ("rain", "flood") and timedelta(hours=-1) < lead < timedelta(hours=9) and (
+                    self.scenario == "flood" or lead >= timedelta(hours=2)):
+                w = dict(calm, pop=80, pcp_mm=5.0, pty=1, sky=4)
+            elif self.scenario == "wind_tomorrow" and t.date() == tomorrow and 12 <= t.hour < 18:
+                w = dict(calm, sky=3, wsd=15.0, wav=3.2)
+            fc.hours[t] = ForecastHour(t, **w)
         for d in {t.date() for t in fc.hours}:
             fc.tmin[d], fc.tmax[d] = 15.0, 23.0
         return self._f(fc)
 
     def warnings(self) -> Fetched[Warnings]:
         if not self.storm:
-            return self._f(Warnings(self.clock(), [], []))
-        return self._f(Warnings(self.clock(), [
+            return self._f(Warnings(self.now(), [], []))
+        return self._f(Warnings(self.now(), [
             ActiveWarning("호우주의보", "경상북도(포항, 경주)"),
             ActiveWarning("강풍주의보", "경상북도(포항, 경주, 영덕)"),
             ActiveWarning("풍랑주의보", "경북남부앞바다, 동해남부북쪽안쪽먼바다"),
