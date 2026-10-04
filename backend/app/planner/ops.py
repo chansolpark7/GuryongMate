@@ -28,7 +28,8 @@ from app.planner.schemas import (
     UpdateItemOp,
     UpdatePlanOp,
 )
-from app.planner.validation import build_schedule
+from app.planner.travel import get_travel_lookup
+from app.planner.validation import build_schedule, travel_pairs
 
 
 PLAN_FIELDS = ("title", "start_date", "end_date", "day_start", "day_end", "travel_mode", "memo")
@@ -237,7 +238,10 @@ def detail(plan: PlannerPlan, places: PlaceLookup) -> PlanDetail:
             infos[pid] = places.get(pid)
         except PlacesUnavailable:
             infos[pid] = None
-    days, violations = build_schedule(plan, infos)
+    # 이동시간은 필요한 구간을 모아 routing 에 한 번만 묻는다 (실패하면 구간별 직선거리 근사)
+    pairs = travel_pairs(plan, infos)
+    legs = get_travel_lookup().legs(pairs, plan.travel_mode) if pairs else []
+    days, violations = build_schedule(plan, infos, {(a.id, b.id): leg for (a, b), leg in zip(pairs, legs)})
     fields = PlanSummary.model_fields.keys() - {"item_count"}
     return PlanDetail(
         **{k: getattr(plan, k) for k in fields},
