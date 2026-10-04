@@ -249,11 +249,11 @@ PUT /safety/sim
 - 호출량: 캐시 기준 최대 시간당 E-UM 약 42회, 공공데이터포털 약 14회 + 조회 날짜 수 — 개발계정 한도(하루 10,000건) 안.
 - 설정: `SAFETY_` 접두사 환경변수로 바꿀 수 있다 (`app/safety/config.py`). 예: `SAFETY_KMA_NX`, `SAFETY_TIDE_OBS_CODE`.
 
-## 5. 계획 Agent 연동 가이드 (아직 연결하지 않음)
+## 5. 계획 Agent 연동 (연결됨: `check_safety`·`safety_outlook` 도구, 검토 관문)
 
-agent 코드는 건드리지 않았다. 일정 단위 점검은 planner 가 제공한다:
+Agent 는 아래 방식으로 연결돼 있다 (`docs/agent/README.md` §5). 일정 단위 점검은 planner 가 제공한다:
 `GET /planner/plans/{id}/safety` (지금 일정), `POST /planner/plans/{id}/safety/preview` (변경안 초안).
-Agent 도구는 이 둘을 부르면 된다 ([`docs/planner/README.md` §7](../planner/README.md)). 연결할 때 권장하는 방식:
+Agent 도구는 이 둘을 부른다 ([`docs/planner/README.md` §7](../planner/README.md)). 처음 설계한 방식 (참고):
 
 **도구 2개**
 ```python

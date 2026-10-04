@@ -38,10 +38,12 @@ REVIEW_NOTE = ("[시스템] 방금 쓴 답변은 아직 사용자에게 보내�
                "다시 써라. 고칠 수 없는 문제는 최종 답변에서 이유를 짧게 말하라.\n")
 
 STEP_TITLE = {"search": "장소 찾기", "place": "장소 정보 확인", "plan": "일정 확인", "edit": "일정 조정",
-              "rule": "조건 반영", "review": "일정 검토", "recommend": "추천 정리", "proposal": "변경안 만들기"}
+              "rule": "조건 반영", "review": "일정 검토", "recommend": "추천 정리", "proposal": "변경안 만들기",
+              "safety": "안전 확인"}
 STATUS_TEXT = {"search": "장소를 찾고 있어요.", "place": "장소 정보를 확인하고 있어요.", "plan": "일정을 확인하고 있어요.",
                "edit": "일정을 조정하고 있어요.", "rule": "조건을 반영하고 있어요.", "review": "일정을 검토하고 있어요.",
-               "recommend": "추천할 곳을 고르고 있어요.", "proposal": "변경안을 만들고 있어요."}
+               "recommend": "추천할 곳을 고르고 있어요.", "proposal": "변경안을 만들고 있어요.",
+               "safety": "날씨와 안전을 확인하고 있어요."}
 
 log = logging.getLogger("app.agent")
 if not log.handlers:  # uvicorn 은 app 로거를 설정하지 않으므로 직접 출력

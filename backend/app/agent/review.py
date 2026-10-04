@@ -76,6 +76,40 @@ def review(plan: dict) -> list[dict]:
     return issues
 
 
+LEVEL = {"safe": "안전", "caution": "주의", "danger": "위험"}
+
+
+def safety_what(i: dict) -> str:
+    if i["kind"] == "travel":
+        return f"{i['day']}일차 {i['start_at']} 이동({'도보' if i['mode'] == 'walk' else '차량'}) {i['title']}"
+    return f"{i['day']}일차 {i['start_at']} '{i['title']}'"
+
+
+def safety_issues(check: dict) -> list[dict]:
+    """planner 안전 점검(SafetyCheck) -> 검토 문제. 위험은 should(가능하면 고친다), 주의는 info(사용자에게 알린다).
+    판단하지 않은 항목(먼 날짜·데이터 장애)은 문제로 만들지 않는다 (안전을 이유로 바꾸지 않는다)."""
+    out = []
+    for i in check.get("items", []):
+        if i["risk"] not in ("caution", "danger"):
+            continue
+        why = "; ".join(h["reason"] for h in i["hazards"] if h["level"] != "info")[:160]
+        if i["kind"] == "travel":
+            fix = "이동 시간·수단을 바꾸거나 순서를 바꿔 그 길을 피한다"
+            if i.get("detour") and i["detour"].get("detour_minutes") is not None:
+                fix += f" (우회하면 {i['detour']['detour_minutes']}분 더)"
+        else:
+            wins = ", ".join(f"{w['start'][5:16].replace('T', ' ')}~{w['end'][11:16]}" for w in i["better_times"][:2])
+            fix = (f"신호가 없는 시간대({wins})로 옮기거나 실내 장소로 바꾼다" if wins
+                   else "실내 장소 같은 대체 장소로 바꾼다")
+        if i["risk"] == "danger":
+            out.append({"level": "should", "kind": "safety", "day": i["day"], "item_id": i["item_id"],
+                        "message": f"{safety_what(i)} 안전 위험: {why}. {fix}. 못 바꾸면 이유를 사용자에게 설명한다."})
+        else:
+            out.append({"level": "info", "kind": "safety", "day": i["day"], "item_id": i["item_id"],
+                        "message": f"{safety_what(i)} 안전 주의: {why}. 사용자에게 알리고, 필요하면 {fix}."})
+    return out
+
+
 def summarize(issues: list[dict]) -> str:
     counts = {k: sum(1 for i in issues if i["level"] == k) for k in ("must", "should")}
     if not counts["must"] and not counts["should"]:

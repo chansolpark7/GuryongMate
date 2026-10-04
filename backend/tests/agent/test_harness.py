@@ -662,3 +662,112 @@ def test_delete_my_data(client, session):
     assert client.delete("/agent/me", headers=H).status_code == 204
     assert ok(client.get("/agent/sessions", headers=H)) == []
     err(client.get(f"/agent/sessions/{sid}", headers=H), 404, "session_not_found")
+
+
+# ---------- 안전 점검 도구 (safety·planner 를 같은 앱으로 연결) ----------
+
+from datetime import datetime as _dt  # noqa: E402
+
+from app.planner.safety_client import get_safety_client  # noqa: E402
+from app.planner.travel import StraightRoutes, get_route_lookup  # noqa: E402
+from app.safety.places import PlacePoint, get_place_lookup as safety_places  # noqa: E402
+from app.safety.router import get_sources  # noqa: E402
+from app.safety.sources import KST, MockSources  # noqa: E402
+
+
+class _SyncSafety:
+    """planner 의 SafetyClient 를 같은 앱의 safety API 로 (실제 HTTP 대신)."""
+
+    def __init__(self, c):
+        self.c = c
+
+    def assess(self, visits):
+        return ok(self.c.post("/safety/assess", json={"visits": visits}))
+
+    def situation(self):
+        return ok(self.c.get("/safety/situation"))
+
+
+@pytest.fixture
+def safety_on(client):
+    """flood 시나리오, 지금 = 10/10 11:00 (session 일정 날짜). 물회집은 수협 맨홀(등급 3) 반경 안 -> 3시간 안 방문은 위험."""
+    src = MockSources("flood", clock=lambda: _dt(2026, 10, 10, 11, 0, tzinfo=KST))
+    points = {k: PlacePoint(k, p.title, p.lat, p.lng, "음식점" if k == "p-food" else "관광지") for k, p in PLACES.items()}
+    app.dependency_overrides |= {get_sources: lambda: src, safety_places: lambda: type("L", (), {"get": lambda s, k: points.get(k)})(),
+                                 get_safety_client: lambda: _SyncSafety(client), get_route_lookup: StraightRoutes}
+    yield src
+    for dep in (get_sources, safety_places, get_safety_client, get_route_lookup):
+        app.dependency_overrides.pop(dep, None)
+
+
+def tool_result(call_messages, contains: str) -> dict:
+    """그 LLM 호출에 넘긴 도구 결과 중 가장 최근 것 (앞 턴 기록에도 도구 결과가 남아 있다)."""
+    return [json.loads(m["content"]) for m in call_messages if m["role"] == "tool" and contains in m["content"]][-1]
+
+
+def test_check_safety_tool(client, session, safety_on):
+    sid, _ = session
+    events = chat(client, sid, "점심 물회 넣어줘", [
+        [("add_item", {"place_id": "p-food"})], [("check_safety", {})], ["물회집 쪽이 지금 침수 위험이 있어요."]])
+    out = tool_result(llm.calls[2], "overall")
+    assert out["overall"] == "위험"
+    food = next(i for i in out["items"] if "물회집" in i["what"] and "이동" not in i["what"])
+    assert food["risk"] == "위험" and any("수협" in r for r in food["reasons"]) and food["advice"]
+    assert any("이동(도보) 가옥거리 → 물회집" in i["what"] for i in out["items"])  # 이동 구간도 본다
+    steps = [d for e, d in events if e == "step" and d["kind"] == "safety"]
+    assert steps[-1]["title"] == "안전 확인" and steps[-1]["detail"].startswith("위험 포함")
+    assert "날씨와 안전을 확인하고 있어요." in [d["text"] for e, d in events if e == "status"]
+    assert "check_safety" in [t["function"]["name"] for t in llm.tools_seen[0]]
+    assert "## 안전 정보" in llm.calls[0][0]["content"]
+
+
+def test_review_gate_pushes_safety_danger(client, session, safety_on, review_on):
+    sid, _ = session
+    events = chat(client, sid, "물회 넣어줘", [
+        [("add_item", {"place_id": "p-food"})],
+        ["넣었어요"],                                                     # 관문: 안전 위험(should) 으로 되돌려 보냄
+        [("remove_item", {"item_id": -1}), ("add_item", {"place_id": "p-cafe"})],
+        ["침수 위험이 있어 카페로 바꿨어요"],
+    ])
+    push = llm.calls[2][-1]["content"]
+    assert push.startswith("[시스템] 방금 쓴 답변은 아직") and "안전 위험" in push and "물회집" in push
+    assert last(events, "done")["text"] == "침수 위험이 있어 카페로 바꿨어요"
+    review_steps = [d["detail"] for e, d in events if e == "step" and d["kind"] == "review" and d["status"] == "done"]
+    assert review_steps[-1] == "문제 없음"
+
+
+def test_review_plan_reports_safety_unavailable(client, session, review_on):
+    """safety 를 부를 수 없으면 검토는 계속하되 '확인하지 못했다'(info) 를 알린다 (안전하다고 하지 않게)."""
+    from app.planner.safety_client import SafetyUnavailable
+
+    class Down:
+        def assess(self, visits):
+            raise SafetyUnavailable("down")
+
+        situation = assess
+
+    sid, _ = session
+    app.dependency_overrides[get_safety_client] = Down
+    app.dependency_overrides[get_route_lookup] = StraightRoutes
+    try:
+        chat(client, sid, "물회", [[("add_item", {"place_id": "p-food"})], [("review_plan", {})], ["끝"]])
+    finally:
+        app.dependency_overrides.pop(get_safety_client, None)
+        app.dependency_overrides.pop(get_route_lookup, None)
+    out = tool_result(llm.calls[2], "issues")
+    assert any(i.get("kind") == "safety" and "확인하지 못했다" in i["message"] and i["level"] == "info"
+               for i in out["issues"])
+
+
+def test_safety_outlook_tool(client, session, safety_on):
+    sid, _ = session
+    safety_on.scenario = "storm"
+    events = chat(client, sid, "내일 날씨 어때?", [[("safety_outlook", {"date": "2026-10-11"})], ["내일은 비바람이 있어요."]])
+    out = tool_result(llm.calls[1], "horizon")
+    assert out["date"] == "2026-10-11" and out["horizon"] == "short_range" and out["guidance"]
+    assert "ok_windows" in out or "signals" in out
+    far = chat(client, sid, "다음 달은?", [[("safety_outlook", {"date": "2026-11-20"})], ["아직 예보가 없어요."]])
+    out = tool_result(llm.calls[-1], "horizon")
+    assert out["horizon"] == "long_range" and "signals" not in out and out["tides"]
+    assert [d["detail"] for e, d in far if e == "step" and d["status"] == "done"][0] == "11-20 예보 전 (만조·계절 경향만)"
+    assert not [d for e, d in events if e == "proposal"]  # 조회만 하면 제안 없음

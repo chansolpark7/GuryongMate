@@ -1,5 +1,5 @@
 """일정 검토(review_plan)와 검토 관문 테스트. 검토 규칙은 순수 함수, 관문은 가짜 LLM 으로."""
-from app.agent.review import review, summarize
+from app.agent.review import review, safety_issues, summarize
 
 
 def item(id_, place_id, start, end, travel=None, content_type="관광지", status="planned", title=None):
@@ -67,3 +67,23 @@ def test_skipped_items_ignored():
 def test_empty_day_is_flagged():
     p = plan([], day_end="18:00")
     assert [(i["level"], i["message"]) for i in review(p)] == [("should", "1일차에 일정이 하나도 없습니다.")]
+
+
+def _s(risk, kind="visit", reason=None, **kw):
+    return {"item_id": 7, "kind": kind, "mode": "walk" if kind == "travel" else None, "day": 1, "start_at": "14:00",
+            "end_at": "15:00", "title": "방파제" if kind == "visit" else "가옥거리 → 방파제", "risk": risk,
+            "unassessed_reason": None, "better_times": [], "detour": None,
+            "hazards": [{"level": risk if risk in ("caution", "danger") else "info", "reason": reason or "풍속 16m/s 예보"}]} | kw
+
+
+def test_safety_issues_levels():
+    wins = [{"start": "2026-10-05T16:00:00+09:00", "end": "2026-10-05T19:00:00+09:00", "has_info": False}]
+    issues = safety_issues({"items": [
+        _s("danger", better_times=wins), _s("caution", kind="travel", detour={"detour_minutes": 4}),
+        _s("safe"), _s(None, unassessed_reason="beyond_forecast"),
+    ]})
+    assert [(i["level"], i["kind"]) for i in issues] == [("should", "safety"), ("info", "safety")]
+    assert "안전 위험" in issues[0]["message"] and "10-05 16:00~19:00" in issues[0]["message"]
+    assert "이동(도보) 가옥거리 → 방파제" in issues[1]["message"] and "우회하면 4분 더" in issues[1]["message"]
+    # 위험은 검토 관문이 되돌려 보내는 문제(should), 주의는 알리기만(info)
+    assert summarize(issues) == "문제 1건"
