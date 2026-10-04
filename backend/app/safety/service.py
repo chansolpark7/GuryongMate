@@ -47,7 +47,8 @@ class SafetyService:
 
     def _now(self, now: datetime | None) -> datetime:
         """기준 시각. 주지 않으면 소스의 시각 (mock 시뮬레이션 중이면 가상 시각)."""
-        return (now or self.src.now()).astimezone(KST)
+        now = now or self.src.now()
+        return now.replace(tzinfo=KST) if now.tzinfo is None else now.astimezone(KST)
 
     def _forecast(self, now: datetime) -> tuple[Fetched[Forecast], datetime | None]:
         fc = self.src.forecast(now)
@@ -105,7 +106,7 @@ class SafetyService:
             hz = (risk.warning_hazards(active, {"breakwater"}, warns.fetched_at)
                   + risk.forecast_hazards(soon, {"breakwater"})
                   + (risk.breakwater_hazards(bw.value, side, now) if bw.ok and bw.value else []))
-            gaps = not (warns.ok and fc.ok)
+            gaps = not (warns.ok and fc.ok and bw.ok)
             lv = risk.public(risk.worst(h.level for h in hz))
             zones.append(ZoneStatus(id=zone.id, name=zone.name, kind="breakwater",
                                     risk=None if gaps and lv == "safe" else lv,
@@ -254,6 +255,8 @@ class SafetyService:
         prepared = []
         for v in req.visits:
             lat, lng, label, notes, indoor = v.lat, v.lng, v.label, [], v.indoor
+            if indoor is None and v.content_type:
+                indoor = v.content_type in risk.INDOOR_TYPES
             if v.place_id and (lat is None or lng is None or indoor is None):
                 try:
                     p = self.places.get(v.place_id)
@@ -266,7 +269,9 @@ class SafetyService:
                     if indoor is None and p.content_type:
                         indoor = p.content_type in risk.INDOOR_TYPES
                 elif lat is None or lng is None:
-                    notes.append("장소 좌표를 알 수 없어 지역 공통 정보로만 판단했다.")
+                    notes.append("장소 좌표를 알 수 없어 지역 공통 정보로만 판단했다."
+                                 if p is None and place_error is None else
+                                 "장소 정보를 받지 못해 방파제·침수 구역인지 알 수 없다.")
             start = datetime.combine(v.date, v.start, KST)
             end = datetime.combine(v.date, v.end, KST) if v.end else start + timedelta(minutes=60)
             prepared.append((v, lat, lng, label, notes, indoor, start, end,
@@ -290,7 +295,8 @@ class SafetyService:
             sens = risk.sensitivity(lat, lng)
             hazards: list[Hazard] = []
             sensor_hz: list[Hazard] = []
-            missing = False
+            # 장소 조회 장애로 좌표를 모르면 방파제·침수 구역 여부를 판단할 수 없다 -> 낮게 판단하지 않고 판단 보류
+            missing = lat is None and v.place_id is not None and place_error is not None
             if t.horizon in ("now", "short_range"):
                 if t.forecast_available:
                     hazards += risk.forecast_hazards(self._hours(fc, max(start, now), end), sens, bool(indoor))
@@ -305,12 +311,17 @@ class SafetyService:
                 if lat is not None and sensors is not None:
                     if sensors.ok and sensors.value:
                         sensor_hz = risk.sensor_hazards(sensors.value, lat, lng, sensors.fetched_at)
+                        if t.horizon == "now" and risk.sensor_unknown_near(sensors.value, lat, lng):
+                            missing = True  # 반경 안 센서가 등급을 주지 않음
                     elif t.horizon == "now" and "flood" in sens:
                         missing = True
                 if t.horizon == "now":
                     hazards += sensor_hz
-                    if lat is not None and "breakwater" in sens and bw is not None and bw.ok and bw.value:
-                        hazards += risk.breakwater_hazards(bw.value, risk.nearest_breakwater_side(lat, lng), now)
+                    if lat is not None and "breakwater" in sens:
+                        if bw is not None and bw.ok and bw.value is not None:
+                            hazards += risk.breakwater_hazards(bw.value, risk.nearest_breakwater_side(lat, lng), now)
+                        else:
+                            missing = True  # 방파제 CCTV 를 받지 못함
             hazards.sort(key=lambda h: -risk.ORDER.index(h.level))
 
             if t.horizon != "past" and sens:
@@ -342,7 +353,7 @@ class SafetyService:
             results.append(VisitAssessment(
                 key=v.key, place_id=v.place_id, label=label, start=start, end=end, indoor=indoor,
                 horizon=t.horizon, forecast_available=t.forecast_available, confidence=t.confidence, risk=level,
-                unassessed_reason=unassessed, hazards=hazards,
+                unassessed_reason=unassessed, data_missing=missing, hazards=hazards,
                 sensitivity=[risk.SENS_LABEL[s] for s in sorted(sens)] + (["실내"] if indoor else []), notes=notes,
                 advice=risk.visit_advice(t, level, sens, now, start, hazards, missing, bool(indoor), better, searched),
                 better_times=[TimeWindow(start=a, end=b, has_info=info) for a, b, info in better],

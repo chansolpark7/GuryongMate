@@ -45,8 +45,10 @@ class Visit(BaseModel):
     date: date
     start: time
     end: time | None = Field(None, description="생략하면 start + 60분")
-    indoor: bool | None = Field(None, description="실내 여부. 생략하면 places 의 장소 종류로 추정 "
+    indoor: bool | None = Field(None, description="실내 여부. 생략하면 장소 종류로 추정 "
                                                   "(문화시설·음식점·쇼핑·숙박 = 실내)")
+    content_type: str | None = Field(None, max_length=20, description="장소 종류 (관광지·음식점…). 주면 places 조회 없이 "
+                                                                      "실내를 추정한다")
 
     @model_validator(mode="after")
     def _check(self):
@@ -80,6 +82,8 @@ class VisitAssessment(BaseModel):
     confidence: Confidence
     risk: Level | None = Field(description=RISK_DOC)
     unassessed_reason: Unassessed | None = Field(None, description=UNASSESSED_DOC)
+    data_missing: bool = Field(False, description="필요한 근거 일부(장소 정보·실측·특보·예보)를 받지 못함. risk 가 있으면 "
+                                                  "확인된 근거만으로 낸 단계라 실제로는 더 높을 수 있다")
     hazards: list[Hazard] = Field(description="근거. 위험 단계가 safe 여도 참고(info) 신호가 있으면 들어 있다")
     sensitivity: list[str] = Field(description="날씨에 따라 위험해지는 장소 특성 (방파제, 침수 감시 구역). 위험이 아니라 성질")
     notes: list[str] = Field(description="참고 정보 (조위, 계절 등). 일정 변경 근거로 쓰지 않는다")

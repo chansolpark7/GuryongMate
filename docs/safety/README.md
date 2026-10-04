@@ -35,6 +35,8 @@
 ```
 - `place_id` 만 주면 places API 에서 좌표·이름·장소 종류를 가져온다. 좌표를 직접 줘도 된다.
 - `indoor` (선택): 실내 여부. 생략하면 장소 종류로 추정한다 (`문화시설·음식점·쇼핑·숙박` = 실내, 그 밖 = 야외).
+- `content_type` (선택): 장소 종류. 좌표와 함께 주면 places 를 다시 조회하지 않는다 (planner 는 이렇게 보낸다).
+- places 장애로 좌표를 모르면 방파제·침수 구역인지 알 수 없어, 확인된 위험이 없으면 `risk=null (data_missing)` 이다.
 - `key` 는 그대로 돌려준다 (일정 `item_id` 를 넣으면 매칭이 쉽다). `end` 생략 시 60분.
 - 최대 60개.
 
@@ -175,7 +177,8 @@ PUT /safety/sim
 - `unassessed_reason` (`risk=null` 일 때): `past` 지난 일정 / `beyond_forecast` 예보 범위 밖 / `data_missing` 필요한 데이터를 받지 못함.
 - `overall_risk`: 주의·위험이 하나라도 있으면 그중 최고, 없는데 판단하지 않은 미래 항목이 있으면 `null`, 아니면 `safe`.
 - 데이터 소스가 실패하면 그 근거가 필요한 판단은 `safe` 가 아니라 `null` 이다. `data_status` 에 어떤 소스가 실패했는지 나온다.
-  단, 다른 근거로 주의·위험이 확인되면 그 단계를 준다.
+  단, 다른 근거로 주의·위험이 확인되면 그 단계를 주고 `data_missing: true` 를 붙인다 (빠진 근거 때문에 실제로는 더 높을 수 있음).
+  필요한 근거: 예보·특보(24시간 안), 방문 3시간 안이면 반경 안 침수 센서 등급·방파제 CCTV, 장소 좌표.
 - 내부 계산은 신호 등급 `none < info < caution < danger` 로 하고, 응답에서 `none`·`info` 를 `safe` 로 바꾼다 (`risk.public`).
 
 ### 장소 성질 (`sensitivity`)

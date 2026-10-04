@@ -383,3 +383,61 @@ def test_sim_rejects_bad_requests(use):
 
     r = use(Live()).put("/safety/sim", json={"scenario": "storm"})
     assert r.status_code == 404 and r.json()["detail"]["code"] == "sim_disabled"
+
+
+
+# ---------- 데이터 장애는 낮은 단계가 아니라 판단 보류 ----------
+
+def test_places_outage_without_coords_is_not_assessed(use):
+    fake_places.down = True
+    client = use(CountingMock("wind_tomorrow"))
+    v = assess(client, visit("p-breakwater", "2026-10-05", "14:00"))["visits"][0]
+    # 방파제인지 몰라 야외 기준(바람 한 단계 낮게)으로만 확인된 단계. 실제로는 더 높을 수 있다고 표시
+    assert v["risk"] == "caution" and v["data_missing"] is True and any("알 수 없다" in n for n in v["notes"])
+    # 좌표·장소 종류를 함께 주면 places 없이 판단한다
+    v = assess(client, {"place_id": "p-breakwater", "lat": 35.9871, "lng": 129.5583, "content_type": "관광지",
+                        "date": "2026-10-05", "start": "14:00"})["visits"][0]
+    assert v["risk"] == "danger" and v["data_missing"] is False
+    v = assess(client, {"place_id": "p-museum", "lat": 35.9821, "lng": 129.5421, "content_type": "문화시설",
+                        "date": "2026-10-05", "start": "14:00"})["visits"][0]
+    assert v["indoor"] is True and v["risk"] == "safe"
+    # 확인된 위험 근거가 없으면 safe 가 아니라 판단 보류
+    calm = assess(use(CountingMock()), visit("p-breakwater", "2026-10-05", "14:00"))["visits"][0]
+    assert calm["risk"] is None and calm["unassessed_reason"] == "data_missing"
+
+
+def test_cctv_outage_near_breakwater_now_is_not_assessed(use):
+    class CctvDown(CountingMock):
+        def breakwater(self):
+            return Fetched(None, NOW, "SourceError: down")
+
+    r = assess(use(CctvDown()), visit("p-breakwater", "2026-10-04", "11:00"))
+    assert r["visits"][0]["risk"] is None and r["visits"][0]["unassessed_reason"] == "data_missing"
+    st = ok(use(CctvDown()).get("/safety/status", params={"now": NOW.isoformat()}))
+    assert next(z for z in st["zones"] if z["id"] == "breakwater_north")["risk"] is None
+
+
+def test_sensor_without_level_near_visit_is_not_assessed(use):
+    class NoLevel(CountingMock):
+        def sensors(self):
+            f = super().sensors()
+            for r in f.value:
+                if r.id == 8:
+                    r.level = None
+            return f
+
+    v = assess(use(NoLevel()), visit("p-police", "2026-10-04", "11:00"))["visits"][0]
+    assert v["risk"] is None and v["unassessed_reason"] == "data_missing"
+
+
+def test_naive_now_is_kst(use):
+    r = ok(use(CountingMock()).get("/safety/situation", params={"now": "2026-10-04T14:00:00"}))
+    assert r["now"].startswith("2026-10-04T14:00") and r["now"].endswith("+09:00")
+
+
+def test_visit_past_forecast_end_is_not_assessed(use):
+    src = CountingMock()
+    last = src.forecast(NOW).value.last_hour
+    v = assess(use(src), {"place_id": "p-street", "date": last.date().isoformat(), "start": f"{last:%H:%M}",
+                          "end": f"{last + timedelta(minutes=90):%H:%M}"})["visits"][0]
+    assert v["risk"] is None and v["unassessed_reason"] == "beyond_forecast"

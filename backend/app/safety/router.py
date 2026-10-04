@@ -60,7 +60,7 @@ def outlook(
     now: NowParam = None,
 ) -> Outlook:
     if end <= start:
-        raise HTTPException(422, "end 는 start 보다 뒤여야 합니다.")
+        raise HTTPException(422, {"code": "invalid_request", "message": "end 는 start 보다 뒤여야 합니다."})
     return svc.outlook(date_, now, start, end, detail)
 
 
@@ -77,7 +77,9 @@ def zones() -> list[ZoneView]:
 
 @router.get("/situation", response_model=Situation)
 def situation(svc: Service, now: NowParam = None) -> Situation:
-    """지금 상황 요약. fingerprint 가 지난번과 같으면 일정 위험 판단도 같다 (planner 의 일정 재점검 기준)."""
+    """지금 상황 요약. fingerprint 가 바뀌면 일정을 다시 점검한다 (planner 주기 점검 기준).
+    같아도 시간이 흘러 실측(센서·CCTV)이 적용되는 3시간 안으로 들어온 방문은 판단이 달라질 수 있어,
+    이용자는 일정 주기로도 다시 점검해야 한다."""
     return svc.situation(now)
 
 
@@ -104,14 +106,14 @@ def get_sim(sources: Annotated[Sources, Depends(get_sources)]) -> SimState:
 def put_sim(body: SimUpdate, sources: Annotated[Sources, Depends(get_sources)]) -> SimState:
     """시나리오와 가상 시각을 바꾼다. 가상 시각은 설정한 뒤 실제 시간만큼 흘러간다 (서비스를 다시 띄우면 초기화)."""
     src = _mock(sources)
-    if body.scenario is not None:
-        if body.scenario not in MOCK_SCENARIOS:
-            raise HTTPException(422, {"code": "unknown_scenario", "message": f"알 수 없는 시나리오: {body.scenario}",
-                                      "scenarios": sorted(MOCK_SCENARIOS)})
-        src.scenario = body.scenario
+    if body.scenario is not None and body.scenario not in MOCK_SCENARIOS:
+        raise HTTPException(422, {"code": "unknown_scenario", "message": f"알 수 없는 시나리오: {body.scenario}",
+                                  "scenarios": sorted(MOCK_SCENARIOS)})
+    scenario, offset = body.scenario or src.scenario, src.offset
     if body.reset_clock:
-        src.offset = timedelta(0)
+        offset = timedelta(0)
     if body.now is not None:
         when = body.now if body.now.tzinfo else body.now.replace(tzinfo=KST)
-        src.offset = when - src._clock()
+        offset = when - src._clock()
+    src.set(scenario, offset)
     return _sim_state(src)

@@ -101,7 +101,9 @@ def classify(start: datetime, end: datetime, now: datetime, forecast_last: datet
     recheck = start.date() - timedelta(days=RECHECK_LEAD_DAYS)
     if end <= now:
         return Timing("past", "none", False, None)
-    covered = forecast_ok and forecast_last is not None and floor_hour(max(start, now)) <= forecast_last
+    # 방문 마지막 시각까지 예보가 있어야 판단한다 (일부만 덮이면 나머지 시간을 모른 채 safe 가 될 수 있다)
+    last_needed = floor_hour(max(end - timedelta(minutes=1), now))
+    covered = forecast_ok and forecast_last is not None and last_needed <= forecast_last
     if lead <= NOW_WINDOW:
         return Timing("now", "high", covered, None)
     if covered or (not forecast_ok and lead <= SHORT_RANGE_NOMINAL):
@@ -282,6 +284,12 @@ def sensor_hazards(readings: list[SensorReading], lat: float, lng: float, at: da
         if why and lv in ORDER and lv != "none":
             out.append(Hazard(type="flood", level=lv, reason=why, source="E-UM 수위센서 (실측)", at=at))
     return out
+
+
+def sensor_unknown_near(readings: list[SensorReading], lat: float, lng: float) -> bool:
+    """반경 안 침수 센서 중 등급 값이 없는 것이 있는지 (있으면 그 근거로는 판단할 수 없다)."""
+    return any(r.type in geo.FLOOD_SENSOR_TYPES and r.level is None
+               and geo.distance_m((lat, lng), (r.lat, r.lng)) <= geo.FLOOD_RADIUS_M for r in readings)
 
 
 def breakwater_hazards(rows: list[BreakwaterHour], side: str, now: datetime) -> list[Hazard]:

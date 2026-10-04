@@ -388,6 +388,9 @@ MOCK_SCENARIOS = {
 }
 
 
+_SIM_LOCK = threading.Lock()
+
+
 class MockSources:
     """키 없이 쓰는 가짜 데이터. 시나리오(MOCK_SCENARIOS)와 시각을 실행 중에 바꿀 수 있다 (PUT /safety/sim).
     값은 실제 응답 형태를 따르되 내용은 지어낸 것이다. 응답의 data_status 에 mock 임이 표시된다."""
@@ -398,6 +401,11 @@ class MockSources:
         self.scenario = scenario
         self._clock = clock
         self.offset = timedelta(0)  # 가상 시각 = 실제(clock) + offset
+
+    def set(self, scenario: str, offset: timedelta) -> None:
+        """시나리오와 가상 시각을 함께 바꾼다 (둘 중 하나만 바뀐 상태를 다른 요청이 보지 않게)."""
+        with _SIM_LOCK:
+            self.scenario, self.offset = scenario, offset
 
     @property
     def storm(self) -> bool:
