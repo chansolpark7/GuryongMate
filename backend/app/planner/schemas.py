@@ -390,3 +390,101 @@ class RecommendationView(BaseModel):
 class RecommendationActionResult(BaseModel):
     recommendation: RecommendationView
     plan: PlanDetail
+
+
+# ---------- 안전 점검 (safety.py) ----------
+
+SafetyLevel = Literal["safe", "caution", "danger"]
+SAFETY_LEVEL_DOC = ("위험 3단계. safe 안전 / caution 주의 (알리고 시간 조정·대안 고려) / danger 위험 (그 시간대 방문 피하기). "
+                    "null 은 판단하지 않음 (unassessed_reason). 안전하다는 뜻이 아니다")
+
+
+class SafetyHazard(BaseModel):
+    type: str = Field(description="flood | breakwater | rain | wind | wave | warning")
+    level: Literal["info", "caution", "danger"] = Field(description="info 는 참고 (단계를 올리지 않음)")
+    reason: str
+    source: str
+
+
+class SafetyWindow(BaseModel):
+    start: datetime
+    end: datetime
+    has_info: bool = Field(description="참고 신호(약한 비 등)가 있는 구간인지")
+
+
+class SafetyItem(BaseModel):
+    """일정 항목 하나의 안전 점검 결과 (safety /safety/assess 결과를 일정 기준으로 정리)."""
+
+    item_id: int
+    day: int
+    date: date
+    place_id: str
+    title: str
+    start_at: str
+    end_at: str
+    risk: SafetyLevel | None = Field(description=SAFETY_LEVEL_DOC)
+    unassessed_reason: Literal["past", "beyond_forecast", "data_missing"] | None = None
+    horizon: str = Field(description="now | short_range | medium_range | long_range | past")
+    hazards: list[SafetyHazard] = Field(description="근거. safe 여도 참고(info) 신호가 있으면 들어 있다")
+    advice: str
+    better_times: list[SafetyWindow] = Field(description="caution·danger 일 때 같은 장소에 신호가 없는 시간대")
+    sensitivity: list[str] = Field(description="방파제, 침수 감시 구역, 실내 등 장소 성질")
+    notes: list[str] = Field(description="참고 정보 (조위·계절). 일정 변경 근거가 아니다")
+    recheck_from: date | None = None
+
+
+class SafetyCounts(BaseModel):
+    safe: int = 0
+    caution: int = 0
+    danger: int = 0
+    unassessed: int = 0
+    info: int = Field(0, description="safe 지만 참고 신호가 있는 항목 수")
+
+
+class SafetyCheck(BaseModel):
+    """계획의 안전 점검 결과. 검증(validate)과 별개로, 방문 장소·시각만으로 위험 단계를 매긴다."""
+
+    plan_id: int
+    plan_version: int
+    checked_at: datetime = Field(description="safety 의 기준 시각 (가상 상황이면 가상 시각)")
+    overall_risk: SafetyLevel | None = Field(
+        description="주의·위험 항목이 있으면 그중 최고. 없는데 판단하지 않은 미래 항목이 있으면 null")
+    counts: SafetyCounts
+    guidance: str = Field(description="결과를 어떻게 다뤄야 하는지 (Agent 용)")
+    items: list[SafetyItem] = Field(description="방문 순서대로. 건너뜀·완료 항목과 시각을 계산할 수 없는 항목은 뺀다")
+    data_ok: dict[str, bool] = Field(description="safety 가 쓴 데이터 소스별 수신 여부")
+
+
+SafetyChangeKind = Literal["raised", "lowered", "cleared"]
+
+
+class SafetyChange(BaseModel):
+    kind: SafetyChangeKind = Field(description="raised 위험 상승 / lowered 낮아졌지만 아직 주의 / cleared 안전으로 돌아옴")
+    from_risk: SafetyLevel = Field(description="지난 점검 단계 (처음이면 safe)")
+    to_risk: SafetyLevel
+    item: SafetyItem
+
+
+class SafetyAlertView(BaseModel):
+    """상황이 바뀌어 일정의 위험 단계가 달라졌을 때 남는 경고. 나중에 Guide Agent 를 부르는 기준이 된다."""
+
+    id: int
+    plan_id: int
+    created_at: datetime
+    level: SafetyLevel = Field(description="이 경고의 단계 = raised·lowered 항목의 최고 단계 (해제만 있으면 safe)")
+    needs_action: bool = Field(description="raised 가 있으면 true (일정 조정이 필요할 수 있음)")
+    status: Literal["new", "seen"]
+    message: str
+    plan_version: int
+    situation: str = Field(description="경고를 만든 safety 상황 fingerprint")
+    checked_at: datetime
+    changes: list[SafetyChange]
+
+
+class SafetyScanReport(BaseModel):
+    ran: bool = Field(description="점검을 실제로 했는지 (상황이 같고 재점검 주기 전이면 false)")
+    reason: str
+    situation: str | None = None
+    checked_at: datetime | None = None
+    plans: int = Field(0, description="점검한 계획 수")
+    alerts: list[SafetyAlertView] = Field(default_factory=list)

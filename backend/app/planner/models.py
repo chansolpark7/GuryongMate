@@ -1,6 +1,6 @@
 from datetime import date, datetime, time
 
-from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, String, Text, Time, func
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, String, Text, Time, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -122,3 +122,34 @@ class PlannerRecommendationCandidate(Base):
     time_hint: Mapped[time | None] = mapped_column(Time, nullable=True)
     stay_minutes: Mapped[int] = mapped_column(Integer, default=60)
     reason: Mapped[str] = mapped_column(Text, default="")
+
+
+class PlannerSafetyState(Base):
+    """주기 안전 점검이 마지막으로 본 항목별 단계. 다음 점검과 비교해 바뀐 것만 경고로 남긴다.
+    key 는 '항목 id@날짜 시작시각' 이라 사용자가 시각을 옮기면 새 항목처럼 다시 본다."""
+
+    __tablename__ = "planner_safety_state"
+    __table_args__ = (UniqueConstraint("plan_id", "key"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    plan_id: Mapped[int] = mapped_column(ForeignKey("planner_plan.id", ondelete="CASCADE"), index=True)
+    key: Mapped[str] = mapped_column(String(64))
+    risk: Mapped[str] = mapped_column(String(10))  # safe | caution | danger
+
+
+class PlannerSafetyAlert(Base):
+    """상황 변화로 일정의 위험 단계가 바뀌었을 때 남기는 경고 (나중에 Guide Agent 를 부르는 기준)."""
+
+    __tablename__ = "planner_safety_alert"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    plan_id: Mapped[int] = mapped_column(ForeignKey("planner_plan.id", ondelete="CASCADE"), index=True)
+    level: Mapped[str] = mapped_column(String(10))  # safe | caution | danger
+    needs_action: Mapped[bool] = mapped_column(Boolean)
+    status: Mapped[str] = mapped_column(String(8), default="new")  # new | seen
+    message: Mapped[str] = mapped_column(Text)
+    plan_version: Mapped[int] = mapped_column(Integer)
+    situation: Mapped[str] = mapped_column(String(64))  # safety 상황 fingerprint
+    checked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    changes: Mapped[list[dict]] = mapped_column(JSONB)  # SafetyChange[]
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
