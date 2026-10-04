@@ -31,10 +31,17 @@ def test_violations_map_to_levels():
     assert [(i["level"], i["message"]) for i in issues] == [("must", "초과"), ("should", "운영시간 밖")]
 
 
-def test_long_travel_depends_on_mode():
-    items = [item(1, "a", "10:00", "11:00"), item(2, "b", "11:30", "12:30", 30)]
-    assert any("이동 30분" in i["message"] for i in review(plan(items, day_end="12:30")))
-    assert not any("이동" in i["message"] for i in review(plan(items, day_end="12:30", mode="car")))
+def test_long_car_leg_and_walk_left_to_planner():
+    items = [item(1, "a", "10:00", "11:00"), item(2, "b", "11:50", "12:50", 50)]
+    # 도보 구간은 planner 검증(long_walk 위반)이 구간 수단 기준으로 낸다 -> 여기서 따로 만들지 않는다
+    assert not any("이동" in i["message"] for i in review(plan(items, day_end="12:50")))
+    # 차량 구간은 40분 넘으면 검토 문제. 구간 수단(leg_mode)이 계획 기본보다 우선
+    assert any("차량 이동 50분" in i["message"] for i in review(plan(items, day_end="12:50", mode="car")))
+    items[1]["leg_mode"] = "walk"
+    assert not any("이동" in i["message"] for i in review(plan(items, day_end="12:50", mode="car")))
+    # 직선거리 근사 경고는 일정을 고쳐서 해결할 문제가 아니라 검토 문제로 넣지 않는다
+    p = plan(items, day_end="12:50", violations=[{"code": "travel_estimated", "severity": "warning", "message": "추정"}])
+    assert review(p) == []
 
 
 def test_meal_without_restaurant_and_duplicates_and_spare_time():
