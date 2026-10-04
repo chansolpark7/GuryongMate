@@ -121,7 +121,7 @@ worktree마다 compose 프로젝트(컨테이너·DB 볼륨)가 따로 생긴다
 | `GuryongMate-wt/planner` | `API_PORT=8002`, `DB_PORT=5434` |
 | `GuryongMate-wt/service-split` | `API_PORT=8003`, `DB_PORT=5435` |
 | `GuryongMate-wt/safety` | `API_PORT=8004`, `DB_PORT=5436` |
-| `GuryongMate-wt/account` | `API_PORT=8004`, `DB_PORT=5436` |
+| `GuryongMate-wt/account` | `API_PORT=8005`, `DB_PORT=5437` |
 
 API 키는 각 worktree의 `backend/.env`에 둔다 (`backend/.env.example` 참고).
 
