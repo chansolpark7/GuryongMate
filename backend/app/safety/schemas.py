@@ -40,6 +40,8 @@ class Visit(BaseModel):
     date: date
     start: time
     end: time | None = Field(None, description="생략하면 start + 60분")
+    indoor: bool | None = Field(None, description="실내 여부. 생략하면 places 의 장소 종류로 추정 "
+                                                  "(문화시설·음식점·쇼핑·숙박 = 실내)")
 
     @model_validator(mode="after")
     def _check(self):
@@ -55,12 +57,19 @@ class AssessRequest(BaseModel):
     now: datetime | None = Field(None, description="기준 시각 덮어쓰기 (테스트·시연용). 생략하면 현재 시각")
 
 
+class TimeWindow(BaseModel):
+    start: datetime
+    end: datetime
+    risk: Risk = Field(description="구간 안 최고 등급 (none 또는 low)")
+
+
 class VisitAssessment(BaseModel):
     key: str | None
     place_id: str | None
     label: str | None
     start: datetime
     end: datetime
+    indoor: bool | None = Field(description="실내 여부 (요청값 또는 장소 종류로 추정, 모르면 null = 야외로 판단)")
     horizon: Horizon = Field(description=HORIZON_DOC)
     forecast_available: bool = Field(description="이 시각의 기상 예보가 있는지. false 면 날씨 위험은 판단하지 않은 것")
     confidence: Confidence
@@ -69,6 +78,10 @@ class VisitAssessment(BaseModel):
     sensitivity: list[str] = Field(description="날씨에 따라 위험해지는 장소 특성 (방파제, 침수 감시 구역). 위험이 아니라 성질")
     notes: list[str] = Field(description="참고 정보 (조위, 계절 등). 일정 변경 근거로 쓰지 않는다")
     advice: str = Field(description="계획 Agent 에게 주는 행동 지침")
+    better_times: list[TimeWindow] = Field(
+        default_factory=list,
+        description="risk 가 caution/danger 일 때, 예보 범위 안에서 같은 장소에 주의·위험 신호가 없는 시간대 "
+                    "(08~19시, 같은 체류 시간, 이른 순 최대 3개). 비어 있으면 대체 장소를 찾는다")
     recheck_from: date | None = Field(None, description="이 날짜부터 다시 조회하면 예보 기반 판단이 가능")
 
 
@@ -108,6 +121,14 @@ class DaySummary(BaseModel):
     sky: str | None = Field(None, description="대표 하늘 상태 (가장 흔한 값)")
 
 
+class SafeWindow(BaseModel):
+    place_kind: Literal["breakwater", "flood", "outdoor"] = Field(
+        description="breakwater 방파제 / flood 해안 저지대(침수 감시 구역) / outdoor 그 밖의 야외")
+    start: datetime
+    end: datetime
+    risk: Risk = Field(description="구간 안 최고 등급 (none 또는 low)")
+
+
 class Outlook(BaseModel):
     date: date
     now: datetime
@@ -116,6 +137,8 @@ class Outlook(BaseModel):
     confidence: Confidence
     summary: DaySummary | None = Field(None, description="예보가 있을 때만")
     hazards: list[Hazard] = Field(description="그날 시간대별 위험 신호 (방파제·침수 구역 기준)")
+    safe_windows: list[SafeWindow] = Field(
+        description="조회 시간대 안에서 장소 종류별로 주의·위험 신호가 없는 구간 (예보가 있을 때만). 실내는 대개 항상 괜찮다")
     hourly: list[HourForecastView] = Field(description="detail=true 일 때만 채운다")
     tides: list[TideView] = Field(description="만조·간조 (천문 계산이라 먼 날짜도 정확, 구룡포 조차는 수십 cm)")
     warnings: list[str] = Field(description="현재 발효 중인 구룡포 해당 특보 (오늘·내일 조회일 때만)")

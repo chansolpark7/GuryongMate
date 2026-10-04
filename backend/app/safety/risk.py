@@ -17,7 +17,14 @@ from app.safety.sources import (
 )
 
 ORDER = ["none", "low", "caution", "danger"]
-NOW_WINDOW = timedelta(hours=3)  # 이 안이면 실측 센서·현재 특보를 그대로 적용
+NOW_WINDOW = timedelta(hours=3)  # 이 안이면 실측 센서를 그대로 적용
+# 특보는 '지금' 상태다. 가까운 시각에만 그대로 적용하고, 그 뒤는 예보로 판단한다 (특보는 참고로만 남긴다)
+WARNING_FULL = timedelta(hours=6)
+WARNING_WINDOW = timedelta(hours=24)
+TOUR_HOURS = (8, 19)  # 다른 시간대를 찾을 때 볼 관광 시간대 (시)
+# places 의 장소 종류 중 실내로 보는 것. 관광지·레포츠(해수욕장·캠핑장 등)·축제는 야외로 본다
+INDOOR_TYPES = {"문화시설", "음식점", "쇼핑", "숙박"}
+INDOOR_NOTE = "실내라 이동할 때만 영향"
 SHORT_RANGE_NOMINAL = timedelta(days=3)  # 예보 조회가 실패했을 때 단기예보 범위로 간주하는 기간
 MEDIUM_LIMIT = timedelta(days=10)  # 중기예보 범위. 아직 연동하지 않아 '예보 없음'으로 다룬다
 RECHECK_LEAD_DAYS = 3  # 여행일 며칠 전부터 단기예보로 판단 가능한지
@@ -102,44 +109,60 @@ def sensitivity(lat: float | None, lng: float | None, flood_zones=geo.STATIC_FLO
 
 # ---------- 예보 ----------
 
-def _hour_signals(h: ForecastHour, sens: set[str]) -> list[tuple[str, str, float, str, str]]:
-    """한 시간 예보 -> (type, level, 값, 항목명, 단위). 장소 성질(sens)에 따라 등급을 조정한다."""
+def _cap_low(level: str) -> str:
+    return "low" if ORDER.index(level) > 1 else level
+
+
+def _hour_signals(h: ForecastHour, sens: set[str], indoor: bool = False) -> list[tuple[str, str, float, str, str, bool]]:
+    """한 시간 예보 -> (type, level, 값, 항목명, 단위, 실내라 낮췄는지). 장소 성질에 따라 등급을 조정한다.
+
+    - 방파제: 바람·파고·비 그대로 / 침수 감시 구역: 비 그대로 (실내여도 앞길이 잠기면 위험)
+    - 그 밖: 비·바람 한 단계 낮게, 파고 무시 / 그 밖의 실내: 비·바람은 '참고'까지만 (이동할 때만 영향)
+    """
     out = []
     rain = grade(h.pcp_mm, RAIN_MM)
     if rain == "none" and h.pty in (1, 2, 4) and (h.pop or 0) >= 60:
         rain = "low"
     if rain != "none":
-        hot = sens & {"flood", "breakwater"}
+        hot = bool(sens & {"flood", "breakwater"})
         lv = rain if hot else down(rain)
+        capped = indoor and not hot and lv != _cap_low(lv)
+        lv = _cap_low(lv) if indoor and not hot else lv
         if lv != "none":
             out.append(("flood" if "flood" in sens and ORDER.index(lv) >= 2 else "rain", lv, h.pcp_mm or 0.0,
-                        "강수", "mm/h"))
+                        "강수", "mm/h", capped))
     wind = grade(h.wsd, WIND_MS)
     if wind != "none":
-        lv = wind if "breakwater" in sens else down(wind)
+        hot = "breakwater" in sens
+        lv = wind if hot else down(wind)
+        capped = indoor and not hot and lv != _cap_low(lv)
+        lv = _cap_low(lv) if indoor and not hot else lv
         if lv != "none":
-            out.append(("wind", lv, h.wsd or 0.0, "풍속", "m/s"))
+            out.append(("wind", lv, h.wsd or 0.0, "풍속", "m/s", capped))
     wave = grade(h.wav, WAVE_M)
     if wave != "none" and "breakwater" in sens:
-        out.append(("wave", wave, h.wav or 0.0, "파고", "m"))
+        out.append(("wave", wave, h.wav or 0.0, "파고", "m", False))
     return out
 
 
-def forecast_hazards(hours: list[ForecastHour], sens: set[str], scope: str = "") -> list[Hazard]:
+def hour_level(h: ForecastHour, sens: set[str], indoor: bool = False) -> str:
+    return worst(s[1] for s in _hour_signals(h, sens, indoor))
+
+
+def forecast_hazards(hours: list[ForecastHour], sens: set[str], indoor: bool = False) -> list[Hazard]:
     """시간별 예보를 같은 종류·등급끼리 묶어 '14~19시 풍속 최대 16m/s' 형태로 만든다."""
-    groups: dict[tuple[str, str, str], list[tuple[datetime, float]]] = {}
+    groups: dict[tuple, list[tuple[datetime, float]]] = {}
     for h in sorted(hours, key=lambda x: x.time):
-        for typ, lv, val, label, unit in _hour_signals(h, sens):
-            groups.setdefault((typ, lv, f"{label}|{unit}"), []).append((h.time, val))
+        for typ, lv, val, label, unit, capped in _hour_signals(h, sens, indoor):
+            groups.setdefault((typ, lv, label, unit, capped), []).append((h.time, val))
     out = []
-    for (typ, lv, lu), pts in groups.items():
-        label, unit = lu.split("|")
+    for (typ, lv, label, unit, capped), pts in groups.items():
         first, last = pts[0][0], pts[-1][0]
         peak = max(v for _, v in pts)
         span = f"{first:%m/%d %H}시" if first == last else f"{first:%m/%d %H}~{(last + timedelta(hours=1)):%H}시"
         reason = f"{span} {label} {'최대 ' if len(pts) > 1 else ''}{peak:g}{unit} 예보"
-        if scope:
-            reason += f" ({scope})"
+        if capped:
+            reason += f" ({INDOOR_NOTE})"
         out.append(Hazard(type=typ, level=lv, reason=reason, source="기상청 단기예보", at=first))
     return sorted(out, key=lambda z: (-ORDER.index(z.level), z.at))
 
@@ -158,21 +181,61 @@ WARNING_IMPACT = {
 }
 
 
-def warning_hazards(active: list[ActiveWarning], sens: set[str], at: datetime | None = None) -> list[Hazard]:
+def warning_hazards(active: list[ActiveWarning], sens: set[str], at: datetime | None = None,
+                    indoor: bool = False) -> list[Hazard]:
+    """지금 발효 중인 특보의 영향. 실내(방파제·침수 구역 아님)는 '그 밖' 영향을 참고까지만 본다."""
     out = []
     for w in active:
         impact = WARNING_IMPACT.get(w.kind)
         idx = 1 if w.grade == "경보" else 0
+        note = ""
         if impact is None:  # 건조·폭염·한파·황사 등: 참고로만
             lv = "low"
         else:
+            other = impact[2][idx]
+            if indoor and other != _cap_low(other):
+                other, note = _cap_low(other), f", {INDOOR_NOTE}"
             levels = [impact[0][idx] if "breakwater" in sens else "none",
-                      impact[1][idx] if "flood" in sens else "none",
-                      impact[2][idx]]
+                      impact[1][idx] if "flood" in sens else "none", other]
             lv = worst(levels)
         if lv != "none":
-            out.append(Hazard(type="warning", level=lv, reason=f"{w.name} 발효 중 ({w.areas[:40]})",
+            out.append(Hazard(type="warning", level=lv, reason=f"{w.name} 발효 중 ({w.areas[:40]}{note})",
                               source="기상특보", at=at))
+    return out
+
+
+def timed_warning_hazards(active: list[ActiveWarning], sens: set[str], start: datetime, now: datetime,
+                          at: datetime | None = None, indoor: bool = False) -> list[Hazard]:
+    """특보를 방문 시각에 맞춰 적용한다. 특보는 '지금' 상태라
+    - 6시간 안: 그대로 / 24시간 안: 참고(low)로만, 그 시각 위험은 예보로 판단 / 그 뒤: 쓰지 않는다."""
+    lead = start - now
+    if lead > WARNING_WINDOW:
+        return []
+    hz = warning_hazards(active, sens, at, indoor)
+    if lead <= WARNING_FULL:
+        return hz
+    return [h.model_copy(update={"level": "low", "reason": h.reason.replace(
+        " 발효 중 (", f" 현재 발효 중, {start:%m/%d %H}시에는 해제될 수 있음 (")}) for h in hz]
+
+
+def safe_windows(levels: dict[datetime, str], duration: timedelta) -> list[tuple[datetime, datetime, str]]:
+    """시작 시각별 등급 {시각: 등급} -> 주의·위험이 없는 연속 구간 [(시작, 끝, 구간 최고 등급)].
+    끝은 마지막 시작 시각 + duration. 길이가 duration 보다 짧은 구간은 버린다."""
+    out: list[tuple[datetime, datetime, str]] = []
+    run: list[datetime] = []
+
+    def flush():
+        if run:
+            out.append((run[0], run[-1] + duration, worst(levels[t] for t in run)))
+
+    for t in sorted(levels):
+        ok = levels[t] in ("none", "low")
+        if ok and run and t - run[-1] == timedelta(hours=1):
+            run.append(t)
+        else:
+            flush()
+            run = [t] if ok else []
+    flush()
     return out
 
 
@@ -249,8 +312,15 @@ def seasonal_notes(d: date) -> list[str]:
 
 # ---------- 행동 지침 ----------
 
+def windows_text(wins: list[tuple[datetime, datetime, str]]) -> str:
+    return ", ".join(f"{a:%m/%d %H:%M}~{b:%H:%M}" if a.date() == b.date() else f"{a:%m/%d %H:%M}~{b:%m/%d %H:%M}"
+                     for a, b, _ in wins)
+
+
 def visit_advice(t: Timing, risk: Risk, sens: set[str], now: datetime, start: datetime, hazards: list[Hazard],
-                 data_missing: bool) -> str:
+                 data_missing: bool, indoor: bool = False,
+                 better: list[tuple[datetime, datetime, str]] | None = None, searched: bool = False) -> str:
+    """searched: 다른 시간대를 찾아봤는지 (예보가 있어 찾을 수 있었을 때만 True)."""
     sens_txt = ", ".join(SENS_LABEL[s] for s in sorted(sens))
     if t.horizon == "past":
         return "이미 지난 시간이라 평가하지 않았다."
@@ -267,12 +337,23 @@ def visit_advice(t: Timing, risk: Risk, sens: set[str], now: datetime, start: da
         return "필요한 데이터를 받지 못해 판단하지 못했다. 안전하다고 말하지 말고, 필요하면 나중에 다시 확인한다."
     top = "; ".join(h.reason for h in hazards[:3])
     forecast_word = "실측·예보" if t.horizon == "now" else "예보"
-    if risk == "danger":
-        return (f"위험: {top}. 이 시간대 방문은 피하는 것이 좋다. 이유를 설명하고 다른 시간대나 대체 장소를 제안하라."
-                + (" 예보는 바뀔 수 있으니 단정하지 마라." if t.horizon == "short_range" else ""))
-    if risk == "caution":
-        return (f"주의: {top}. 사용자에게 알리고, 시간 조정이나 대안을 함께 제시하라."
-                + (" 예보는 바뀔 수 있으니 단정하지 마라." if t.horizon == "short_range" else ""))
+    hedge = " 예보는 바뀔 수 있으니 단정하지 마라." if t.horizon == "short_range" else ""
+    if risk in ("danger", "caution"):
+        if better:
+            alt = f" 이 장소에 주의·위험 신호가 없는 시간대: {windows_text(better)} (better_times)."
+        elif searched:
+            alt = " 예보 범위 안에 이 장소가 괜찮은 시간대가 없다. 실내 장소 같은 대체 장소를 제안하라."
+        else:
+            alt = ""
+        if risk == "danger":
+            return (f"위험: {top}. 이 시간대 방문은 피하는 것이 좋다. 이유를 설명하고 다른 시간대나 대체 장소를 제안하라."
+                    + alt + hedge)
+        return f"주의: {top}. 사용자에게 알리고, 시간 조정이나 대안을 함께 제시하라." + alt + hedge
+    if indoor and not sens:
+        weather = any(INDOOR_NOTE in h.reason for h in hazards)
+        return "실내 장소라 방문 자체는 괜찮다." + (
+            " 이동할 때 비·바람만 조심하면 되고, 야외 일정의 대안으로 적합하다." if weather
+            else " 날씨가 나쁜 날 야외 일정의 대안으로 쓸 수 있다.")
     if risk == "low":
         return f"참고: {top}. 일정을 바꿀 정도는 아니다."
     return f"{forecast_word}상 특별한 위험 신호가 없다." + (" 예보는 바뀔 수 있다." if t.horizon == "short_range" else "")

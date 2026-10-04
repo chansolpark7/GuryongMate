@@ -14,9 +14,11 @@ from app.safety.sources import KST, Fetched, MockSources
 
 NOW = datetime(2026, 10, 4, 10, 0, tzinfo=KST)
 PLACES = {
-    "p-breakwater": PlacePoint("p-breakwater", "구룡포 북방파제", 35.9871, 129.5583),
-    "p-street": PlacePoint("p-street", "구룡포 일본인가옥거리", 35.9820, 129.5420),
+    "p-breakwater": PlacePoint("p-breakwater", "구룡포 북방파제", 35.9871, 129.5583, "관광지"),
+    "p-street": PlacePoint("p-street", "구룡포 일본인가옥거리", 35.9820, 129.5420, "관광지"),
     "p-police": PlacePoint("p-police", "구룡포파출소 앞", 35.9887, 129.5531),
+    "p-museum": PlacePoint("p-museum", "구룡포 근대문화역사관", 35.9821, 129.5421, "문화시설"),
+    "p-restaurant": PlacePoint("p-restaurant", "파출소 옆 식당", 35.9886, 129.5532, "음식점"),
 }
 
 
@@ -129,6 +131,58 @@ def test_storm_now_marks_breakwater_and_flood_zone_dangerous(use):
     assert r["overall_risk"] == "danger" and "advice 를 따르고" in r["guidance"]
 
 
+def test_indoor_place_is_an_alternative_not_a_problem(use):
+    r = assess(use(CountingMock("storm")), visit("p-museum", "2026-10-04", "15:00"),
+               visit("p-restaurant", "2026-10-04", "15:00"))
+    museum, restaurant = r["visits"]
+    assert museum["indoor"] is True and "실내" in museum["sensitivity"]
+    assert museum["risk"] == "low" and "방문 자체는 괜찮다" in museum["advice"]
+    assert all(h["level"] == "low" for h in museum["hazards"]) and museum["better_times"] == []
+    # 침수 감시 구역 안의 실내는 그대로 위험하다
+    assert restaurant["indoor"] is True and restaurant["risk"] in ("caution", "danger")
+
+
+def test_indoor_can_be_overridden(use):
+    v = visit("p-museum", "2026-10-04", "15:00") | {"indoor": False}
+    r = assess(use(CountingMock("storm")), v)["visits"][0]
+    assert r["indoor"] is False and r["risk"] == "caution"
+    r = assess(use(CountingMock("storm")), {"lat": 35.9821, "lng": 129.5421, "date": "2026-10-04", "start": "15:00",
+                                           "indoor": True})["visits"][0]
+    assert r["risk"] == "low"
+
+
+def test_risky_visit_suggests_better_times(use):
+    # storm mock: 10/05 15시부터 잠잠, 예보는 10/07 06시까지
+    v = assess(use(CountingMock("storm")), visit("p-breakwater", "2026-10-04", "14:00", "15:00"))["visits"][0]
+    assert v["risk"] == "danger"
+    wins = [(w["start"][5:16], w["end"][5:16]) for w in v["better_times"]]
+    assert wins == [("10-05T15:00", "10-05T19:00"), ("10-06T08:00", "10-06T19:00")]
+    assert "better_times" in v["advice"] and "10/05 15:00~19:00" in v["advice"]
+
+
+def test_no_better_time_tells_to_find_another_place(use):
+    class LongStorm(CountingMock):
+        def forecast(self, now):
+            f = MockSources("storm", clock=lambda: NOW).forecast(now)
+            for h in f.value.hours.values():
+                h.wsd, h.wav = 16.0, 3.5
+            return f
+
+    v = assess(use(LongStorm()), visit("p-breakwater", "2026-10-05", "14:00"))["visits"][0]
+    assert v["risk"] == "danger" and v["better_times"] == [] and "대체 장소" in v["advice"]
+
+
+def test_current_warning_does_not_decide_tomorrow(use):
+    # 내일 오후(약 29시간 뒤)는 예보가 잠잠하므로, 지금 발효 중인 특보만으로 위험해지지 않는다
+    v = assess(use(CountingMock("storm")), visit("p-breakwater", "2026-10-05", "15:00"))["visits"][0]
+    assert v["risk"] == "none" and v["hazards"] == []
+    # 20시간 뒤는 특보를 참고로만 붙이고, 위험 판단은 예보가 한다
+    v = assess(use(CountingMock("storm")), visit("p-breakwater", "2026-10-05", "06:00"))["visits"][0]
+    warn = [h for h in v["hazards"] if h["type"] == "warning"]
+    assert warn and all(h["level"] == "low" and "해제될 수 있음" in h["reason"] for h in warn)
+    assert v["risk"] == "danger"  # 예보(풍속·파고) 때문
+
+
 def test_forecast_failure_is_unknown_not_safe(use):
     r = assess(use(ForecastDown()), visit("p-breakwater", "2026-10-05", "14:00"))
     v = r["visits"][0]
@@ -171,8 +225,23 @@ def test_outlook_storm_tomorrow(use):
     assert r["horizon"] == "short_range" and r["forecast_available"] is True
     assert r["summary"]["max_wave_m"] == 3.5 and len(r["hourly"]) == 4
     assert any(h["level"] == "danger" and "방파제 기준" in h["reason"] for h in r["hazards"])
-    assert r["warnings"]  # 내일은 현재 특보도 함께
-    assert "대안" in r["guidance"]
+    assert r["warnings"]  # 내일은 현재 특보도 함께 보여주되
+    assert all(h["level"] == "low" for h in r["hazards"] if h["type"] == "warning")  # 그날 위험은 예보로 판단
+    assert "대안" in r["guidance"] and "safe_windows" in r["guidance"]
+
+
+def test_outlook_safe_windows(use):
+    r = ok(use(CountingMock("storm")).get("/safety/outlook", params={"date": "2026-10-05", "now": NOW.isoformat()}))
+    by = {}
+    for w in r["safe_windows"]:
+        by.setdefault(w["place_kind"], []).append((w["start"][11:16], w["end"][11:16]))
+    assert by["breakwater"] == [("15:00", "18:00")]  # 폭풍이 15시에 끝난다
+    assert by["outdoor"][-1][1] == "18:00"
+    calm = ok(use(CountingMock()).get("/safety/outlook", params={"date": "2026-10-05", "now": NOW.isoformat()}))
+    assert {(w["place_kind"], w["start"][11:16], w["end"][11:16]) for w in calm["safe_windows"]} == {
+        ("breakwater", "09:00", "18:00"), ("flood", "09:00", "18:00"), ("outdoor", "09:00", "18:00")}
+    far = ok(use(CountingMock()).get("/safety/outlook", params={"date": "2027-08-01", "now": NOW.isoformat()}))
+    assert far["safe_windows"] == []  # 예보가 없으면 '괜찮은 시간'도 말하지 않는다
 
 
 def test_outlook_rejects_bad_window(use):

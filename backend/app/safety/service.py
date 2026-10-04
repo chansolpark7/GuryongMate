@@ -4,14 +4,14 @@ from datetime import date, datetime, time, timedelta
 from app.safety import geo, risk
 from app.safety.places import PlaceLookup, PlacesUnavailable
 from app.safety.schemas import (
-    AssessRequest, AssessResult, BreakwaterActivity, DaySummary, Hazard, HourForecastView, Outlook, SensorView,
-    SourceStatus, Status, TideView, UvView, VisitAssessment, ZoneStatus,
+    AssessRequest, AssessResult, BreakwaterActivity, DaySummary, Hazard, HourForecastView, Outlook, SafeWindow,
+    SensorView, SourceStatus, Status, TideView, TimeWindow, UvView, VisitAssessment, ZoneStatus,
 )
-from app.safety.sources import KST, Fetched, Forecast, MockSources, Sources, now_kst
+from app.safety.sources import KST, ActiveWarning, Fetched, Forecast, MockSources, Sources, now_kst
 
 SOURCE_LABEL = {"sensors": "침수 센서", "breakwater": "방파제 CCTV", "uv": "자외선", "forecast": "기상 예보",
                 "warnings": "기상특보", "tide": "조위", "places": "장소 좌표"}
-WARNING_WINDOW = timedelta(hours=24)  # 발효 중 특보를 이 안에 시작하는 일정에만 적용
+MAX_BETTER_TIMES = 3
 
 
 def _status(f: Fetched, mock: bool) -> SourceStatus:
@@ -52,6 +52,38 @@ class SafetyService:
             return []
         first = risk.floor_hour(start)
         return [h for t, h in fc.value.hours.items() if first <= t < end or t == first]
+
+    @staticmethod
+    def _slot_level(fc: Forecast, start: datetime, end: datetime, sens: set[str], indoor: bool,
+                    active: list[ActiveWarning], now: datetime, sensor_hz: list[Hazard]) -> str | None:
+        """한 시간대의 최고 등급. 예보가 빠진 시각이 있으면 None (판단 불가)."""
+        levels = []
+        t = risk.floor_hour(start)
+        while t < end:
+            h = fc.hours.get(t)
+            if h is None:
+                return None
+            levels.append(risk.hour_level(h, sens, indoor))
+            t += timedelta(hours=1)
+        levels += [w.level for w in risk.timed_warning_hazards(active, sens, start, now, indoor=indoor)]
+        if start - now <= risk.NOW_WINDOW:
+            levels += [h.level for h in sensor_hz]
+        return risk.worst(levels)
+
+    def _better_times(self, fc: Forecast, duration: timedelta, sens: set[str], indoor: bool,
+                      active: list[ActiveWarning], now: datetime, sensor_hz: list[Hazard]):
+        """예보 범위 안에서 같은 장소·체류 시간으로 주의·위험이 없는 시간대 (관광 시간대 안, 이른 순)."""
+        first, last = risk.TOUR_HOURS
+        levels: dict[datetime, str] = {}
+        s = risk.floor_hour(now) + timedelta(hours=1)
+        while s + duration <= (fc.last_hour or s) + timedelta(hours=1):
+            end = s + duration
+            if s.hour >= first and end.date() == s.date() and end <= s.replace(hour=last):
+                lv = self._slot_level(fc, s, end, sens, indoor, active, now, sensor_hz)
+                if lv is not None:
+                    levels[s] = lv
+            s += timedelta(hours=1)
+        return risk.safe_windows(levels, duration)[:MAX_BETTER_TIMES]
 
     # ---------- 지금 상태 ----------
     def status(self, now: datetime | None = None) -> Status:
@@ -137,12 +169,22 @@ class SafetyService:
         hours = self._hours(fc, max(start, now), end) if t.forecast_available else []
         hazards = _scoped(risk.forecast_hazards(hours, {"breakwater", "flood"}))
         warnings: list[str] = []
-        if t.horizon != "past" and start - now <= WARNING_WINDOW:
+        active: list[ActiveWarning] = []
+        if t.horizon != "past" and start - now <= risk.WARNING_WINDOW:
             warns = self.src.warnings()
             data["warnings"] = warns
             if warns.ok and warns.value:
-                warnings = [f"{w.name} : {w.areas}" for w in warns.value.active]
-                hazards = risk.warning_hazards(warns.value.active, {"breakwater", "flood"}, warns.fetched_at) + hazards
+                active = warns.value.active
+                warnings = [f"{w.name} : {w.areas}" for w in active]
+                hazards = risk.timed_warning_hazards(active, {"breakwater", "flood"}, max(start, now), now,
+                                                     warns.fetched_at) + hazards
+
+        safe: list[SafeWindow] = []
+        for kind, sens in (("breakwater", {"breakwater"}), ("flood", {"flood"}), ("outdoor", set())):
+            levels = {h.time: risk.worst([risk.hour_level(h, sens), *(
+                w.level for w in risk.timed_warning_hazards(active, sens, max(h.time, now), now))]) for h in hours}
+            safe += [SafeWindow(place_kind=kind, start=a, end=b, risk=lv)
+                     for a, b, lv in risk.safe_windows(levels, timedelta(hours=1))]
 
         tides: list[TideView] = []
         if t.horizon != "past":
@@ -172,14 +214,15 @@ class SafetyService:
         elif not t.forecast_available:
             guidance = "기상 예보를 받지 못해 판단하지 못했다. 안전하다고 말하지 마라."
         elif any(h.level in ("caution", "danger") for h in hazards):
-            guidance = ("주의·위험 신호가 있다. 방파제·해안 일정은 신호가 없는 시간대로 옮기거나 실내 대안을 고려하라."
+            guidance = ("주의·위험 신호가 있다. 방파제·해안 일정은 신호가 없는 시간대(safe_windows)로 옮기거나 "
+                        "실내 대안을 고려하라. 실내 장소는 이동할 때만 영향을 받는다."
                         + (" 예보는 바뀔 수 있으니 단정하지 마라." if t.horizon == "short_range" else ""))
         else:
             guidance = "예보상 특별한 위험 신호가 없다. 예보는 바뀔 수 있다."
 
         return Outlook(
             date=day, now=now, horizon=t.horizon, forecast_available=t.forecast_available, confidence=t.confidence,
-            summary=summary, hazards=hazards,
+            summary=summary, hazards=hazards, safe_windows=safe,
             hourly=[HourForecastView(time=h.time, pop=h.pop, pcp_mm=h.pcp_mm, sky=risk.SKY.get(h.sky),
                                      precip=risk.PTY.get(h.pty), wind_ms=h.wsd, wave_m=h.wav, temp=h.tmp)
                     for h in sorted(hours, key=lambda x: x.time)] if detail else [],
@@ -198,54 +241,63 @@ class SafetyService:
 
         prepared = []
         for v in req.visits:
-            lat, lng, label, notes = v.lat, v.lng, v.label, []
-            if v.place_id and (lat is None or lng is None):
+            lat, lng, label, notes, indoor = v.lat, v.lng, v.label, [], v.indoor
+            if v.place_id and (lat is None or lng is None or indoor is None):
                 try:
                     p = self.places.get(v.place_id)
                 except PlacesUnavailable as e:
                     p, place_error = None, str(e)
                 if p:
-                    lat, lng, label = p.lat, p.lng, label or p.title
-                else:
+                    if lat is None or lng is None:
+                        lat, lng = p.lat, p.lng
+                    label = label or p.title
+                    if indoor is None and p.content_type:
+                        indoor = p.content_type in risk.INDOOR_TYPES
+                elif lat is None or lng is None:
                     notes.append("장소 좌표를 알 수 없어 지역 공통 정보로만 판단했다.")
             start = datetime.combine(v.date, v.start, KST)
             end = datetime.combine(v.date, v.end, KST) if v.end else start + timedelta(minutes=60)
-            prepared.append((v, lat, lng, label, notes, start, end, risk.classify(start, end, now, last, fc.ok)))
+            prepared.append((v, lat, lng, label, notes, indoor, start, end,
+                             risk.classify(start, end, now, last, fc.ok)))
         if any(v.place_id for v, *_ in prepared):
             data["places"] = SourceStatus(ok=place_error is None, error=place_error)
 
         # 필요한 데이터만 부른다 (먼 날짜만 있으면 실측·특보는 부르지 않는다)
-        live_needed = any(t.horizon == "now" for *_, t in prepared)
-        warn_needed = any(t.horizon in ("now", "short_range") and s - now <= WARNING_WINDOW for *_, s, _, t in prepared)
-        sensors = self.src.sensors() if live_needed else None
-        bw = self.src.breakwater() if live_needed else None
-        warns = self.src.warnings() if warn_needed else None
+        near = [t.horizon in ("now", "short_range") for *_, t in prepared]
+        sensors = self.src.sensors() if any(t.horizon == "now" for *_, t in prepared) else None
+        bw = self.src.breakwater() if sensors is not None else None
+        warns = self.src.warnings() if any(near) else None
         for k, f in (("sensors", sensors), ("breakwater", bw), ("warnings", warns)):
             if f is not None:
                 data[k] = f
+        active = warns.value.active if warns is not None and warns.ok and warns.value else []
         tides: dict[date, Fetched] = {}
 
         results = []
-        for v, lat, lng, label, notes, start, end, t in prepared:
+        for v, lat, lng, label, notes, indoor, start, end, t in prepared:
             sens = risk.sensitivity(lat, lng)
             hazards: list[Hazard] = []
+            sensor_hz: list[Hazard] = []
             missing = False
             if t.horizon in ("now", "short_range"):
                 if t.forecast_available:
-                    hazards += risk.forecast_hazards(self._hours(fc, max(start, now), end), sens)
+                    hazards += risk.forecast_hazards(self._hours(fc, max(start, now), end), sens, bool(indoor))
                 else:
                     missing = True
-                if start - now <= WARNING_WINDOW:
-                    if warns is not None and warns.ok and warns.value:
-                        hazards += risk.warning_hazards(warns.value.active, sens, warns.fetched_at)
+                if start - now <= risk.WARNING_WINDOW:
+                    if warns is not None and warns.ok:
+                        hazards += risk.timed_warning_hazards(active, sens, max(start, now), now, warns.fetched_at,
+                                                              bool(indoor))
                     else:
                         missing = True
-                if t.horizon == "now" and lat is not None:
-                    if sensors is not None and sensors.ok and sensors.value:
-                        hazards += risk.sensor_hazards(sensors.value, lat, lng, sensors.fetched_at)
-                    elif "flood" in sens:
+                if lat is not None and sensors is not None:
+                    if sensors.ok and sensors.value:
+                        sensor_hz = risk.sensor_hazards(sensors.value, lat, lng, sensors.fetched_at)
+                    elif t.horizon == "now" and "flood" in sens:
                         missing = True
-                    if "breakwater" in sens and bw is not None and bw.ok and bw.value:
+                if t.horizon == "now":
+                    hazards += sensor_hz
+                    if lat is not None and "breakwater" in sens and bw is not None and bw.ok and bw.value:
                         hazards += risk.breakwater_hazards(bw.value, risk.nearest_breakwater_side(lat, lng), now)
             hazards.sort(key=lambda h: -risk.ORDER.index(h.level))
 
@@ -264,11 +316,18 @@ class SafetyService:
                 level = "unknown"
             else:
                 level = "none"
+
+            better, searched = [], False
+            if level in ("caution", "danger") and fc.ok and fc.value:
+                searched = True
+                better = self._better_times(fc.value, end - start, sens, bool(indoor), active, now, sensor_hz)
             results.append(VisitAssessment(
-                key=v.key, place_id=v.place_id, label=label, start=start, end=end, horizon=t.horizon,
-                forecast_available=t.forecast_available, confidence=t.confidence, risk=level, hazards=hazards,
-                sensitivity=[risk.SENS_LABEL[s] for s in sorted(sens)], notes=notes,
-                advice=risk.visit_advice(t, level, sens, now, start, hazards, missing),
+                key=v.key, place_id=v.place_id, label=label, start=start, end=end, indoor=indoor,
+                horizon=t.horizon, forecast_available=t.forecast_available, confidence=t.confidence, risk=level,
+                hazards=hazards,
+                sensitivity=[risk.SENS_LABEL[s] for s in sorted(sens)] + (["실내"] if indoor else []), notes=notes,
+                advice=risk.visit_advice(t, level, sens, now, start, hazards, missing, bool(indoor), better, searched),
+                better_times=[TimeWindow(start=a, end=b, risk=lv) for a, b, lv in better],
                 recheck_from=t.recheck_from))
         if tides:
             data["tide"] = next(iter(tides.values())) if len(tides) == 1 else min(
