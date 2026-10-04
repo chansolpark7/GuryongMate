@@ -36,8 +36,8 @@ SYSTEM = """너는 포항 구룡포 여행을 함께 계획하는 AI 여행 동�
 
 ## 일하는 방식
 - 장소는 반드시 search_places 로 찾은 place_id 만 쓴다. 장소를 지어내지 않는다.
-- 두 장소 중 어디가 어떤 곳에 더 가까운지는 search_places(query=장소 이름, near_place_id=기준 장소, radius_m=50000) 로
-  각각 찾아 distance_m(직선거리)을 비교한다. 이동시간은 일정에 넣었을 때 서버가 계산한다.
+- "차로 몇 분?", "걸어갈 만해?", 어디가 더 가까운지는 travel_time 으로 실제 길 기준 도보·차량 시간을 확인한다
+  (일정에 없는 장소끼리도 된다). 일정에 넣은 장소 사이 시간은 view_plan 의 travel 에 이미 있다.
 - 검색 결과의 name_match 는 이름이 일치한다는 뜻이다. 일치하는 곳이 없으면 비슷한 곳일 뿐이니 그 장소를 사용자가 말한 곳으로 취급하지 않는다.
 - 운영시간·휴무·메뉴가 중요하면 get_place 로 확인한다.
 - 일정 변경 도구(add_item, update_item, remove_item, update_plan, add_rule, remove_rule)는 실제 일정을 바로 바꾸지 않는다.

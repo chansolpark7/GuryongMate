@@ -239,5 +239,5 @@ GURYONG_API_URL=http://127.0.0.1:8000 python scripts/routing/compare.py [place_i
 - **실시간 교통이 없다.** 차량 시간은 도로 종류별 기본 속도다. 구룡포 규모에서는 충분하다.
 - **구간별 수단**: planner 가 항목마다 '여기까지 오는 수단'(`travel_mode`)을 받고, 모든 구간에 도보·차량 시간을 함께 계산한다 (`docs/planner/README.md` §2.1). 자동 선택(걷기 상한을 넘으면 차량)은 하지 않고, 긴 도보 구간은 검증 경고(`long_walk`)로 알린다.
 - **위험 구역 우회는 planner 일정 시간에 넣지 않았다.** 미래 일정의 침수 실측은 알 수 없고, 일정 시간이 센서 값에 따라 흔들리지 않게 하기 위해서다. 여행 중 경로 안내(`route`)에서만 쓴다.
-- Agent 도구(`경로 조회`)로 `route`를 노출하면 "침수 구역을 피하면 4분 더 걸려요" 같은 설명이 가능하다 (`docs/agent/README.md`).
+- Agent 도구 `travel_time`이 `matrix`(도보·차량 시간)와 `route`(hazards=avoid, 우회 시간)를 쓴다 (`docs/agent/README.md` §5).
 - OSM 데이터 확인: 시연 동선(가옥거리·구룡포공원 계단·과메기문화관)을 현장과 맞춰 본다 (§5).
