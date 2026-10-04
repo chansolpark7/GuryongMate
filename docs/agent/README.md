@@ -83,7 +83,7 @@ LLM은 일정을 직접 바꾸지 않는다. 결과는 두 종류의 **카드**�
 | `proposal` | `ProposalDetail` | 변경 제안 카드 |
 | `recommendation` | `RecommendationView` | 장소 추천 카드 |
 | `steps_done` | `{"count": 3, "summary": "3단계 완료 : 장소 찾기, 일정 조정, 변경안 만들기"}` | 진행 영역을 이 한 줄로 접는다. 단계가 하나도 없으면 오지 않는다 |
-| `done` | `{"text": "최종 답변 전체", "cards": [{"type": "proposal", "id": 13}, ...]}` | 턴 종료 |
+| `done` | `{"text": "최종 답변 전체", "cards": [{"type": "proposal", "id": 13}, ...], "usage": {...}}` | 턴 종료. `usage`는 LLM 토큰 사용량(`input`, `cached`, `output`, `reasoning`, `calls`)으로 비용 모니터링용 |
 | `error` | `{"code", "message"}` | 오류. **이 뒤로 이벤트가 오지 않는다** |
 
 순서: `start` → (`status` · `step` · `thinking` · `text` · `recommendation`이 섞여서) → `proposal`(있으면) → `steps_done`(있으면) → `done`. 오류가 나면 그 자리에서 `error`로 끝난다.
@@ -199,7 +199,7 @@ LLM은 일정을 직접 바꾸지 않는다. 결과는 두 종류의 **카드**�
 
 | 변수 | 기본값 | 설명 |
 |---|---|---|
-| `AGENT_PROVIDER` | `local` | `local` 또는 `openai` |
+| `AGENT_PROVIDER` | `openai` | `openai`(기본, gpt-5.4-mini) 또는 `local`(Ollama 등) |
 | `AGENT_LOCAL_API` | `ollama` | `ollama`(네이티브 API, 권장) 또는 `openai`(LM Studio·vLLM 같은 OpenAI 호환 서버) |
 | `AGENT_LOCAL_BASE_URL` | `http://host.docker.internal:11434` | 호스트의 Ollama. OpenAI 호환 서버면 `…/v1`까지 |
 | `AGENT_LOCAL_MODEL` | `qwen3.6:35b` | |
@@ -227,6 +227,11 @@ LLM은 일정을 직접 바꾸지 않는다. 결과는 두 종류의 **카드**�
 
 - 검토 루프는 지적을 고칠 수 있는 모델에서 효과가 크다. qwen3.6은 지적을 받아도 고치지 못하는 경우가 많고(같은 장소 유지, 고치다 다른 문제 생김), 생각이 길어져 매우 느려진다.
 - 검토에서 되돌려진 답변은 사용자에게 보내지 않는다(일정을 바꾼 턴의 마지막 답변은 검토를 통과한 뒤 내보낸다).
+
+### 비용 (gpt-5.4-mini + 검토 루프 실측, 2026-10-04)
+- 가격: 입력 $0.75, 캐시된 입력 $0.075, 출력(추론 포함) $4.50 / 100만 토큰
+- 시나리오 4종 18턴(5턴 대화 포함): 턴당 평균 입력 4.1만 토큰(그중 83%가 캐시), 출력 800토큰, LLM 호출 5.3회
+- **턴당 평균 약 $0.011 (약 16원), 최대 $0.025 (약 37원)**. 로그(`[agent] session=… usage`)와 `done.usage`로 확인할 수 있다.
 
 ## 8. 로컬 LLM 메모 (qwen3.6:35b-a3b Q4, RTX 5070 12GB)
 

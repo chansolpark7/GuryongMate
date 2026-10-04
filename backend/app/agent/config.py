@@ -6,7 +6,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class AgentSettings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_prefix="AGENT_", extra="ignore")
 
-    provider: str = Field("local", description="local | openai")
+    provider: str = Field("openai", description="openai (기본, gpt-5.4-mini) | local (Ollama 등)")
 
     # 로컬 LLM. 컨테이너에서 호스트의 Ollama 로 접속.
     #   local_api=ollama : Ollama 네이티브 API (컨텍스트 길이 지정 가능, 권장)

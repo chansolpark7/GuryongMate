@@ -31,7 +31,9 @@ def test_responses_provider_converts_and_parses():
             {"type": "response.output_text.delta", "delta": "할게요"},
             {"type": "response.output_item.done",
              "item": {"type": "function_call", "call_id": "call_2", "name": "add_item", "arguments": '{"a": 1}'}},
-            {"type": "response.completed", "response": {}},
+            {"type": "response.completed", "response": {"usage": {
+                "input_tokens": 1200, "input_tokens_details": {"cached_tokens": 1000},
+                "output_tokens": 300, "output_tokens_details": {"reasoning_tokens": 120}}}},
         ), headers={"content-type": "text/event-stream"})
 
     p = OpenAIResponsesProvider("openai:m", "https://x/v1", "k", "m", "low", transport=httpx.MockTransport(handler))
@@ -50,7 +52,8 @@ def test_responses_provider_converts_and_parses():
         {"type": "function_call", "call_id": "call_1", "name": "add_item", "arguments": '{"place_id": "p"}'},
         {"type": "function_call_output", "call_id": "call_1", "output": '{"ok": true}'}]
     assert events == [ReasoningDelta("생각"), TextDelta("추가"), TextDelta("할게요"),
-                      ToolCall("call_2", "add_item", '{"a": 1}'), Finish("stop")]
+                      ToolCall("call_2", "add_item", '{"a": 1}'),
+                      Finish("stop", {"input": 1200, "cached": 1000, "output": 300, "reasoning": 120})]
 
 
 def test_responses_provider_errors():

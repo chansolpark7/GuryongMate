@@ -9,7 +9,7 @@
     proposal       ProposalDetail (planner)                변경 제안 카드
     recommendation RecommendationView (planner)            장소 추천 카드
     steps_done     {"count", "summary"}                    진행 영역을 한 줄로 접기
-    done           {"text", "cards": [{"type", "id"}]}     턴 종료
+    done           {"text", "cards": [{"type", "id"}], "usage"}  턴 종료 (usage: LLM 토큰 사용량, 모니터링용)
     error          {"code", "message"}                     오류 (이 뒤로 이벤트 없음)
 """
 from datetime import datetime
@@ -79,6 +79,7 @@ class ChatResult(BaseModel):
     steps_summary: str | None
     cards: list[dict[str, Any]]
     error: dict[str, str] | None = None
+    usage: dict[str, int] | None = Field(None, description="이 턴의 LLM 토큰 사용량 (input, cached, output, reasoning, calls)")
 
 
 class AgentInfo(BaseModel):

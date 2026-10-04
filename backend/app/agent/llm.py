@@ -38,6 +38,8 @@ class ToolCall:
 @dataclass
 class Finish:
     reason: str
+    # 토큰 사용량 {"input", "cached", "output", "reasoning"} (공급자가 알려줄 때만)
+    usage: dict | None = None
 
 
 LLMEvent = TextDelta | ReasoningDelta | ToolCall | Finish
@@ -152,6 +154,7 @@ class OllamaProvider:
         return out
 
     async def stream(self, messages: list[dict], tools: list[dict]) -> AsyncIterator[LLMEvent]:
+        usage = None
         options: dict = {"num_ctx": self._num_ctx}
         if self._temperature is not None:
             options["temperature"] = self._temperature
@@ -184,11 +187,13 @@ class OllamaProvider:
                                                   arguments=json.dumps(fn.get("arguments") or {}, ensure_ascii=False)))
                         if chunk.get("done"):
                             finish = chunk.get("done_reason") or finish
+                            usage = {"input": chunk.get("prompt_eval_count", 0), "cached": 0,
+                                     "output": chunk.get("eval_count", 0), "reasoning": 0}
         except httpx.HTTPError as e:
             raise LLMError(f"{self.name} 연결 실패: {e!r}") from e
         for c in calls:
             yield c
-        yield Finish(finish)
+        yield Finish(finish, usage)
 
 
 class OpenAIResponsesProvider:
@@ -225,6 +230,7 @@ class OpenAIResponsesProvider:
                  "parameters": t["function"]["parameters"], "strict": False} for t in tools]
 
     async def stream(self, messages: list[dict], tools: list[dict]) -> AsyncIterator[LLMEvent]:
+        usage = None
         body: dict = {"model": self.model, "input": self._to_input(messages), "stream": True, "store": False}
         if tools:
             body["tools"] = self._to_tools(tools)
@@ -254,8 +260,15 @@ class OpenAIResponsesProvider:
                             item = ev["item"]
                             calls.append(ToolCall(id=item.get("call_id") or f"call_{uuid.uuid4().hex[:8]}",
                                                   name=item.get("name", ""), arguments=item.get("arguments") or "{}"))
-                        elif kind == "response.incomplete":
-                            finish = "length"
+                        elif kind in ("response.completed", "response.incomplete"):
+                            if kind == "response.incomplete":
+                                finish = "length"
+                            u = (ev.get("response") or {}).get("usage") or {}
+                            if u:
+                                usage = {"input": u.get("input_tokens", 0),
+                                         "cached": (u.get("input_tokens_details") or {}).get("cached_tokens", 0),
+                                         "output": u.get("output_tokens", 0),
+                                         "reasoning": (u.get("output_tokens_details") or {}).get("reasoning_tokens", 0)}
                         elif kind in ("error", "response.failed"):
                             err = ev.get("error") or ev.get("response", {}).get("error")
                             raise LLMError(f"{self.name}: {err}")
@@ -263,7 +276,7 @@ class OpenAIResponsesProvider:
             raise LLMError(f"{self.name} 연결 실패: {e!r}") from e
         for c in calls:
             yield c
-        yield Finish(finish)
+        yield Finish(finish, usage)
 
 
 @lru_cache

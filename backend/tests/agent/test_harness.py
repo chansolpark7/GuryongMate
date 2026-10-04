@@ -176,7 +176,9 @@ def test_stream_events_steps_and_proposal(client, session):
     prop = last(events, "proposal")
     assert prop["status"] == "pending" and prop["origin"] == sid and prop["request"] == "점심 넣어줘"
     assert prop["summary"] == "알아볼게요\n\n물회집을 추가하는 걸 제안해요."
-    assert last(events, "done") == {"text": text, "cards": [{"type": "proposal", "id": prop["id"]}]}
+    done = last(events, "done")
+    assert done["text"] == text and done["cards"] == [{"type": "proposal", "id": prop["id"]}]
+    assert done["usage"]["calls"] == 3  # 가짜 LLM 은 토큰 수를 주지 않아 호출 수만 센다
     assert places_in(plan_of(client, pid)) == ["p-house"]  # 아직 반영 안 됨
     assert llm.calls[2][-1]["role"] == "tool" and "plan_after" in llm.calls[2][-1]["content"]  # add_item 결과
 

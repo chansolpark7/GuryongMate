@@ -193,6 +193,7 @@ async def run_turn(session_id: str, plan_id: int, user_text: str, llm: LLMProvid
         saved = True
         await to_thread.run_sync(_save, session_id, closing_rows(note))
 
+    usage = {"input": 0, "cached": 0, "output": 0, "reasoning": 0, "calls": 0}  # 이 턴의 LLM 토큰 사용량
     nudged = False
     extra: list[dict] = []  # 이번 호출에만 붙이는 안내 (기록에는 남기지 않음)
     try:
@@ -218,8 +219,11 @@ async def run_turn(session_id: str, plan_id: int, user_text: str, llm: LLMProvid
                                 yield _ev("thinking", delta=t)
                             case ToolCall():
                                 calls.append(ev)
-                            case Finish(reason=r):
+                            case Finish(reason=r, usage=u):
                                 finish = r
+                                usage["calls"] += 1
+                                for k, v in (u or {}).items():
+                                    usage[k] += v or 0
                     break
                 except LLMError as e:
                     # 로컬 모델은 가끔 형식이 깨진 도구 호출을 내서 서버 파서가 실패한다.
@@ -339,7 +343,8 @@ async def run_turn(session_id: str, plan_id: int, user_text: str, llm: LLMProvid
             yield _ev("proposal", **proposal)
         if steps.summary:
             yield _ev("steps_done", count=len(steps.items), summary=steps.summary)
-        yield _ev("done", text=full_text, cards=cards)
+        log.info("session=%s usage %s", sid, usage)
+        yield _ev("done", text=full_text, cards=cards, usage=usage)
     finally:
         if not saved:
             # 연결 끊김(취소)이나 예상 못 한 예외: 여기서는 await 할 수 없어 짧게 동기로 저장한다

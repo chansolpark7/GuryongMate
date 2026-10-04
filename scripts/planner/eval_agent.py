@@ -25,6 +25,11 @@ SCENARIOS = {
         "plan": {"title": "포항 당일", "start_date": "2026-10-10", "day_start": "10:00", "day_end": "18:00"},
         "messages": ["포항 여행지 추천해줘", "어 이렇게 코스 짜줘"],
     },
+    "multi_turn": {  # 대화가 길어질 때 (기록이 쌓여 입력 토큰이 늘어난다)
+        "plan": {"title": "긴 대화", "start_date": "2026-10-10", "day_start": "10:00", "day_end": "19:00"},
+        "messages": ["구룡포 하루 일정 짜줘. 역사랑 바다 좋아해.", "점심은 물회로 바꿔줘",
+                     "오후에 카페에서 쉬는 시간 넣어줘", "저녁 먹을 곳도 추천해줘", "가옥거리는 30분만 있을게"],
+    },
     "fix_existing": {
         "plan": {"title": "다듬기", "start_date": "2026-10-10", "day_start": "10:00", "day_end": "18:00"},
         # 운영시간 밖(피어라계단은 저녁 운영), 먼 곳(광남서원), 점심 없음
@@ -46,7 +51,8 @@ def run_one(http: httpx.Client, name: str, sc: dict) -> dict:
                       timeout=httpx.Timeout(10, read=900)).raise_for_status().json()
         turns.append({"seconds": round(time.monotonic() - t0), "steps": [s["kind"] for s in r["steps"]],
                       "reviews": [s["detail"] for s in r["steps"] if s["kind"] == "review"],
-                      "cards": [c["type"] for c in r["cards"]], "error": r["error"], "text": r["text"][:300]})
+                      "cards": [c["type"] for c in r["cards"]], "error": r["error"], "text": r["text"][:300],
+                      "usage": r.get("usage")})
     pending = http.get(f"/planner/plans/{plan['id']}/proposals", params={"status": "pending"}).json()
     out = {"scenario": name, "plan_id": plan["id"], "seconds": round(time.monotonic() - started), "turns": turns,
            "proposal": False}

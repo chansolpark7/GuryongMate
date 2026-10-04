@@ -200,7 +200,7 @@ async def _turn_response(session_id: str, plan_id: int, text: str, user_id: str,
         return StreamingResponse(sse(), media_type="text/event-stream", background=BackgroundTask(_release, session_id, token),
                                  headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
-    text_out, steps, cards, summary, error = "", {}, [], None, None
+    text_out, steps, cards, summary, error, usage = "", {}, [], None, None, None
     async for ev in events():
         name, data = ev["event"], ev["data"]
         if name == "step":
@@ -210,11 +210,11 @@ async def _turn_response(session_id: str, plan_id: int, text: str, user_id: str,
         elif name == "steps_done":
             summary = data["summary"]
         elif name == "done":
-            text_out = data["text"]
+            text_out, usage = data["text"], data.get("usage")
         elif name == "error":
             error = data
     return ChatResult(text=text_out, steps=[Step.model_validate(s) for s in steps.values()], steps_summary=summary,
-                      cards=cards, error=error)
+                      cards=cards, error=error, usage=usage)
 
 
 _STREAM_DOC = {200: {"content": {"text/event-stream": {}}, "description": "stream=true 면 SSE 이벤트 스트림"}}
