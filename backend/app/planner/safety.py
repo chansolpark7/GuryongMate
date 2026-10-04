@@ -3,14 +3,17 @@
 - 일정의 계산된 방문 시각(build_schedule)과 장소를 safety 서비스(/safety/assess)에 보내 항목별 위험 단계를 받는다.
 - 위험 단계는 safe / caution / danger 3단계. 판단하지 않은 항목(먼 날짜·지난 일정·데이터 장애)은 risk=None.
 - 참고(info) 신호(약한 비 등)는 단계를 올리지 않지만 hazards 에 그대로 남겨 사람·LLM 이 일정 조정에 참고한다.
-- 지금은 방문지만 본다. 이동 경로 평가는 나중에 추가한다.
+- 방문지와 이동 구간을 함께 본다. 이동 구간은 길찾기 경로선(routing)을 그 구간 시간 동안 지나는 것으로 평가한다
+  (도보: 야외 기준 / 차량: 차 안이라 비·바람은 참고까지, 침수 구역은 그대로).
 
 DB·HTTP 에 의존하지 않는 순수 함수만 둔다 (HTTP 는 safety_client.py, 주기 점검은 safety_watch.py).
 """
 from datetime import date, datetime
 
+from dataclasses import dataclass
+
 from app.planner.schemas import (
-    PlanDetail, SafetyChange, SafetyCheck, SafetyCounts, SafetyHazard, SafetyItem, SafetyWindow,
+    PlaceInfo, PlanDetail, SafetyChange, SafetyCheck, SafetyCounts, SafetyHazard, SafetyItem, SafetyWindow,
 )
 
 RANK = {"safe": 0, "caution": 1, "danger": 2}
@@ -24,14 +27,66 @@ def _minutes(hhmm: str) -> int:
     return h * 60 + m
 
 
-def visits(plan: PlanDetail, start: date | None = None, end: date | None = None) -> list[dict]:
-    """/safety/assess 요청의 visits. key = 항목 id. start~end 날짜 밖 항목은 뺀다.
+@dataclass
+class TravelLeg:
+    """이동 구간 하나: 직전 장소(origin) -> 항목(item_id) 장소(dest)."""
+
+    item_id: int
+    day: int
+    date: date
+    origin: PlaceInfo
+    dest: PlaceInfo
+    mode: str
+    depart: int  # 자정 기준 분
+    arrive: int
+
+
+def travel_legs(plan: PlanDetail, start: date | None = None, end: date | None = None) -> list[TravelLeg]:
+    """점검할 이동 구간. 이동이 없거나(0분) 도착 항목을 점검하지 않으면(건너뜀·완료) 뺀다. 자정을 넘는 구간도 뺀다."""
+    out = []
+    for d in plan.days:
+        if (start and d.date < start) or (end and d.date > end):
+            continue
+        prev: PlaceInfo | None = None
+        for it in d.items:
+            if it.status == "skipped" or it.place is None:
+                continue
+            if (prev is not None and it.status not in SKIP_STATUS and it.travel_minutes and it.leg_mode
+                    and it.arrive_at is not None):
+                arrive = _minutes(it.arrive_at)
+                depart = arrive - it.travel_minutes
+                if arrive < DAY_MIN and depart >= 0:
+                    out.append(TravelLeg(it.id, d.day, d.date, prev, it.place, it.leg_mode, depart, arrive))
+            prev = it.place
+    return out
+
+
+def _hhmm(m: int) -> str:
+    return f"{m // 60:02d}:{m % 60:02d}"
+
+
+def travel_key(item_id: int) -> str:
+    return f"t{item_id}"
+
+
+def visits(plan: PlanDetail, start: date | None = None, end: date | None = None,
+           paths: dict[int, list[tuple[float, float]] | None] | None = None) -> list[dict]:
+    """/safety/assess 요청의 visits. 방문 key = 항목 id, 이동 key = 't' + 도착 항목 id. start~end 날짜 밖은 뺀다.
+    paths: 도착 항목 id -> 길찾기 경로선. 없으면 두 장소를 잇는 직선으로 본다.
     계산된 시작 시각이 자정을 넘는 항목은 날짜가 애매해 빼고, 종료만 넘으면 60분으로 본다(end 생략)."""
+    paths = paths or {}
+    legs = {g.item_id: g for g in travel_legs(plan, start, end)}
     out = []
     for d in plan.days:
         if (start and d.date < start) or (end and d.date > end):
             continue
         for it in d.items:
+            g = legs.get(it.id)
+            if g is not None:
+                line = paths.get(it.id) or [(g.origin.lat, g.origin.lng), (g.dest.lat, g.dest.lng)]
+                out.append({"key": travel_key(it.id), "path": [list(p) for p in line], "mode": g.mode,
+                            "date": d.date.isoformat(), "start": _hhmm(g.depart), "end": _hhmm(g.arrive),
+                            "label": f"{g.origin.title} → {g.dest.title}"})
             if it.status in SKIP_STATUS or it.start_at is None or it.end_at is None:
                 continue
             s, e = _minutes(it.start_at), _minutes(it.end_at)
@@ -49,13 +104,17 @@ def visits(plan: PlanDetail, start: date | None = None, end: date | None = None)
 
 
 def _item(plan: PlanDetail, v: dict) -> SafetyItem | None:
+    travel = v.get("kind") == "travel"
     for d in plan.days:
         for it in d.items:
-            if str(it.id) == v["key"]:
+            if (travel_key(it.id) if travel else str(it.id)) == v["key"]:
+                start, end = (v["start"][11:16], v["end"][11:16]) if travel else (it.start_at, it.end_at)
                 return SafetyItem(
-                    item_id=it.id, day=d.day, date=d.date, place_id=it.place_id,
-                    title=it.place.title if it.place else (v.get("label") or it.place_id),
-                    start_at=it.start_at, end_at=it.end_at, risk=v["risk"],
+                    item_id=it.id, kind="travel" if travel else "visit", mode=v.get("mode"),
+                    day=d.day, date=d.date, place_id=it.place_id,
+                    title=(v.get("label") or it.place_id) if travel else (
+                        it.place.title if it.place else (v.get("label") or it.place_id)),
+                    start_at=start, end_at=end, risk=v["risk"],
                     unassessed_reason=v.get("unassessed_reason"), data_missing=v.get("data_missing", False),
                     horizon=v["horizon"],
                     hazards=[SafetyHazard(type=h["type"], level=h["level"], reason=h["reason"], source=h["source"])
@@ -74,9 +133,11 @@ def _guidance(items: list[SafetyItem], data_ok: dict[str, bool]) -> str:
     missing = [i for i in items if i.unassessed_reason == "data_missing"]
     parts = []
     if risky:
-        names = ", ".join(f"{i.day}일차 {i.start_at} {i.title}({LABEL[i.risk]})" for i in risky[:4])
+        names = ", ".join(f"{i.day}일차 {i.start_at} {'이동 ' if i.kind == 'travel' else ''}{i.title}"
+                          f"({LABEL[i.risk]})" for i in risky[:4])
         parts.append(f"주의·위험 {len(risky)}곳: {names}. 항목별 advice 를 따르고, 바꾸기 전에 근거(hazards)를 사용자에게 "
-                     "설명하라. 시간을 옮길 때는 better_times 안에서, 없으면 실내 장소로 대안을 찾는다.")
+                     "설명하라. 방문은 better_times 안으로 옮기거나 실내 장소로, 이동은 우회(detour)·이동 시간 변경·"
+                     "수단 변경으로 대안을 찾는다.")
     if info:
         parts.append(f"안전 단계지만 참고 신호가 있는 곳 {len(info)}곳 (약한 비 등). 일정을 바꿀 이유는 아니지만 "
                      "순서·시간을 정할 때 참고할 수 있다.")
@@ -101,9 +162,10 @@ def check(plan: PlanDetail, assessed: dict) -> SafetyCheck:
     items = []
     for d in plan.days:
         for it in d.items:
-            v = by_key.get(str(it.id))
-            if v is not None and (si := _item(plan, v)) is not None:
-                items.append(si)
+            for key in (travel_key(it.id), str(it.id)):  # 그 항목까지 오는 이동 -> 방문 순서
+                v = by_key.get(key)
+                if v is not None and (si := _item(plan, v)) is not None:
+                    items.append(si)
     counts = SafetyCounts()
     for i in items:
         if i.risk is None:
@@ -131,8 +193,9 @@ def check(plan: PlanDetail, assessed: dict) -> SafetyCheck:
 
 def state_key(item: SafetyItem) -> str:
     """항목·날짜로 구분한다. 앞 항목을 고쳐 시작 시각이 밀려도 같은 방문이다 (단계가 같으면 다시 경고하지 않음).
-    다른 날로 옮기면 새 방문으로 본다."""
-    return f"{item.item_id}@{item.date.isoformat()}"
+    다른 날로 옮기면 새 방문으로 본다. 이동 구간은 도착 항목 기준 + 수단 (수단을 바꾸면 새 구간)."""
+    base = f"{item.item_id}@{item.date.isoformat()}"
+    return f"{base}#{item.mode}" if item.kind == "travel" else base
 
 
 def diff(prev: dict[str, str], result: SafetyCheck) -> tuple[list[SafetyChange], dict[str, str]]:
@@ -178,6 +241,7 @@ def alert_message(changes: list[SafetyChange]) -> str:
     for c in changes:
         it = c.item
         why = next((h.reason for h in it.hazards if h.level != "info"), "")
-        lines.append(f"- {it.day}일차 {it.start_at} {it.title}: {LABEL[c.from_risk]} → {LABEL[c.to_risk]}"
+        what = f"이동({'도보' if it.mode == 'walk' else '차량'}) {it.title}" if it.kind == "travel" else it.title
+        lines.append(f"- {it.day}일차 {it.start_at} {what}: {LABEL[c.from_risk]} → {LABEL[c.to_risk]}"
                      + (f" ({why})" if why else ""))
     return "\n".join([head, *lines])

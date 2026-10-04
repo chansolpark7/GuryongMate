@@ -28,7 +28,8 @@ def make_plan(*items, constraints=(), start=date(2026, 10, 10), days=1, day_end=
 
 
 def codes(violations):
-    return sorted(v.code for v in violations)
+    """이 파일은 routing 결과(travel 표) 없이 직선거리 근사로 계산하므로 근사 경고(travel_estimated)는 뺀다."""
+    return sorted(v.code for v in violations if v.code != "travel_estimated")
 
 
 def test_timeline_chains_stay_and_travel():
@@ -40,13 +41,13 @@ def test_timeline_chains_stay_and_travel():
     assert 5 <= items[1].travel_minutes <= 7  # 300m * 1.3 / 70m/min
     assert items[1].arrive_at == f"13:{30 + items[1].travel_minutes:02d}"
     assert days[0].end_at == items[2].end_at
-    assert violations == []
+    assert codes(violations) == []
 
 
 def test_fixed_start_time_waits_or_is_missed():
     days, v = build_schedule(make_plan({"place_id": "a"}, {"place_id": "b", "start_time": time(14, 0)}), PLACES)
     assert days[0].items[1].start_at == "14:00"  # 일찍 도착하면 기다림
-    assert v == []
+    assert codes(v) == []
 
     days, v = build_schedule(make_plan({"place_id": "a", "stay_minutes": 120}, {"place_id": "b", "start_time": time(14, 0)}), PLACES)
     assert codes(v) == ["fixed_time_missed"]
@@ -86,7 +87,8 @@ def test_constraints():
         day_end=time(23, 59),
     )
     _, v = build_schedule(plan, PLACES)
-    assert codes(v) == ["end_before", "exclude", "max_travel_minutes", "must_include"]
+    # 호미곶까지 도보 약 160분: 기본 검사(긴 도보 구간·하루 도보 합계)도 함께 나온다
+    assert codes(v) == ["daily_walk_total", "end_before", "exclude", "long_walk", "max_travel_minutes", "must_include"]
     assert next(x for x in v if x.code == "max_travel_minutes").severity == "warning"
 
 

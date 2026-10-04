@@ -73,7 +73,7 @@ class Applier:
                 self._check_day(op.day)
                 self._require_place(op.place_id)
                 item = PlannerItem(place_id=op.place_id, stay_minutes=op.stay_minutes, start_time=op.start_time,
-                                   memo=op.memo, status="planned")
+                                   memo=op.memo, status="planned", travel_mode=op.travel_mode)
                 temp_id = -(len(self._new_items) + 1)
                 if not self.persist:
                     item.id = temp_id
@@ -98,6 +98,8 @@ class Applier:
                     item.memo = op.memo
                 if op.status is not None:
                     item.status = op.status
+                if "travel_mode" in sent:
+                    item.travel_mode = op.travel_mode
             case RemoveItemOp():
                 item = self._item(op.item_id)
                 self.plan.items.remove(item)
@@ -193,6 +195,7 @@ def overwrite(plan: PlannerPlan, after: PlanDetail) -> None:
                 keep.add(v.id)
             item.place_id, item.day, item.position = v.place_id, v.day, v.order
             item.stay_minutes, item.start_time, item.memo, item.status = v.stay_minutes, v.start_time, v.memo, v.status
+            item.travel_mode = v.travel_mode
     for item_id, item in current.items():
         if item_id not in keep:
             plan.items.remove(item)
@@ -238,10 +241,16 @@ def detail(plan: PlannerPlan, places: PlaceLookup) -> PlanDetail:
             infos[pid] = places.get(pid)
         except PlacesUnavailable:
             infos[pid] = None
-    # 이동시간은 필요한 구간을 모아 routing 에 한 번만 묻는다 (실패하면 구간별 직선거리 근사)
+    # 이동시간은 필요한 구간을 모아 수단별로 routing 에 한 번씩만 묻는다 (실패하면 구간별 직선거리 근사).
+    # 구간 수단은 항목마다 다를 수 있고, 비교용으로 도보·차량을 모두 계산한다
     pairs = travel_pairs(plan, infos)
-    legs = get_travel_lookup().legs(pairs, plan.travel_mode) if pairs else []
-    days, violations = build_schedule(plan, infos, {(a.id, b.id): leg for (a, b), leg in zip(pairs, legs)})
+    table: dict = {}
+    if pairs:
+        lookup = get_travel_lookup()
+        for mode in ("walk", "car"):
+            for (a, b), leg in zip(pairs, lookup.legs(pairs, mode)):
+                table[(a.id, b.id, mode)] = leg
+    days, violations = build_schedule(plan, infos, table)
     fields = PlanSummary.model_fields.keys() - {"item_count"}
     return PlanDetail(
         **{k: getattr(plan, k) for k in fields},
@@ -330,6 +339,9 @@ def diff(before: PlanDetail, after: PlanDetail) -> list[Change]:
                          f"{i.start_time.strftime('%H:%M') if i.start_time else '없음'}")
         if o.status != i.status:
             parts.append(f"상태 {o.status} → {i.status}")
+        if o.travel_mode != i.travel_mode:
+            mode = {None: "계획 기본", "walk": "도보", "car": "차량"}
+            parts.append(f"오는 수단 {mode[o.travel_mode]} → {mode[i.travel_mode]}")
         if o.memo != i.memo:
             parts.append(f"메모 '{o.memo}' → '{i.memo}'")
         if parts:

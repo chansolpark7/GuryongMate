@@ -32,7 +32,8 @@ from app.planner.models import (
 )
 from app.planner.places import PlaceLookup, get_place_lookup
 from app.planner.safety_client import SafetyClient, SafetyUnavailable, get_safety_client
-from app.planner.safety_watch import SafetyWatcher, alert_view, get_watcher
+from app.planner.safety_watch import SafetyWatcher, alert_view, assess_plan, get_watcher
+from app.planner.travel import RouteLookup, get_route_lookup
 from app.planner.schemas import (
     AcceptRequest,
     AcceptResult,
@@ -71,6 +72,7 @@ router = APIRouter(prefix="/planner", tags=["planner"], route_class=PlannerRoute
 DbSession = Annotated[Session, Depends(get_db)]
 Places = Annotated[PlaceLookup, Depends(get_place_lookup)]
 Safety = Annotated[SafetyClient, Depends(get_safety_client)]
+Routes = Annotated[RouteLookup, Depends(get_route_lookup)]
 # 사용자: Authorization: Bearer <access 토큰> (개발 모드 AUTH_REQUIRED=false 면 X-User-Id 헤더). app.core.auth
 UserId = CurrentUser
 
@@ -399,33 +401,34 @@ def remove_candidate(plan_id: int, recommendation_id: int, candidate_id: int, db
 
 # ---------- 안전 점검 ----------
 
-def _safety_check(detail: PlanDetail, client: SafetyClient) -> SafetyCheck:
-    vs = safety_check.visits(detail)
-    if not vs:
-        return safety_check.check(detail, {"visits": [], "data_status": {}, "now": datetime.now(timezone.utc)})
+def _safety_check(detail: PlanDetail, client: SafetyClient, routes: RouteLookup) -> SafetyCheck:
     try:
-        return safety_check.check(detail, client.assess(vs))
+        result = assess_plan(detail, client, routes)
     except SafetyUnavailable as e:
         raise PlannerError(503, "safety_unavailable", "안전 정보 서비스에 접근할 수 없습니다. 잠시 후 다시 시도하세요.",
                            reason=str(e)[:200]) from e
+    if result is None:  # 점검할 방문·이동이 없음
+        return safety_check.check(detail, {"visits": [], "data_status": {}, "now": datetime.now(timezone.utc)})
+    return result
 
 
 @router.get("/plans/{plan_id}/safety", response_model=SafetyCheck)
-def check_safety(plan_id: int, db: DbSession, user_id: UserId, places: Places, client: Safety) -> SafetyCheck:
-    """지금 일정의 방문 장소·시각별 위험 단계 (safe / caution / danger, 판단 불가는 null). 저장하지 않는다."""
+def check_safety(plan_id: int, db: DbSession, user_id: UserId, places: Places, client: Safety,
+                 routes: Routes) -> SafetyCheck:
+    """지금 일정의 방문·이동 구간별 위험 단계 (safe / caution / danger, 판단 불가는 null). 저장하지 않는다."""
     plan = _get_plan(db, user_id, plan_id)
     detail = engine.detail(plan, places)
     db.rollback()  # safety 호출 동안 DB 연결을 잡고 있지 않게
-    return _safety_check(detail, client)
+    return _safety_check(detail, client, routes)
 
 
 @router.post("/plans/{plan_id}/safety/preview", response_model=SafetyCheck)
 def preview_safety(plan_id: int, body: OpsRequest, db: DbSession, user_id: UserId, places: Places,
-                   client: Safety) -> SafetyCheck:
+                   client: Safety, routes: Routes) -> SafetyCheck:
     """ops 를 적용했다고 치고 안전 점검 (저장 안 함). 변경안을 만들 때 쓴다. 새 항목 item_id 는 음수 임시값."""
     after = engine.simulate(_get_plan(db, user_id, plan_id), body.ops, places, with_index=True)
     db.rollback()
-    return _safety_check(after, client)
+    return _safety_check(after, client, routes)
 
 
 @router.get("/plans/{plan_id}/safety/alerts", response_model=list[SafetyAlertView])

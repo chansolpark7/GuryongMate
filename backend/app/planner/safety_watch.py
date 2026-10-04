@@ -9,7 +9,7 @@
 import logging
 import threading
 import time as _time
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 from sqlalchemy import delete, select
 
@@ -19,10 +19,33 @@ from app.planner import safety
 from app.planner.models import PlannerPlan, PlannerSafetyAlert, PlannerSafetyState
 from app.planner.places import PlaceLookup, get_place_lookup, settings
 from app.planner.safety_client import SafetyClient, get_safety_client
-from app.planner.schemas import SafetyAlertView, SafetyChange, SafetyScanReport
+from app.planner.schemas import PlanDetail, SafetyAlertView, SafetyChange, SafetyCheck, SafetyDetour, SafetyScanReport
+from app.planner.travel import RouteLookup, get_route_lookup
 
 log = logging.getLogger("uvicorn.error")
 LOOKAHEAD = timedelta(days=3)  # 예보 마지막 시각을 모를 때 점검할 기간
+
+
+def assess_plan(detail: PlanDetail, client: SafetyClient, routes: RouteLookup,
+                start: date | None = None, end: date | None = None) -> SafetyCheck | None:
+    """일정(방문 + 이동 구간)을 safety 에 물어 점검 결과를 만든다. 점검할 것이 없으면 None.
+    이동 구간은 routing 경로선으로 보내고(못 구하면 직선), 3시간 안 이동이 주의·위험이면 우회 정보를 붙인다.
+    safety 에 접근할 수 없으면 SafetyUnavailable."""
+    legs = safety.travel_legs(detail, start, end)
+    paths = {g.item_id: routes.path(g.origin, g.dest, g.mode) for g in legs}
+    vs = safety.visits(detail, start, end, paths)
+    if not vs:
+        return None
+    result = safety.check(detail, client.assess(vs))
+    by_id = {g.item_id: g for g in legs}
+    for it in result.items:
+        g = by_id.get(it.item_id) if it.kind == "travel" else None
+        if g is not None and it.horizon == "now" and it.risk in ("caution", "danger"):
+            d = routes.detour(g.origin, g.dest, g.mode)
+            # 길찾기는 센서 바로 주변(80m)만 막는다. 그 안을 지나지 않으면 우회할 것이 없어 붙이지 않는다
+            if d is not None and (d["on_route"] or d["avoided"]):
+                it.detour = SafetyDetour(**d)
+    return result
 
 
 def alert_view(a: PlannerSafetyAlert) -> SafetyAlertView:
@@ -34,9 +57,10 @@ def alert_view(a: PlannerSafetyAlert) -> SafetyAlertView:
 
 class SafetyWatcher:
     def __init__(self, client: SafetyClient, places: PlaceLookup, session_factory=SessionLocal,
-                 recheck: timedelta | None = None, users: list[str] | None = None):
+                 recheck: timedelta | None = None, users: list[str] | None = None, routes: RouteLookup | None = None):
         """users: 이 사용자들의 계획만 점검 (테스트용). None 이면 전체."""
         self.client = client
+        self.routes = routes or get_route_lookup()
         self.users = users
         self.places = places
         self.sessions = session_factory
@@ -88,12 +112,11 @@ class SafetyWatcher:
             if plan is None:
                 return False, None
             detail = engine.detail(plan, self.places)
-        vs = safety.visits(detail, now.date(), until.date())
-        if not vs:
+        result = assess_plan(detail, self.client, self.routes, now.date(), until.date())
+        if result is None:
             with self.sessions.begin() as db:  # 모두 건너뜀·완료 등: 지난 상태를 남기지 않는다
                 db.execute(delete(PlannerSafetyState).where(PlannerSafetyState.plan_id == plan_id))
             return False, None
-        result = safety.check(detail, self.client.assess(vs))
 
         with self.sessions.begin() as db:
             plan = db.get(PlannerPlan, plan_id, with_for_update=True, populate_existing=True)

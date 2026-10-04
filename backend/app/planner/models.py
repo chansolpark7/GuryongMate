@@ -1,6 +1,8 @@
 from datetime import date, datetime, time
 
-from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, String, Text, Time, UniqueConstraint, func
+from sqlalchemy import (
+    DDL, Boolean, Date, DateTime, ForeignKey, Integer, String, Text, Time, UniqueConstraint, event, func,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -19,7 +21,7 @@ class PlannerPlan(Base):
     end_date: Mapped[date] = mapped_column(Date)
     day_start: Mapped[time] = mapped_column(Time)  # 매일 일정 시작 시각
     day_end: Mapped[time] = mapped_column(Time)  # 매일 일정 종료 목표 시각
-    travel_mode: Mapped[str] = mapped_column(String(10), default="walk")  # walk | car
+    travel_mode: Mapped[str] = mapped_column(String(10), default="walk")  # 구간 기본 이동 수단: walk | car
     memo: Mapped[str] = mapped_column(Text, default="")
     version: Mapped[int] = mapped_column(Integer, default=1)  # 일정이 바뀔 때마다 1 오른다 (제안의 기준 비교용)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
@@ -51,6 +53,8 @@ class PlannerItem(Base):
     start_time: Mapped[time | None] = mapped_column(Time, nullable=True)  # 지정 시 이 시각에 고정
     memo: Mapped[str] = mapped_column(Text, default="")
     status: Mapped[str] = mapped_column(String(10), default="planned")  # planned|visiting|done|skipped
+    # 직전 장소에서 여기까지 오는 이동 수단. None 이면 계획 기본(plan.travel_mode)
+    travel_mode: Mapped[str | None] = mapped_column(String(4), nullable=True)
 
     plan: Mapped[PlannerPlan] = relationship(back_populates="items")
 
@@ -153,3 +157,11 @@ class PlannerSafetyAlert(Base):
     checked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     changes: Mapped[list[dict]] = mapped_column(JSONB)  # SafetyChange[]
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+# 이미 만들어진 테이블에 새 컬럼 추가 (해커톤 기간에는 Alembic 을 쓰지 않는다). create_all 직후 매번 실행, 있으면 건너뛴다
+_UPGRADES = [
+    "ALTER TABLE planner_item ADD COLUMN IF NOT EXISTS travel_mode VARCHAR(4)",
+]
+for _sql in _UPGRADES:
+    event.listen(Base.metadata, "after_create", DDL(_sql).execute_if(dialect="postgresql"))

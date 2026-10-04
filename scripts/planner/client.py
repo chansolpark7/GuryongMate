@@ -198,17 +198,25 @@ class PlannerClient:
 
     # ----- 일정 항목 -----
     def add_item(self, plan_id: int, place_id: str, day: int = 1, order: int | None = None, stay_minutes: int = 60,
-                 start_time: str | None = None, memo: str = "") -> dict:
+                 start_time: str | None = None, memo: str = "", travel_mode: str | None = None) -> dict:
         body = {"place_id": place_id, "day": day, "order": order, "stay_minutes": stay_minutes,
-                "start_time": start_time, "memo": memo}
+                "start_time": start_time, "memo": memo, "travel_mode": travel_mode}
         return self._req("POST", f"/planner/plans/{plan_id}/items", json=body)
 
     def update_item(self, plan_id: int, item_id: int, **changes) -> dict:
-        """보낸 필드만 바뀐다 (day, order, stay_minutes, start_time, memo, status). start_time=None 은 고정 해제."""
+        """보낸 필드만 바뀐다 (day, order, stay_minutes, start_time, memo, status, travel_mode).
+        start_time=None 은 고정 해제, travel_mode=None 은 계획 기본 수단으로."""
         return self._req("PATCH", f"/planner/plans/{plan_id}/items/{item_id}", json=changes)
 
     def delete_item(self, plan_id: int, item_id: int) -> dict:
         return self._req("DELETE", f"/planner/plans/{plan_id}/items/{item_id}")
+
+    # ----- 안전 점검 -----
+    def check_safety(self, plan_id: int) -> dict:
+        return self._req("GET", f"/planner/plans/{plan_id}/safety")
+
+    def safety_alerts(self, plan_id: int, status: str | None = None) -> list[dict]:
+        return self._req("GET", f"/planner/plans/{plan_id}/safety/alerts", params={"status": status} if status else None)
 
     # ----- 규칙 -----
     def list_constraints(self, plan_id: int) -> list[dict]:
