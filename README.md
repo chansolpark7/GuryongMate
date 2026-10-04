@@ -17,8 +17,10 @@ Flutter 앱 (예정) ──► gateway :8000 (Caddy)
                       ├─ /places       ──► places    관광지 검색·상세·근거 검색
                       ├─ /planner      ──► planner   일정·검증·변경 제안·장소 추천
                       ├─ /safety       ──► safety    안전 정보 (디지털 트윈 + 기상·조위)
+                      ├─ /routing      ──► routing   길찾기 (이동시간·경로선·위험 구역 우회)
                       └─ /agent        ──► agent     LLM 채팅 (SSE)·도구 실행
                      embedding    임베딩 모델 서버 (내부 전용)
+                     valhalla     길찾기 엔진, OSM 포항 데이터 (내부 전용)
                      places-init  시작 시 장소 데이터·임베딩 자동 적재
                      db           PostgreSQL + pgvector
 LLM: 호스트의 Ollama 또는 OpenAI API (Docker 밖)
@@ -36,8 +38,10 @@ LLM: 호스트의 Ollama 또는 OpenAI API (Docker 밖)
 | **planner** | 여행 일정의 단일 원천 | 일정 생성·조회·편집 / 타임라인 계산과 **결정론적 위반 검사**(운영시간·휴무·종료 시각·이동시간·사용자 규칙) / **변경 제안(Proposal)** 미리보기·승인·거절(버전 충돌 감지) / 장소 추천 카드 | [docs/planner/README.md](docs/planner/README.md) |
 | **agent** | 대화형 여행 계획 Agent | 세션 기반 채팅(SSE 스트리밍) / LLM 도구 호출로 장소 검색·일정 검토·변경 / 결과를 **변경 제안·장소 추천 카드**로 전달 / 로컬 LLM(Ollama)·OpenAI 선택 | [docs/agent/README.md](docs/agent/README.md) |
 | **safety** | 구룡포 안전 정보 | 디지털 트윈(E-UM) 수위·방파제 실측과 기상청 예보·특보, 조위 예보를 "이 시각, 이 장소가 위험한가"로 해석 / 일정 항목별 위험 평가(`/safety/assess`), 날짜별 전망, 현재 상태, 감시 구역 / 키 없이 쓰는 mock 모드 | [docs/safety/README.md](docs/safety/README.md) |
+| **routing** | 길찾기 (외부 지도 API 없이) | OSM 포항 데이터로 직접 띄운 Valhalla로 **도보·차량** 이동시간 계산(planner 일정에 사용) / 경로선(GeoJSON)과 **한국어 회전 안내** / safety의 침수 센서 실측을 받아 **위험 구역을 피하는 경로**와 원래 경로 비교 / 엔진이 없으면 직선거리 근사로 대체 | [docs/routing/README.md](docs/routing/README.md) |
 | **account** | 로그인·토큰 | Google 로그인, ID/비밀번호 가입·로그인 / JWT access(1시간)·refresh(30일, rotation) 발급 / 다른 서비스는 공용 코드(`app.core.auth`)로 토큰만 검증 | [docs/account/README.md](docs/account/README.md) |
 | **embedding** | 임베딩 모델 서버 | `intfloat/multilingual-e5-base` (CPU, TEI 호환 `/embed` API) | [services/embedding/app.py](services/embedding/app.py), [docs/places/README.md](docs/places/README.md#임베딩-로컬-embedding-컨테이너) |
+| **valhalla** | 길찾기 엔진 | Valhalla 3.9.0. 첫 실행 때 대한민국 OSM을 받아 포항 영역만 잘라 그래프 빌드 (약 3분, 이후 재사용) | [services/valhalla/](services/valhalla/), [docs/routing/README.md §4](docs/routing/README.md) |
 
 ### 외부 데이터 명세
 | 문서 | 내용 |
@@ -49,6 +53,8 @@ LLM: 호스트의 Ollama 또는 OpenAI API (Docker 밖)
 ### 아직 없는 것
 - **Flutter 앱**(`app/`): 지도·플래너·채팅 화면
 - **Agent ↔ safety 연동**: 계획 Agent가 안전 정보를 쓰는 도구, 여행 중 위험 이벤트를 감지해 먼저 제안하는 선제 개입
+- **Agent ↔ routing 연동**: 경로 조회 도구 ("침수 구역을 피하면 4분 더 걸려요" 같은 설명)
+- **대중교통 길찾기**: 도보·차량만 지원
 - **여행 중 동행**: 현재 위치·지연 추적, 도착 시 현장 해설(음성), 데모 시뮬레이터
 
 진행 상황과 우선순위는 [PROJECT.md](PROJECT.md)의 MVP 우선순위를 따른다.
@@ -67,7 +73,7 @@ docker compose up -d --build
 curl http://localhost:8000/health
 ```
 
-- 첫 실행에는 임베딩 모델 다운로드(약 1.1GB)와 장소 데이터 적재 때문에 몇 분 걸린다. 장소 데이터는 저장소의 스냅샷(`data/places/snapshot/`)에서 채워지므로 **관광 API 키가 없어도** 검색이 동작한다.
+- 첫 실행에는 임베딩 모델 다운로드(약 1.1GB), 장소 데이터 적재, 길찾기용 OSM 다운로드(약 280MB)·그래프 빌드 때문에 몇 분 걸린다. 장소 데이터는 저장소의 스냅샷(`data/places/snapshot/`)에서 채워지므로 **관광 API 키가 없어도** 검색이 동작한다.
 - 개발 중에는 `backend/.env`에 `AUTH_REQUIRED=false`를 두면 로그인 토큰 대신 `X-User-Id` 헤더로 API를 호출할 수 있다.
 - 특정 서비스만 띄우기: `docker compose up -d places` (의존하는 db·embedding도 같이 뜬다)
 - 전체 테스트: `docker compose run --rm places pytest tests`
@@ -76,7 +82,7 @@ curl http://localhost:8000/health
 
 | 변수 (`backend/.env`) | 없으면 | 있으면 |
 |---|---|---|
-| (없음) | 장소 검색·의미 검색, planner, account(ID/비밀번호) 동작 | — |
+| (없음) | 장소 검색·의미 검색, planner, routing(길찾기), account(ID/비밀번호) 동작 | — |
 | `SAFETY_SOURCE=mock` | — | 키 없이 safety를 고정 데이터로 테스트 (`SAFETY_MOCK_SCENARIO=calm\|storm`) |
 | `DATA_GO_KR_SERVICE_KEY` | 관광지 재수집, safety의 기상·조위 예보 불가 | [data.go.kr](https://www.data.go.kr)에서 서비스별 활용신청 후 발급 |
 | `DT_SERVICE_KEY` | safety의 디지털 트윈 실측 불가 | [E-UM 디지털트윈 포항](https://pohang-eum.kr)에서 발급 |
@@ -94,14 +100,15 @@ GuryongMate/
 ├─ backend/                FastAPI (서비스별 컨테이너로 실행)
 │  ├─ app/
 │  │  ├─ core/             공용: 설정, 인증(JWT 검증)
-│  │  ├─ places/  planner/  agent/  safety/  account/   서비스별 코드
+│  │  ├─ places/  planner/  agent/  safety/  routing/  account/   서비스별 코드
 │  │  └─ main.py, db.py    모듈 자동 등록, DB 연결
 │  ├─ tests/<서비스>/      서비스별 테스트
 │  └─ requirements/        공용·서비스별 의존성
 ├─ services/embedding/     임베딩 모델 서버 (별도 이미지)
+├─ services/valhalla/      길찾기 엔진 (별도 이미지, OSM 포항 데이터)
 ├─ infra/gateway/          게이트웨이(Caddy) 라우팅
 ├─ data/places/            관광지 데이터 스냅샷
-├─ scripts/                planner·agent CLI, Agent 평가 스크립트
+├─ scripts/                planner·agent CLI, Agent 평가, 길찾기 비교 스크립트
 ├─ docs/                   서비스별 API 명세, 외부 데이터 명세, 협업 규칙
 ├─ app/                    Flutter 앱 (예정)
 ├─ docker-compose.yml
