@@ -167,7 +167,7 @@ LLM은 일정을 직접 바꾸지 않는다. 결과는 두 종류의 **카드**�
 
 | 도구 | 동작 | 단계 kind |
 |---|---|---|
-| `search_places` | places `GET /places?mode=hybrid` (키워드 + 의미). `near_place_id`로 주변 검색 | `search` |
+| `search_places` | places `GET /places?mode=hybrid` (키워드 + 의미). `near_place_id`로 주변 검색(결과에 직선거리). 이름이 일치하는 결과에 `name_match`, 지역·종류·반경 조건 때문에 같은 이름 장소가 빠지면 조건 없이 다시 찾아 `name_matches_outside_filter`로 함께 준다 | `search` |
 | `get_place` | 장소 상세 | `place` |
 | `view_plan` | 현재 일정 (초안 적용 상태) | `plan` |
 | `add_item` / `update_item` / `remove_item` / `update_plan` | 일정 변경 → **초안** | `edit` |

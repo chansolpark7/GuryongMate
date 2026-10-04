@@ -8,6 +8,7 @@
 각 도구 결과에는 앱의 처리 단계 표시용 정보(kind, detail)가 붙는다. 문구는 LLM 이 아니라 여기서 만든다.
 """
 import json
+import re
 from dataclasses import dataclass, field
 
 from app.agent.api import ApiError, ServiceApi
@@ -32,9 +33,11 @@ TOOL_SPECS = [
         "query": {"type": "string", "description": "키워드나 원하는 느낌을 설명하는 문장. "
                                                    "예: 물회, 일본인가옥, 바다가 보이는 조용한 카페, 근대 역사를 느낄 수 있는 곳"},
         "content_type": {"type": "string", "enum": CONTENT_TYPES},
-        "area": {"type": "string", "description": "읍면동. 예: 구룡포읍, 호미곶면"},
+        "area": {"type": "string", "description": "읍면동 필터. 예: 구룡포읍, 호미곶면. 특정 가게·장소 이름을 찾을 때는 "
+                                                 "쓰지 않는다 (다른 동에 있으면 결과에서 빠진다)"},
         "near_place_id": {"type": "string", "description": "이 장소 주변에서 가까운 순으로 검색"},
-        "radius_m": {"type": "integer", "description": "near_place_id 기준 반경(m), 기본 1500"},
+        "radius_m": {"type": "integer", "description": "near_place_id 기준 반경(m), 기본 1500. 결과마다 기준 장소와의 "
+                                                      "직선거리(distance_m)가 붙으니, 먼 곳끼리 거리를 비교할 때는 넉넉히(예: 50000)"},
         "limit": {"type": "integer", "description": "최대 개수 (기본 8, 최대 15)"},
     }),
     _fn("check_safety", "지금 초안 일정(방문 + 장소 사이 이동 구간)의 안전 단계를 본다 (침수 센서, 방파제, 기상 예보·특보). "
@@ -258,6 +261,11 @@ def _place_title(plan: dict, place_id: str) -> str:
     return place_id
 
 
+def _norm(text: str) -> str:
+    """이름 비교용: 공백·기호 제거, 소문자."""
+    return re.sub(r"[\s\W_]+", "", text or "").lower()
+
+
 def _blank(v) -> bool:
     return v is None or str(v).strip().lower() in ("", "none", "null")
 
@@ -314,14 +322,39 @@ class Toolbox:
             center = await self.api.get_place(near_place_id)
             params |= {"lat": center["lat"], "lng": center["lng"], "radius_m": radius_m}
         r = await self.api.search_places(**params)
-        items = [{"place_id": p["id"], "title": p["title"], "type": p["content_type"], "area": p["area"],
-                  **({"distance_m": round(p["distance_m"])} if p.get("distance_m") is not None else {})}
-                 for p in r["items"]]
+        q = _norm(query)
+
+        def view(p: dict) -> dict:
+            it = {"place_id": p["id"], "title": p["title"], "type": p["content_type"], "area": p["area"]}
+            if p.get("distance_m") is not None:
+                it["distance_m"] = round(p["distance_m"])
+            if q and q in _norm(p["title"]):
+                it["name_match"] = True
+            return it
+
+        items = [view(p) for p in r["items"]]
         out: dict = {"items": items}
-        if not items:
+        outside: list[dict] = []
+        if q and not any(i.get("name_match") for i in items) and (area or content_type or near_place_id):
+            # 지역·종류·주변 조건 때문에 이름이 같은 장소가 빠졌을 수 있다 -> 조건 없이 이름으로 다시 찾는다
+            again = await self.api.search_places(q=query, limit=5)
+            outside = [view(p) for p in again["items"] if q in _norm(p["title"])]
+        if outside:
+            cond = ", ".join(x for x in (area, content_type, "주변 반경" if near_place_id else "") if x)
+            out["name_matches_outside_filter"] = outside
+            out["hint"] = (f"'{query}' 와 이름이 같은 장소는 검색 조건({cond}) 밖에 있다 (name_matches_outside_filter). "
+                           "사용자가 말한 곳이 이것이면 이 place_id 를 쓴다. items 는 조건 안의 다른 장소다.")
+        elif q and items and not any(i.get("name_match") for i in items):
+            out["hint"] = ("이름이 일치하는 장소는 없다. items 는 뜻이 비슷한 장소다. 사용자가 특정 가게 이름을 말했다면 "
+                           "조건(area 등) 없이 이름만으로 다시 찾아보고, 그래도 없으면 데이터에 없다고 말한다.")
+        if not items and not outside:
             out["hint"] = "결과가 없습니다. 다른 표현이나 content_type/area 만으로 다시 찾아보세요."
             return ToolOutcome(True, _dump(out), "결과 없음")
-        detail = items[0]["title"] + (f" 외 {len(items) - 1}곳" if len(items) > 1 else "")
+        if outside:
+            o = outside[0]
+            return ToolOutcome(True, _dump(out), f"{o['title']} ({o['area']}, 조건 밖)")
+        first = next((i for i in items if i.get("name_match")), items[0])
+        detail = first["title"] + (f" 외 {len(items) - 1}곳" if len(items) > 1 else "")
         return ToolOutcome(True, _dump(out), detail)
 
     async def _t_get_place(self, place_id: str) -> ToolOutcome:
