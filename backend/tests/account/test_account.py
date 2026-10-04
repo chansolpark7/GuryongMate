@@ -298,3 +298,9 @@ def test_delete_account(client):
     err(client.post("/auth/refresh", json={"refresh_token": t["refresh_token"]}), 401, "invalid_refresh_token")
     with SessionLocal() as s:
         assert s.scalars(select(AccountRefreshToken).where(AccountRefreshToken.user_id == t["user"]["id"])).all() == []
+
+
+def test_non_utf8_body_uses_error_format(client):
+    r = client.post("/auth/signup", content="{\"login_id\": \"테스트\"}".encode("cp949"),
+                    headers={"Content-Type": "application/json"})
+    err(r, 422, "invalid_request")
