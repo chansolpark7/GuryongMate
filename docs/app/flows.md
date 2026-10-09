@@ -168,7 +168,7 @@ sequenceDiagram
 | 2 | 14-S3 | — | 폴링 `GET …/events?after=` | `delay` level 3 (`payload.new_violations`, `payload.delay_minutes`) |
 | 3 | 19 | 미리보기/FAB 탭 | `GET /agent/sessions/{sid}` | 선제 메시지(`agent.message_id`), 카드(`agent.proposal_id`) |
 | 4 | 19 | 칩 "과메기문화관은 유지해줘" | `POST …/chat` | SSE `proposal` (이전 superseded) |
-| 5 | 20 → 21-S1 | [비교 보기] | (카드의 before/after) | 규칙 위반 2→0, 종료 18:07→16:55 |
+| 5 | 20 → 21-S1 | [비교 보기] | (카드의 before/after) | 규칙 위반 2→0, 종료 18:05→17:45 (fixture `f5_delay.json`) |
 | 6 | 21-S1 | [전체 적용] | `POST …/accept {"mode":"auto"}` | 200 / 409 → F2 |
 | 7 | 14/15 | — | PlanDetail, safety, 경로 다시 | |
 

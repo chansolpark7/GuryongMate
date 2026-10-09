@@ -14,7 +14,8 @@
 | agent docent 도구 (`get_guide_note`, `remember` …, 외부 검색은 OpenAI 내장 `web_search`) | docent §2.1·§4 | 없음 (작업 E 예정) | 18 |
 | planner 진행 상태·재계산 | planner §8 | **구현됨** | (trip 이 씀) |
 
-앱은 이 명세대로 화면을 먼저 만들고, 아직 없는 부분(가이드 준비·docent 도구)은 **가짜 게이트웨이**(기존 `test/fixtures.dart` 방식)로 이벤트·노트를 흘려 화면 흐름을 확인한다. 이벤트 처리기는 서버 응답 형식(trip §3.3)을 그대로 받게 만든다.
+앱은 이 명세대로 화면을 먼저 만들고, **가짜 게이트웨이**로 화면 흐름을 확인한다. 응답은 각본 LLM 으로 띄운 실제 스택에서 녹화한 `app/test/fixtures/`(F1~F11 P0, 오류 예시, 여행 재생)를 쓴다 → [fixtures.md](fixtures.md).
+(2026-10-09 갱신: 위 표의 가이드 준비·docent 도구는 agent 에 구현됨 — docs/agent/README.md §5·§12)
 
 ---
 
