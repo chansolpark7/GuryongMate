@@ -302,6 +302,7 @@ class Toolbox:
         self.rev = 0  # 초안이 바뀔 때마다 +1
         self.reviewed_rev = 0  # 마지막으로 검토한 초안의 rev
         self.trip: dict | None = None  # 동행 모드면 {"day": 오늘 n일차, "now": "HH:MM"} — 지난 일을 바꾸지 않게
+        self.changes: list[str] = []  # 지금 초안의 변경 요약 (planner preview). 최종 답변의 기준이 된다
 
     def _guard(self, op: dict) -> None:
         """동행 모드: 완료 항목·지난 시각·진행 상태는 바꾸지 않는다 (docs/agent/README.md §11.3)."""
@@ -322,12 +323,22 @@ class Toolbox:
             raise Refused(f"지난 시각({start})으로 고정할 수 없습니다. 지금은 {self.trip['now']}입니다.")
 
     async def current_view(self) -> dict:
-        """초안이 있으면 초안 적용 결과, 없으면 확정 일정 (LLM 용 압축 표현). last_plan 도 갱신한다."""
+        """초안이 있으면 초안 적용 결과, 없으면 확정 일정 (LLM 용 압축 표현). last_plan 도 갱신한다.
+        planner preview 는 여행 중인 날을 실제 진행 + 지금 기준으로 계산한다. 초안이 없을 때도 동행 모드면
+        같은 기준(projection)으로 보여준다 (LLM 이 보는 시각·위반이 현실과 맞게)."""
         if self.draft.ops:
             r = await self.api.preview(self.plan_id, self.draft.ops)
             self.last_plan = r["plan"]
-            return compact_plan(r["plan"], [c["message"] for c in r["changes"]], len(self.draft.ops))
-        self.last_plan = await self.api.get_plan(self.plan_id)
+            self.changes = [c["message"] for c in r["changes"]]
+            return compact_plan(r["plan"], self.changes, len(self.draft.ops))
+        self.changes = []
+        self.last_plan = None
+        if self.trip:
+            try:
+                self.last_plan = (await self.api.projection(self.plan_id))["plan"]
+            except ApiError:  # 오늘이 계획 기간 밖 등 -> 계획 기준
+                pass
+        self.last_plan = self.last_plan or await self.api.get_plan(self.plan_id)
         return compact_plan(self.last_plan)
 
     async def call(self, name: str, raw_args: str) -> ToolOutcome:
@@ -551,7 +562,7 @@ class Toolbox:
         self.draft.changed = True
         self.rev += 1
         self.last_plan = r["plan"]
-        changes = [c["message"] for c in r["changes"]]
+        changes = self.changes = [c["message"] for c in r["changes"]]
         view = compact_plan(r["plan"], changes, len(candidate))
         note = "변경 제안 초안에 반영됨 (아직 실제 일정 아님. 응답이 끝나면 사용자에게 승인 요청됨)" + notice
         short = {"result": note, "changes": changes, "violations": view["violations"]}
@@ -653,5 +664,7 @@ class Toolbox:
                            card={"type": "recommendation", "recommendation": rec})
 
 
-def tool_specs(review_enabled: bool) -> list[dict]:
-    return TOOL_SPECS if review_enabled else [t for t in TOOL_SPECS if t["function"]["name"] != "review_plan"]
+def tool_specs(review_enabled: bool, proactive: bool = False) -> list[dict]:
+    """proactive: 선제 턴. 변경 제안 하나로 답하므로 추천 카드는 만들지 않는다 (대안은 말로만)."""
+    off = ({"review_plan"} if not review_enabled else set()) | ({"recommend_places"} if proactive else set())
+    return [t for t in TOOL_SPECS if t["function"]["name"] not in off]
