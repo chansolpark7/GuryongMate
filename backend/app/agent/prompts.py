@@ -199,12 +199,20 @@ def build_system(plan_view: dict, pending: dict | None, dropped: dict | None = N
                  repropose: dict | None = None, review: bool = False, now: datetime | None = None,
                  simulated: bool = False, trip: dict | None = None, plan: dict | None = None) -> str:
     """trip: 진행 중인 여행일의 TripState 면 동행 모드 (계획 규칙 + 동행 섹션 + 현재 상황). plan: 현재 일정 PlanDetail."""
+    return "\n\n".join(build_system_parts(plan_view, pending, dropped, repropose, review, now, simulated, trip, plan))
+
+
+def build_system_parts(plan_view: dict, pending: dict | None, dropped: dict | None = None,
+                       repropose: dict | None = None, review: bool = False, now: datetime | None = None,
+                       simulated: bool = False, trip: dict | None = None, plan: dict | None = None) -> tuple[str, str]:
+    """시스템 프롬프트를 (고정 규칙, 이번 턴의 맥락)으로 나눈다. 둘을 빈 줄로 이으면 build_system 과 같다.
+    고정 규칙은 모드(계획·동행)와 검토 여부로만 정해져 턴이 바뀌어도 같다 (프롬프트 캐시 앞부분).
+    맥락은 현재 상황·지금 시각·현재 일정·대기 제안처럼 턴마다 바뀐다."""
     now = now or datetime.now(KST)
     system = SYSTEM.replace("<<WORKFLOW>>", WORKFLOW_REVIEW if review else WORKFLOW_SIMPLE)
     clock = f"{now:%Y-%m-%d %H:%M} (KST, {'월화수목금토일'[now.weekday()]}요일" + (", 시뮬레이션 시각)" if simulated else ")")
-    parts = [system]
-    if trip:
-        parts += [GUIDE, situation(trip, plan, now, simulated)]
+    fixed = [system, GUIDE] if trip else [system]
+    parts = [situation(trip, plan, now, simulated)] if trip else []
     parts.append(f"## 현재 시각\n{clock}")
     parts.append("## 현재 일정" + (" (승인 대기 중인 제안이 적용된 상태)" if pending else "")
                  + "\n" + json.dumps(plan_view, ensure_ascii=False))
@@ -226,4 +234,4 @@ def build_system(plan_view: dict, pending: dict | None, dropped: dict | None = N
                      + "\n같은 의도를 지금 일정에 맞게 변경 도구로 다시 만든다."
                      + ("\n원래 요청에 적힌 시각·문제는 그때 기준이다. 지금 문제는 현재 일정의 시각과 violations 로만 판단한다. "
                         "원래 문제가 지금은 없으면 변경을 만들지 말고 그렇다고 짧게 말한다." if trip else ""))
-    return "\n\n".join(parts)
+    return "\n\n".join(fixed), "\n\n".join(parts)

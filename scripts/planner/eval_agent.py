@@ -76,14 +76,19 @@ def summary(path: str) -> None:
     groups: dict[tuple, list] = {}
     for r in rows:
         groups.setdefault((r["label"], r["scenario"]), []).append(r)
-    print(f"{'label':<10} {'scenario':<24} {'n':>2} {'제안':>4} {'must':>5} {'should':>6} {'항목':>5} {'초':>5} {'검토':>4}")
+    print(f"{'label':<10} {'scenario':<24} {'n':>2} {'제안':>4} {'must':>5} {'should':>6} {'항목':>5} {'초':>5} {'검토':>4} "
+          f"{'턴초':>5} {'턴입력':>7} {'턴캐시':>7} {'턴출력':>6}")
     for (label, scenario), rs in sorted(groups.items()):
         with_p = [r for r in rs if r["proposal"]]
         avg = lambda k: sum(r[k] for r in with_p) / len(with_p) if with_p else float("nan")  # noqa: E731
         reviews = sum(len(t["reviews"]) for r in rs for t in r["turns"]) / len(rs)
+        turns = [t for r in rs for t in r["turns"]]
+        per_turn = lambda k: sum((t.get("usage") or {}).get(k, 0) for t in turns) / len(turns)  # noqa: E731
         print(f"{label:<10} {scenario:<24} {len(rs):>2} {len(with_p):>4} {avg('must'):>5.1f} {avg('should'):>6.1f} "
               f"{sum(len(r['items']) for r in with_p) / max(len(with_p), 1):>5.1f} "
-              f"{sum(r['seconds'] for r in rs) / len(rs):>5.0f} {reviews:>4.1f}")
+              f"{sum(r['seconds'] for r in rs) / len(rs):>5.0f} {reviews:>4.1f} "
+              f"{sum(t['seconds'] for t in turns) / len(turns):>5.1f} {per_turn('input'):>7.0f} "
+              f"{per_turn('cached'):>7.0f} {per_turn('output'):>6.0f}")
 
 
 def main() -> None:

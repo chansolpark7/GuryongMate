@@ -85,8 +85,8 @@ LLM은 일정을 직접 바꾸지 않는다. 결과는 두 종류의 **카드**�
 | `proposal` | `ProposalDetail` | 변경 제안 카드 |
 | `recommendation` | `RecommendationView` | 장소 추천 카드 |
 | `steps_done` | `{"count": 3, "summary": "3단계 완료 : 장소 찾기, 일정 조정, 변경안 만들기"}` | 진행 영역을 이 한 줄로 접는다. 단계가 하나도 없으면 오지 않는다 |
-| `done` | `{"text": "최종 답변 전체", "cards": [{"type": "proposal", "id": 13}, ...], "usage": {...}, "message_id": 102, "mode": "plan"}` | 턴 종료. `usage`는 LLM 토큰 사용량(`input`, `cached`, `output`, `reasoning`, `calls`)으로 비용 모니터링용. `message_id`는 저장된 답변 메시지, `mode`는 `plan`(계획) / `guide`(동행, §11) |
-| `error` | `{"code", "message"}` | 오류. **이 뒤로 이벤트가 오지 않는다** |
+| `done` | `{"text": "최종 답변 전체", "cards": [{"type": "proposal", "id": 13}, ...], "usage": {...}, "message_id": 102, "mode": "plan"}` | 턴 종료. `usage`는 LLM 토큰 사용량(`input`(캐시 포함 전체), `cached`, `output`, `reasoning`, `calls`, Claude 는 `cache_write`도)으로 비용 모니터링용. `message_id`는 저장된 답변 메시지, `mode`는 `plan`(계획) / `guide`(동행, §11) |
+| `error` | `{"code", "message"}` | 오류. **이 뒤로 이벤트가 오지 않는다**. LLM 오류는 `llm_failed`, 모델이 요청을 거절하면 `llm_refused` (§7.1) |
 
 순서: `start` → (`status` · `step` · `thinking` · `text` · `recommendation`이 섞여서) → `proposal`(있으면) → `steps_done`(있으면) → `done`. 오류가 나면 그 자리에서 `error`로 끝난다.
 
@@ -218,12 +218,13 @@ LLM은 일정을 직접 바꾸지 않는다. 결과는 두 종류의 **카드**�
 - 카드 동작(승인·거절·덮어쓰기·추가·빼기)은 숨김 메시지 `[알림] …`으로 기록되어 다음 턴의 LLM이 안다.
 - 선제 턴은 숨김 메시지 `[이벤트] …`로 시작한다 (§11.2). 여행 중이면 현재 상황 블록이 함께 들어간다 (§11.3).
 - 최근 메시지 `AGENT_HISTORY_MESSAGES`개(기본 40)만 LLM에 넘긴다.
+- Claude(§7.1)는 현재 일정 등 맥락을 시스템 프롬프트가 아니라 이번 사용자 메시지 뒤 system 메시지로 받는다 (고정 규칙을 캐시하고 기록을 덧붙이기만 하려고).
 
 ## 7. LLM 설정 (서버 `backend/.env`)
 
 | 변수 | 기본값 | 설명 |
 |---|---|---|
-| `AGENT_PROVIDER` | `openai` | `openai`(기본, gpt-5.4-mini) 또는 `local`(Ollama 등) |
+| `AGENT_PROVIDER` | `openai` | `openai`(기본, gpt-5.4-mini), `local`(Ollama 등) 또는 `claude`(Claude API, §7.1) |
 | `AGENT_LOCAL_API` | `ollama` | `ollama`(네이티브 API, 권장) 또는 `openai`(LM Studio·vLLM 같은 OpenAI 호환 서버) |
 | `AGENT_LOCAL_BASE_URL` | `http://host.docker.internal:11434` | 호스트의 Ollama. OpenAI 호환 서버면 `…/v1`까지 |
 | `AGENT_LOCAL_MODEL` | `qwen3.6:35b` | |
@@ -233,6 +234,12 @@ LLM은 일정을 직접 바꾸지 않는다. 결과는 두 종류의 **카드**�
 | `AGENT_OPENAI_API` | `responses` | `responses`(Responses API, GPT-5.x에서 추론과 도구를 함께 쓰려면 필수) 또는 `chat`(Chat Completions) |
 | `AGENT_OPENAI_MODEL` | `gpt-5.4-mini` | |
 | `AGENT_OPENAI_REASONING_EFFORT` | `low` | |
+| `AGENT_CLAUDE_API_KEY` | (`ANTHROPIC_API_KEY`도 읽음) | Claude API 키. 비우면 SDK 가 `ant auth login` 프로필 등에서 찾는다 |
+| `AGENT_CLAUDE_MODEL` | `claude-sonnet-5-5` | `claude-haiku-5-5`로 바꿀 수 있다 |
+| `AGENT_CLAUDE_EFFORT` | `medium` | `low`·`medium`·`high`·`xhigh`·`max`. 기본값에 기대지 않고 항상 보낸다 (§7.1) |
+| `AGENT_CLAUDE_MAX_TOKENS` | `64000` | 응답 하나의 최대 토큰 (thinking 포함, 스트리밍) |
+| `AGENT_CLAUDE_WEB_SEARCH_MAX_USES` | `0` | Anthropic 웹 검색 서버 도구를 응답당 이 횟수까지. `0`이면 끔 (§7.1) |
+| `AGENT_CLAUDE_THINKING_MISMATCH` | `drop_block` | 기록이 바뀌어 thinking 블록이 무효일 때 `drop_block`(버리고 계속, 경고 로그) 또는 `error`(400) |
 | `AGENT_MAX_STEPS` | `20` | 한 턴의 LLM 호출 최대 횟수 (마지막 호출은 도구 없이 답변 강제) |
 | `AGENT_REVIEW_ROUNDS` | `2` | 검토 관문이 되돌려 보내는 최대 횟수. `0`이면 `review_plan` 도구와 관문을 끈다 |
 | `AGENT_CLOCK` | `safety` | `safety`: 프롬프트의 '지금'이 `GET /safety/sim` 가상 시각을 따른다 / `system`: 시스템 시각 (§11.4) |
@@ -240,6 +247,7 @@ LLM은 일정을 직접 바꾸지 않는다. 결과는 두 종류의 **카드**�
 | `AGENT_TRIP_TIMEOUT_SEC` | `3` | 매 턴 trip 상태 조회 제한 시간. 넘기면 계획 모드로 |
 
 새 공급자는 `llm.py`에 같은 이벤트(`TextDelta`, `ReasoningDelta`, `ToolCall`, `Finish`)를 내는 Provider를 추가하면 된다.
+`AGENT_TEMPERATURE`는 Claude 에는 보내지 않는다 (Sonnet 5.5·Haiku 5.5 는 기본값이 아닌 샘플링 값을 400 으로 거부).
 
 ### 모델·구조 비교 (2026-10-04, `scripts/planner/eval_agent.py`, 시나리오 3개 × 2회)
 
@@ -259,6 +267,82 @@ LLM은 일정을 직접 바꾸지 않는다. 결과는 두 종류의 **카드**�
 - 가격: 입력 $0.75, 캐시된 입력 $0.075, 출력(추론 포함) $4.50 / 100만 토큰
 - 시나리오 4종 18턴(5턴 대화 포함): 턴당 평균 입력 4.1만 토큰(그중 83%가 캐시), 출력 800토큰, LLM 호출 5.3회
 - **턴당 평균 약 $0.011 (약 16원), 최대 $0.025 (약 37원)**. 로그(`[agent] session=… usage`)와 `done.usage`로 확인할 수 있다.
+
+### 7.1 Claude API (`AGENT_PROVIDER=claude`)
+
+`backend/app/agent/claude_llm.py`의 `ClaudeProvider`. 공식 `anthropic` Python SDK(`backend/requirements/agent.txt`)로 스트리밍하고
+하네스 이벤트로 바꾼다 (텍스트 → `text`, thinking 요약 → `thinking`, `tool_use` → 도구 호출, 끝에 usage).
+
+**모델별로 보내는 것** (Sonnet 5.5 / Haiku 5.5, claude-api 스킬 문서 기준)
+
+| | `claude-sonnet-5-5` | `claude-haiku-5-5` |
+|---|---|---|
+| thinking | `adaptive` (`budget_tokens`·`disabled`는 400), `display: "summarized"` (기본 `omitted`는 빈 문자열) | 같음 |
+| effort | 명시 (`medium`). 모델 기본값은 `high` | 명시 (`medium`). 모델 기본값도 `medium` |
+| 웹 검색 (켤 때) | `web_search_20260209` (동적 필터링) | `web_search_20250305` (기본 버전만) |
+| 서버측 refusal fallback | 있음 (`fallbacks: "default"`, Claude API 만) — **쓰지 않음** (아래) | 없음 |
+| `tool_choice` | `auto`(기본). 마지막 단계만 `none`. 강제(`any`/`tool`)는 400 이라 쓰지 않는다 | 같음 |
+
+- **effort 기본값 `medium`의 근거**: 한 턴이 "장소 찾기 → 초안 → 검토 → 수정"처럼 도구를 여러 번 쓰는 작업이다. 스킬 문서는 Sonnet 5.5 에
+  도구를 여러 번 쓰는 작업은 `medium`, 대화·검색은 `low`부터를 권하고(레벨이 Sonnet 5 와 달라 기본 `high`를 그대로 쓰지 말 것),
+  Haiku 5.5 는 `medium`이 기본이자 "대부분의 작업" 시작점이다. 그래서 두 모델 모두 `medium`으로 시작하고, 바꾸려면 아래 eval 로 비교한다.
+  답이 짧은 동행 모드는 `low`도 후보다 (낮추면 도구 호출이 줄고 검토를 건너뛸 수 있으니 남은 문제 수로 확인).
+- **웹 검색은 기본 꺼짐**: 장소는 `search_places`의 place_id 만 쓰고 사실은 도구 결과로만 말하는 규칙(§5)과 겹치고, 검색당 비용이 든다.
+  켜면(`AGENT_CLAUDE_WEB_SEARCH_MAX_USES` > 0) 모델에 맞는 버전을 붙이고, 서버 도구 루프가 `pause_turn`으로 멈추면 이어 받는다.
+- **도구 입력 스트리밍(`eager_input_streaming`)은 쓰지 않는다**: 도구 인자가 짧고 하네스는 완성된 호출만 실행하므로, 서버의 입력 검증을 끌 이유가 없다.
+
+**기록 편집 금지 (preserved thinking)** — 하네스의 `append_only` 경로
+
+Sonnet 5.5·Haiku 5.5 의 thinking 블록은 그 앞의 `system`·`tools`·메시지 전체에 묶여 있어, 앞부분이 바뀐 기록에 다시 보내면 무효(400 또는 버림)다.
+같은 턴의 도구 루프 동안 thinking 블록을 받은 그대로 다시 보내야 하므로, 하네스는 Claude 에게 기록을 **덧붙이기만** 한다.
+OpenAI·Ollama 공급자는 전과 같은 경로(호출마다 붙였다 떼는 안내)를 그대로 쓴다.
+
+| 전 (OpenAI·Ollama, 그대로) | Claude (`append_only`) |
+|---|---|
+| 시스템 프롬프트 = 규칙 + 현재 상황·시각·일정 | 시스템 프롬프트 = **고정 규칙만** (턴이 바뀌어도 같다). 맥락은 이번 사용자 메시지 뒤 `role: "system"` 메시지 |
+| 확정 변경·빈 응답·도구 한도 안내를 그 호출에만 붙이고 뗌 | `clear_at: "next_user_message"` system 메시지로 **덧붙임** (다음 도구 결과가 오면 지워져 모델은 최신 것만 본다. 보낸 것은 그대로 남긴다) |
+| 검토 관문: 끝내려던 답을 버리고 안내만 붙여 다시 호출 | 끝내려던 답(원본 블록 포함)을 assistant 로 **남기고** 검토 결과를 user 메시지로 덧붙임. 사용자에게는 여전히 보내지 않는다 |
+| 마지막 단계: 도구 목록을 비움 | 도구 목록은 그대로, `tool_choice: none` |
+
+- 같은 턴의 assistant 메시지에는 공급자 원본 블록(`native`: thinking 서명·text·tool_use)을 담아 다음 호출에 그대로 보낸다. 다른 모델이 만든 블록은 보내지 않는다.
+- 지난 턴은 DB 기록(텍스트·도구 호출·짧은 도구 결과)으로 thinking 없이 보낸다 (맥락 메시지·안내는 DB 에 남지 않아 지난 턴의 thinking 은 무효이기 때문).
+- system 메시지는 user 메시지 뒤에만 올 수 있어, 빈 응답을 되묻는 자리가 system 메시지 바로 뒤면 안내 없이 다시 호출한다.
+- `thinking.block_binding.prefix_mismatch_behavior`를 명시한다(`AGENT_CLAUDE_THINKING_MISMATCH`, 기본 `drop_block`). 응답의 `input_transformations`에
+  항목이 있으면 기록을 고친 버그이므로 경고 로그를 남긴다. 베타 헤더: `mid-conversation-system-clear-at-2026-08-21`, `thinking-binding-controls-2026-08-01`.
+
+**프롬프트 캐시**: 도구 정의 → 고정 규칙(캐시 지점 1) → 지난 대화 → 이번 사용자 메시지(캐시 지점 2) → 맥락 system 메시지(현재 상황·지금 시각·현재 일정)
+→ 이번 턴의 도구 루프(자동 캐시 지점 3이 끝을 따라간다). 같은 턴의 두 번째 호출부터는 앞부분 전체를, 다음 턴은 지난 대화까지를 캐시에서 읽는다.
+`usage`의 `cached`(캐시에서 읽음)·`cache_write`(캐시에 씀)로 확인한다. 최소 캐시 길이는 두 모델 모두 512 토큰이다.
+
+**거절(refusal)**: `stop_reason: "refusal"`이면 받은 조각을 완결된 답으로 쓰지 않고 `error` `llm_refused`("죄송해요, 이 요청은 처리할 수 없어요…")로 턴을 끝낸다.
+같은 요청은 다시 거절되므로 하네스가 재시도하지 않는다. `max_tokens`에서 도구 호출이 잘리면 실행하지 않고 그 단계를 다시 시도한다.
+API 오류(400·429·5xx·연결)는 SDK 가 이미 재시도(기본 2회)하므로 하네스는 다시 시도하지 않고 `llm_failed`로 끝낸다.
+
+**서버측 fallback 을 켜지 않는 이유**: Sonnet 5.5 의 `fallbacks: "default"`는 `cyber`·`frontier_llm` 거절만 Claude Sonnet 5 로 다시 돌린다.
+여행 일정 대화에서 나올 일이 거의 없는 분류이고, fallback 모델(Sonnet 5)은 이 하네스가 쓰는 중간 `role: "system"` 메시지를 지원하지 않으며
+Sonnet 5.5 의 thinking 블록도 읽지 못한다. Haiku 5.5 에는 서버측 fallback 이 없다. 그래서 두 모델 모두 클라이언트에서 거절을 처리한다.
+
+**확인 절차 (실제 API 는 키를 넣은 뒤에만)**
+
+1. 키: 저장소 밖에 두고 `backend/.env`에 `AGENT_PROVIDER=claude`, `AGENT_CLAUDE_API_KEY=…` (또는 `ANTHROPIC_API_KEY`). `docker compose up -d --build agent`.
+   `GET /agent/info` → `{"provider": "claude:claude-sonnet-5-5"}`.
+2. chat 한 턴: `python scripts/planner/cli.py chat 1 --new --thinking -m "점심 넣어줘"`. 확인할 것 — 텍스트·thinking 이 스트리밍되고, 제안 카드가 생기고,
+   로그 `[agent] session=… usage`에 `calls` ≥ 2 이면 두 번째 호출부터 `cached` > 0. `thinking 블록` 경고 로그(기록 편집)가 없어야 한다.
+3. 장면 ③ 선제 턴: `backend/.env`에 `SAFETY_SOURCE=mock`, `AUTH_REQUIRED=false`로 `python scripts/planner/cli.py trip replay new scene3_delay --speed 0`.
+   delay 선제 턴이 근거 + 추천안 1개(제안 카드) + "다른 방법" 한 줄로 답하는지, 이어서 "과메기문화관은 꼭 가고 싶어"에 `must_include` 규칙이 든 새 제안이 이전 제안을 대체하는지 본다 (docs/trip/README.md §8).
+4. 모델 비교: 같은 서버 설정에서 `AGENT_CLAUDE_MODEL`만 바꿔 다시 띄우고 같은 시나리오를 돌린다.
+   ```bash
+   python scripts/planner/eval_agent.py --url http://127.0.0.1:$API_PORT --label sonnet55 --runs 2 --out claude.jsonl
+   python scripts/planner/eval_agent.py --url http://127.0.0.1:$API_PORT --label haiku55 --runs 2 --out claude.jsonl
+   python scripts/planner/eval_agent.py --out claude.jsonl --summary   # 남은 문제(must/should), 턴 시간, 턴당 토큰
+   ```
+
+**모델 비교** (`eval_agent.py` 시나리오 4개 × 2회, 검토 루프 있음, effort `medium`)
+
+| 모델 | 제안 생성 | 남은 문제 (must / should) | 턴 평균 시간 | 턴당 입력 (그중 캐시) | 턴당 출력 |
+|---|---|---|---|---|---|
+| claude-sonnet-5-5 | (키를 넣은 뒤 측정) | | | | |
+| claude-haiku-5-5 | (키를 넣은 뒤 측정) | | | | |
 
 ## 8. 로컬 LLM 메모 (qwen3.6:35b-a3b Q4, RTX 5070 12GB)
 
@@ -296,6 +380,9 @@ python scripts/planner/cli.py chat 1 -m "점심 넣어줘" -m /accept
 docker compose run --rm agent pytest tests/agent   # 대본대로 움직이는 가짜 LLM. Ollama 없이 돈다
 ```
 - `test_guide.py`: 동행 모드·선제 턴. trip 과 safety 시계(`/safety/sim`)는 가짜 HTTP 전송으로 바꾸고 planner 는 같은 앱을 쓴다.
+- `test_claude_llm.py`: Claude 공급자. 가짜 Anthropic 스트림 이벤트를 실제 SDK 로 읽는다 (요청 본문·캐시 지점·thinking 블록 왕복·usage·거절·오류, 키 없이).
+- `test_harness.py`의 append_only 테스트: 한 턴의 호출마다 앞 호출의 메시지가 그대로 앞부분인지(기록 편집 없음), 시스템 프롬프트·도구 목록이 그대로인지,
+  Claude 형식으로 바꿨을 때 중간 system 메시지 배치 규칙을 지키는지 확인한다.
 - 장소 검색을 쓰는 테스트는 장소 데이터·임베딩이 있어야 한다 (`docker compose up -d places`, 처음이면 적재에 몇 분).
 
 ## 11. 동행 모드 (여행 중)

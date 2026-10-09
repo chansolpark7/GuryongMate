@@ -1,0 +1,2 @@
+# Planner Agent 의 Claude 공급자 (AGENT_PROVIDER=claude, docs/agent/README.md §7.1). 1.x 는 httpx2 위에서 돈다
+anthropic==1.12.1
