@@ -35,5 +35,10 @@ class AgentSettings(BaseSettings):
     # 같은 컨테이너의 API (planner, places). 모듈 간 규칙상 HTTP 로만 호출한다.
     api_base_url: str = "http://127.0.0.1:8000"
 
+    # 여행 중(동행 모드) 판단과 시계 (docs/agent/README.md §11, docs/trip/README.md §5)
+    clock: str = Field("safety", description="safety (GET /safety/sim 가상 시각을 따름) | system")
+    clock_cache_sec: float = 5
+    trip_timeout_sec: float = Field(3, description="매 턴 trip 상태 조회 제한 시간. 넘기면 계획 모드로")
+
 
 settings = AgentSettings()

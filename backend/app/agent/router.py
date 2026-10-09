@@ -1,6 +1,7 @@
 """Agent API. 앱은 어떤 LLM 이 돌고 있는지 몰라도 이 API 만 호출하면 된다. 명세: docs/agent/README.md
 
 흐름: 세션 생성(plan_id) -> chat (SSE) -> 카드 수신(제안·추천) -> 카드 동작(accept/reject/repropose, add/remove)
+여행 중에는 trip 이 선제 턴(events)을 부르고, 모든 턴이 동행 모드(현재 상황 블록)로 돈다.
 오류는 {"detail": {"code", "message", ...}} 형식이고, planner 가 거부한 오류는 코드·추가 필드를 그대로 전달한다.
 """
 import json
@@ -16,12 +17,13 @@ from anyio import to_thread
 from fastapi import APIRouter, Body, Depends, Query, Response
 from fastapi.responses import StreamingResponse
 from starlette.background import BackgroundTask
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.agent.api import ApiError, ServiceApi, get_http
 from app.agent.errors import AgentError, AgentRoute
 from app.agent.harness import STEP_TITLE, add_note, run_turn
+from app.agent.prompts import event_message
 from app.agent.llm import LLMProvider, get_llm
 from app.agent.models import AgentMessage, AgentSession
 from app.agent.schemas import (
@@ -29,6 +31,7 @@ from app.agent.schemas import (
     AgentInfo,
     ChatRequest,
     ChatResult,
+    EventRequest,
     MessageView,
     SessionCreate,
     SessionDetail,
@@ -141,17 +144,24 @@ async def _resolve_card(api: ServiceApi, plan_id: int, ref: dict) -> dict | None
 @router.get("/sessions/{session_id}", response_model=SessionDetail)
 async def get_session(session_id: str, db: DbSession, user_id: UserId, auth: Auth, http: Http) -> SessionDetail:
     s = _get_session(db, user_id, session_id)
-    rows = db.scalars(select(AgentMessage).where(AgentMessage.session_id == s.id, AgentMessage.hidden.is_(False),
+    # 숨김 user 행(알림·이벤트)은 보이지 않지만 턴의 경계로 쓴다 (선제 턴 답변이 앞 턴 말풍선에 붙지 않게)
+    rows = db.scalars(select(AgentMessage).where(AgentMessage.session_id == s.id,
+                                                 or_(AgentMessage.hidden.is_(False), AgentMessage.role == "user"),
                                                  AgentMessage.role.in_(("user", "assistant")))
                       .order_by(AgentMessage.id))
     api = ServiceApi(http, auth)
     messages: list[MessageView] = []
+    boundary = False
     for m in rows:
+        if m.hidden:
+            boundary = True
+            continue
         if not m.content.strip() and not m.cards and not m.steps:
             continue
         cards = [c for ref in (m.cards or []) if (c := await _resolve_card(api, s.plan_id, ref))]
         steps = [Step.model_validate(x) for x in (m.steps or [])]
-        prev = messages[-1] if messages else None
+        prev = messages[-1] if messages and not boundary else None
+        boundary = False
         if prev and prev.role == m.role == "assistant":  # 한 턴의 답변(도구 호출 전·후)은 스트림처럼 한 말풍선으로
             prev.content = "\n\n".join(x for x in (prev.content, m.content) if x.strip())
             prev.steps += steps
@@ -179,12 +189,14 @@ def _sse(ev: dict) -> str:
 
 
 async def _turn_response(session_id: str, plan_id: int, text: str, auth: dict[str, str], http: httpx.AsyncClient,
-                         llm: LLMProvider, stream: bool, repropose: dict | None = None):
+                         llm: LLMProvider, stream: bool, repropose: dict | None = None, **turn):
+    """turn: run_turn 에 그대로 (trip, fetch_trip, hidden — 선제 턴)."""
     token = _acquire(session_id)
 
     async def events() -> AsyncIterator[dict]:
         try:
-            async for ev in run_turn(session_id, plan_id, text, llm, ServiceApi(http, auth), repropose=repropose):
+            async for ev in run_turn(session_id, plan_id, text, llm, ServiceApi(http, auth), repropose=repropose,
+                                     **turn):
                 yield ev
         except ApiError as e:
             yield {"event": "error", "data": {"code": e.code, "message": e.message}}
@@ -203,7 +215,7 @@ async def _turn_response(session_id: str, plan_id: int, text: str, auth: dict[st
         return StreamingResponse(sse(), media_type="text/event-stream", background=BackgroundTask(_release, session_id, token),
                                  headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
-    text_out, steps, cards, summary, error, usage = "", {}, [], None, None, None
+    text_out, steps, cards, summary, error, done = "", {}, [], None, None, {}
     async for ev in events():
         name, data = ev["event"], ev["data"]
         if name == "step":
@@ -213,11 +225,12 @@ async def _turn_response(session_id: str, plan_id: int, text: str, auth: dict[st
         elif name == "steps_done":
             summary = data["summary"]
         elif name == "done":
-            text_out, usage = data["text"], data.get("usage")
+            text_out, done = data["text"], data
         elif name == "error":
             error = data
     return ChatResult(text=text_out, steps=[Step.model_validate(s) for s in steps.values()], steps_summary=summary,
-                      cards=cards, error=error, usage=usage)
+                      cards=cards, error=error, usage=done.get("usage"), message_id=done.get("message_id"),
+                      mode=done.get("mode"))
 
 
 _STREAM_DOC = {200: {"content": {"text/event-stream": {}}, "description": "stream=true 면 SSE 이벤트 스트림"}}
@@ -229,6 +242,20 @@ async def chat(session_id: str, body: ChatRequest, db: DbSession, user_id: UserI
                stream: StreamFlag = True):
     s = _get_session(db, user_id, session_id)  # 존재 확인은 스트림 시작 전에 (404 를 바로 돌려주기 위해)
     return await _turn_response(session_id, s.plan_id, body.message, auth, http, llm, stream)
+
+
+@router.post("/sessions/{session_id}/events", response_model=ChatResult)
+async def proactive_turn(session_id: str, body: EventRequest, db: DbSession, user_id: UserId, auth: Auth, http: Http,
+                         llm: Llm) -> ChatResult:
+    """선제 턴 (trip 이 부른다, 앱은 부르지 않는다). 숨김 메시지 '[이벤트] …'로 턴을 시작해 Agent 가 먼저 말을 건다.
+
+    chat 과 같은 잠금(409 agent_busy)·제안 생성·검토 관문을 쓴다. trip 은 본문의 TripState 를 쓴다 (다시 조회하지 않음).
+    """
+    s = _get_session(db, user_id, session_id)
+    event = body.event.model_dump()
+    log.info("session=%s 선제 턴 event=%s id=%s", session_id[:8], event["type"], event.get("id"))
+    return await _turn_response(session_id, s.plan_id, event_message(event), auth, http, llm, False,
+                                trip=body.trip, fetch_trip=False, hidden=True)
 
 
 # ---------- 카드 동작 ----------

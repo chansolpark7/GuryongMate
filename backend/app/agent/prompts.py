@@ -96,11 +96,108 @@ WORKFLOW_REVIEW = """## 일정을 만들거나 바꿀 때 작업 순서 (반드�
    검토가 끝나기 전에는 사용자에게 긴 답변을 쓰지 않는다."""
 
 
+GUIDE = """## 동행 모드 (사용자가 지금 여행 중이다)
+- 사용자는 지금 현장에 있다. 아래 "현재 상황"이 지금 위치·진행 상태다.
+- 답변은 1~3문장으로 아주 짧게, 바로 움직일 수 있게 말한다 (나중에 음성으로 읽힌다). 목록·괄호·기호·긴 설명을 쓰지 않는다.
+- 계획 때와 같은 도구를 모두 쓸 수 있다. 바꿀 대상은 기본적으로 오늘 남은 일정이고, 사용자가 원하면 다른 날도 바꾼다
+  (변경은 똑같이 제안 카드로 가고 사용자가 승인한다).
+- 완료(status done)한 항목은 바꾸거나 지우지 않는다. 지금 시각보다 이른 시각으로 일정을 고정하지 않는다 (지난 시각은 바꿀 수 없다).
+  지금 머무는 곳(status visiting)은 체류 시간만 조절한다. 진행 상태(visiting·done)는 앱이 위치로 기록하므로 직접 바꾸지 않는다.
+- "지금 가도 돼?", "얼마나 걸려?"는 현재 위치 기준으로 travel_time 을 쓰고, 지금 이동할지 묻는 질문에는 check_hazards 를 켠다.
+- 늦어졌으면 남은 일정에서 체류를 줄이거나, 순서를 바꾸거나, 뺄 곳·다른 날로 옮길 곳을 골라 무리 없는 안을 만든다."""
+
+EVENT_GUIDE = {
+    "delay": ("일정이 늦어져 남은 일정에 새 문제가 생겼다. 사용자에게 먼저 말을 거는 상황이다. "
+              "무엇이 왜 문제인지 한 문장으로 알리고, 오늘 남은 일정을 고친 변경안을 변경 도구로 만든다 "
+              "(체류 줄이기, 순서 바꾸기, 영향받는 곳 빼기·다른 날로 옮기기, 가까운 대체 장소). "
+              "완료한 곳과 지금 머무는 곳의 지난 시간은 바꾸지 않는다."),
+    "safety_raised": ("오늘 남은 일정에 안전 경고가 새로 생겼다. 사용자에게 먼저 말을 거는 상황이다. "
+                      "check_safety 로 근거를 확인하고, 위험 근거(예보·특보·센서)를 한 문장으로 알린 뒤 "
+                      "해당 방문·이동을 신호가 없는 시간대로 옮기거나 실내 장소로 바꾸거나 이동 수단을 바꾼 변경안을 만든다. "
+                      "바꿀 수 없으면 이유와 조심할 점만 짧게 말한다."),
+}
+EVENT_DEFAULT = "여행 중 상황이 바뀌었다. 사용자에게 먼저 짧게 알리고, 일정을 바꿔야 하면 변경안을 만든다."
+EVENT_LABEL = {"delay": "일정 지연", "safety_raised": "안전 경고"}
+
+
+def _item_index(plan: dict | None) -> dict[int, dict]:
+    return {i["id"]: i for d in (plan or {}).get("days", []) for i in d["items"]}
+
+
+def _title(item: dict | None, fallback: str = "") -> str:
+    if not item:
+        return fallback
+    return item["place"]["title"] if item.get("place") else item["place_id"]
+
+
+def event_message(event: dict) -> str:
+    """선제 턴을 여는 숨김 메시지 '[이벤트] …' (이벤트 요약 + 근거 + 할 일). 일정·현재 상황은 시스템 프롬프트에 있다."""
+    kind = event.get("type", "")
+    lines = [f"[이벤트] {EVENT_LABEL.get(kind, kind or '상황 변화')}: {event.get('message') or '(설명 없음)'}"]
+    if event.get("item_ids"):
+        lines.append(f"영향받는 항목 item_id: {', '.join(str(i) for i in event['item_ids'])}")
+    payload = event.get("payload") or {}
+    violations = payload.get("new_violations") or []
+    if violations:
+        lines.append("새로 생긴 문제:\n" + "\n".join(
+            f"- {v.get('message', v) if isinstance(v, dict) else v}" for v in violations[:8]))
+    if payload.get("delay_minutes") is not None:
+        lines.append(f"예상 지연: {payload['delay_minutes']}분")
+    rest = {k: v for k, v in payload.items() if k not in ("new_violations", "delay_minutes")}
+    if rest:
+        lines.append("근거: " + json.dumps(rest, ensure_ascii=False, default=str)[:1500])
+    lines.append("할 일: " + EVENT_GUIDE.get(kind, EVENT_DEFAULT))
+    return "\n".join(lines)
+
+
+def _delay_text(minutes) -> str:
+    if not isinstance(minutes, int | float) or minutes == 0:
+        return "예정대로"
+    return f"{round(minutes)}분 늦음" if minutes > 0 else f"{-round(minutes)}분 여유"
+
+
+def situation(trip: dict, plan: dict | None, now: datetime, simulated: bool) -> str:
+    """동행 모드의 '현재 상황' 블록 (docs/trip/README.md §4.4). plan: 현재 일정 (PlanDetail, 제목·진행 상태용)."""
+    items = _item_index(plan)
+    day = trip.get("day")
+    lines = [f"- {day}일차 {now:%Y-%m-%d %H:%M}" + (" (시뮬레이션 시각)" if simulated else "")]
+    cur = trip.get("current") or {}
+    item = items.get(cur.get("item_id"))
+    since = f" {cur['since']}" if cur.get("since") else ""
+    if cur.get("state") == "visiting":
+        lines.append(f"- 위치: {_title(item, '일정 장소')} (도착{since}, 머무는 중)")
+    elif cur.get("state") == "moving":
+        lines.append("- 위치: 이동 중" + (f" ({_title(item)}에서{since} 출발)" if item else ""))
+    elif trip.get("location"):
+        lines.append("- 위치: 일정 장소 밖 (첫 일정 전이거나 오늘 일정이 끝남)")
+    else:
+        lines.append("- 위치: 아직 받지 못함")
+    nxt = trip.get("next")
+    if nxt:
+        title = nxt.get("title") or _title(items.get(nxt.get("item_id")), "다음 장소")
+        eta = f", 예상 도착 {nxt['eta']}" if nxt.get("eta") else ""
+        lines.append(f"- 다음: {title} {nxt.get('planned_start') or ''} 예정{eta} ({_delay_text(trip.get('delay_minutes'))})")
+    else:
+        lines.append("- 다음: 오늘 남은 일정 없음")
+    today = [i for i in items.values() if i["day"] == day and i["status"] != "skipped"]
+    if today:
+        done = sum(1 for i in today if i["status"] == "done")
+        lines.append(f"- 오늘 남은 일정: {len(today) - done}곳 / 완료 {done}곳")
+    lines.append("- 바꿀 수 없는 것: 완료한 항목, 지난 시각")
+    return "## 현재 상황 (여행 중)\n" + "\n".join(lines)
+
+
 def build_system(plan_view: dict, pending: dict | None, dropped: dict | None = None,
-                 repropose: dict | None = None, review: bool = False, now: datetime | None = None) -> str:
+                 repropose: dict | None = None, review: bool = False, now: datetime | None = None,
+                 simulated: bool = False, trip: dict | None = None, plan: dict | None = None) -> str:
+    """trip: 진행 중인 여행일의 TripState 면 동행 모드 (계획 규칙 + 동행 섹션 + 현재 상황). plan: 현재 일정 PlanDetail."""
     now = now or datetime.now(KST)
     system = SYSTEM.replace("<<WORKFLOW>>", WORKFLOW_REVIEW if review else WORKFLOW_SIMPLE)
-    parts = [system, f"## 현재 시각\n{now:%Y-%m-%d %H:%M} (KST, {'월화수목금토일'[now.weekday()]}요일)"]
+    clock = f"{now:%Y-%m-%d %H:%M} (KST, {'월화수목금토일'[now.weekday()]}요일" + (", 시뮬레이션 시각)" if simulated else ")")
+    parts = [system]
+    if trip:
+        parts += [GUIDE, situation(trip, plan, now, simulated)]
+    parts.append(f"## 현재 시각\n{clock}")
     parts.append("## 현재 일정" + (" (승인 대기 중인 제안이 적용된 상태)" if pending else "")
                  + "\n" + json.dumps(plan_view, ensure_ascii=False))
     if pending:

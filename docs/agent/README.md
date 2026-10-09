@@ -67,6 +67,7 @@ LLM은 일정을 직접 바꾸지 않는다. 결과는 두 종류의 **카드**�
 |---|---|---|---|
 | POST | `/agent/sessions/{session_id}/chat` | `{"message": "1~4000자"}` | 200 `text/event-stream` (§3.1) |
 | POST | `/agent/sessions/{session_id}/chat?stream=false` | 같음 | 200 `ChatResult` (끝난 뒤 한 번에) |
+| POST | `/agent/sessions/{session_id}/events` | `{"event": Event, "trip": TripState}` | 200 `ChatResult` — 선제 턴 (trip 이 부른다, §11.2) |
 
 - 응답은 **SSE**다. 각 이벤트는 `event: <이름>` 줄과 `data: <JSON>` 줄, 빈 줄로 끝난다.
 - 같은 세션에서 응답이 진행 중이면 409 `agent_busy`이고, 스트림은 시작되지 않는다.
@@ -84,7 +85,7 @@ LLM은 일정을 직접 바꾸지 않는다. 결과는 두 종류의 **카드**�
 | `proposal` | `ProposalDetail` | 변경 제안 카드 |
 | `recommendation` | `RecommendationView` | 장소 추천 카드 |
 | `steps_done` | `{"count": 3, "summary": "3단계 완료 : 장소 찾기, 일정 조정, 변경안 만들기"}` | 진행 영역을 이 한 줄로 접는다. 단계가 하나도 없으면 오지 않는다 |
-| `done` | `{"text": "최종 답변 전체", "cards": [{"type": "proposal", "id": 13}, ...], "usage": {...}}` | 턴 종료. `usage`는 LLM 토큰 사용량(`input`, `cached`, `output`, `reasoning`, `calls`)으로 비용 모니터링용 |
+| `done` | `{"text": "최종 답변 전체", "cards": [{"type": "proposal", "id": 13}, ...], "usage": {...}, "message_id": 102, "mode": "plan"}` | 턴 종료. `usage`는 LLM 토큰 사용량(`input`, `cached`, `output`, `reasoning`, `calls`)으로 비용 모니터링용. `message_id`는 저장된 답변 메시지, `mode`는 `plan`(계획) / `guide`(동행, §11) |
 | `error` | `{"code", "message"}` | 오류. **이 뒤로 이벤트가 오지 않는다** |
 
 순서: `start` → (`status` · `step` · `thinking` · `text` · `recommendation`이 섞여서) → `proposal`(있으면) → `steps_done`(있으면) → `done`. 오류가 나면 그 자리에서 `error`로 끝난다.
@@ -117,9 +118,10 @@ LLM은 일정을 직접 바꾸지 않는다. 결과는 두 종류의 **카드**�
 ### 3.3 `ChatResult` (`stream=false`)
 
 ```json
-{"text": "...", "steps": [Step, ...], "steps_summary": "...", "cards": [Card, ...], "error": null}
+{"text": "...", "steps": [Step, ...], "steps_summary": "...", "cards": [Card, ...], "error": null,
+ "usage": {...}, "message_id": 102, "mode": "guide"}
 ```
-`error`는 `{"code", "message"}` 또는 `null`이다.
+`error`는 `{"code", "message"}` 또는 `null`이다. `message_id`·`mode`는 `done` 이벤트와 같다 (오류로 끝나면 `null`).
 
 ---
 
@@ -204,6 +206,7 @@ LLM은 일정을 직접 바꾸지 않는다. 결과는 두 종류의 **카드**�
 
 - 매 턴 시스템 프롬프트에 **현재 일정**(이어받은 제안이 있으면 그것을 적용한 상태)이 들어간다. 옛 일정 스냅샷은 기록에 쌓지 않는다.
 - 카드 동작(승인·거절·덮어쓰기·추가·빼기)은 숨김 메시지 `[알림] …`으로 기록되어 다음 턴의 LLM이 안다.
+- 선제 턴은 숨김 메시지 `[이벤트] …`로 시작한다 (§11.2). 여행 중이면 현재 상황 블록이 함께 들어간다 (§11.3).
 - 최근 메시지 `AGENT_HISTORY_MESSAGES`개(기본 40)만 LLM에 넘긴다.
 
 ## 7. LLM 설정 (서버 `backend/.env`)
@@ -222,6 +225,9 @@ LLM은 일정을 직접 바꾸지 않는다. 결과는 두 종류의 **카드**�
 | `AGENT_OPENAI_REASONING_EFFORT` | `low` | |
 | `AGENT_MAX_STEPS` | `20` | 한 턴의 LLM 호출 최대 횟수 (마지막 호출은 도구 없이 답변 강제) |
 | `AGENT_REVIEW_ROUNDS` | `2` | 검토 관문이 되돌려 보내는 최대 횟수. `0`이면 `review_plan` 도구와 관문을 끈다 |
+| `AGENT_CLOCK` | `safety` | `safety`: 프롬프트의 '지금'이 `GET /safety/sim` 가상 시각을 따른다 / `system`: 시스템 시각 (§11.4) |
+| `AGENT_CLOCK_CACHE_SEC` | `5` | safety 시각(시스템 시각과의 차이)을 기억하는 시간 |
+| `AGENT_TRIP_TIMEOUT_SEC` | `3` | 매 턴 trip 상태 조회 제한 시간. 넘기면 계획 모드로 |
 
 새 공급자는 `llm.py`에 같은 이벤트(`TextDelta`, `ReasoningDelta`, `ToolCall`, `Finish`)를 내는 Provider를 추가하면 된다.
 
@@ -279,3 +285,71 @@ python scripts/planner/cli.py chat 1 -m "점심 넣어줘" -m /accept
 ```bash
 docker compose run --rm agent pytest tests/agent   # 대본대로 움직이는 가짜 LLM. Ollama 없이 돈다
 ```
+- `test_guide.py`: 동행 모드·선제 턴. trip 과 safety 시계(`/safety/sim`)는 가짜 HTTP 전송으로 바꾸고 planner 는 같은 앱을 쓴다.
+- 장소 검색을 쓰는 테스트는 장소 데이터·임베딩이 있어야 한다 (`docker compose up -d places`, 처음이면 적재에 몇 분).
+
+## 11. 동행 모드 (여행 중)
+
+명세의 다른 쪽: `docs/trip/README.md` §1.1(원칙), §3(이벤트), §4.2(선제 턴), §4.4(현재 상황), §5(시계).
+**동행 모드 = 계획 모드 + 현장 맥락**이다. 도구·카드·승인·잠금·검토 관문은 계획 모드와 같다.
+
+### 11.1 모드 판단
+- 매 턴(chat, repropose) 시작할 때 trip `GET /trip/plans/{plan_id}/state`를 부른다 (받은 인증 그대로, 제한 시간 `AGENT_TRIP_TIMEOUT_SEC`).
+- `active: true`면 **동행 모드**, 아니면 계획 모드.
+- trip 에 접근할 수 없거나(연결 실패·시간 초과·5xx), 404(trip 미배포·계획 모름)거나, 형식이 이상하면 **계획 모드로 계속**한다. 턴은 실패하지 않는다 (404 가 아닌 오류는 로그만).
+- 선제 턴(§11.2)은 본문의 `trip`을 그대로 쓰고 다시 조회하지 않는다.
+
+### 11.2 선제 턴 `POST /agent/sessions/{session_id}/events`
+trip 이 단계 3 이벤트(`delay`, `safety_raised`)에서 부른다. 앱은 부르지 않는다.
+
+```jsonc
+// 요청
+{"event": Event,          // docs/trip/README.md §3.3. type 필수. agent 는 type·message·item_ids·payload 를 쓰고 나머지 필드는 무시
+ "trip": TripState}       // docs/trip/README.md §1.3
+// 응답 200 ChatResult (§3.3, stream=false)
+{"text": "카페 도착이 늦어져 …", "cards": [{"type": "proposal", "proposal": ProposalDetail}], "steps": [...],
+ "steps_summary": "...", "error": null, "usage": {...}, "message_id": 102, "mode": "guide"}
+```
+- 인증: 그 사용자의 토큰 (trip 이 `issue_token(user_id, ttl=5분)`으로 만든다). 다른 사용자 세션이면 404 `session_not_found`.
+- 사용자 메시지 대신 **숨김 메시지** `[이벤트] …`로 턴을 시작한다. 내용: 이벤트 종류·`message`, 영향 항목 `item_ids`,
+  `payload.new_violations`의 문구, `payload.delay_minutes`, 나머지 `payload`(근거, 1500자까지), 그리고 종류별 **할 일**:
+
+  | type | 할 일 (LLM 에 주는 지시) |
+  |---|---|
+  | `delay` | 무엇이 왜 문제인지 한 문장으로 알리고, 오늘 남은 일정을 고친 변경안을 만든다 (체류 줄이기·순서 바꾸기·영향받는 곳 빼기/다른 날로·가까운 대체 장소). 완료·지난 시간은 바꾸지 않는다 |
+  | `safety_raised` | `check_safety`로 근거를 확인하고, 위험 근거를 한 문장으로 알린 뒤 신호 없는 시간대로 이동·실내 대체·이동 수단 변경 변경안을 만든다. 못 바꾸면 이유와 조심할 점만 |
+  | 그 밖 | 짧게 알리고, 바꿔야 하면 변경안을 만든다 |
+- 대화 기록(`GET /sessions/{id}`)에는 숨김 메시지가 나오지 않고 **assistant 답변과 카드만** 보인다. 선제 턴 답변은 앞 턴의 말풍선에 합쳐지지 않고 새 말풍선이다.
+  다음 턴의 LLM 은 이벤트 메시지와 답변을 기록으로 안다.
+- 잠금·제안·검토 관문은 chat 과 같다: 응답 중이면 409 `agent_busy` (trip 은 큐에 두고 나중에 다시 보낸다), 초안이 있으면 턴 끝에 제안을 만들고,
+  이어받을 대기 제안이 있으면 그 위에서 고친다. 제안의 `request`는 이벤트 메시지다 (다시 제안할 때 같은 의도로 쓰인다).
+- trip 은 `message_id`와 `cards`의 proposal id 를 이벤트의 `agent` 필드에 기록한다. `error`가 있으면 턴은 끝났지만 제안이 없을 수 있다.
+- 턴은 LLM 에 따라 수십 초 걸린다. trip 은 넉넉한 제한 시간(예: 120초)으로 부르고, 기다리는 동안 다른 단계 3 이벤트는 큐에 둔다.
+- 본문 검증 오류(`event.type` 없음, `trip` 없음, 모르는 최상위 필드)는 422 `invalid_request`.
+
+### 11.3 동행 모드 프롬프트와 제한
+시스템 프롬프트 = 계획 규칙(그대로) + **동행 섹션** + **현재 상황 블록** + 현재 시각 + 현재 일정.
+
+```
+## 현재 상황 (여행 중)
+- 1일차 2026-10-10 14:20 (시뮬레이션 시각)
+- 위치: 물회집 (도착 13:40, 머무는 중)          // moving: "이동 중 (…에서 13:40 출발)", 위치 없음: "아직 받지 못함"
+- 다음: 카페 15:00 예정, 예상 도착 15:12 (12분 늦음)   // delay_minutes 음수면 "N분 여유", 없으면 "오늘 남은 일정 없음"
+- 오늘 남은 일정: 2곳 / 완료 1곳                 // 그날 항목의 진행 상태 (건너뜀 제외)
+- 바꿀 수 없는 것: 완료한 항목, 지난 시각
+```
+- 동행 섹션: 답변은 **1~3문장**(현장, 나중에 음성), 목록·기호 없이. 모든 도구 사용 가능, 기본 대상은 오늘 남은 일정, 원하면 다른 날도.
+  "지금 가도 돼?"는 `travel_time`(`check_hazards`), 늦어지면 체류 줄이기·순서·빼기로 조정.
+- 하네스가 변경 도구에서 **직접 거부**한다 (도구 오류 `not_allowed_during_trip`, LLM 이 이유를 받고 다른 방법을 찾는다):
+  - 완료(`done`) 항목의 수정·삭제
+  - 오늘 항목을 지금보다 이른 `start_time`으로 고정
+  - 지금 머무는(`visiting`) 항목의 체류 시간·메모 외 변경
+  - 진행 상태를 `visiting`·`done`으로 바꾸기 (진행 상태는 trip 이 위치로 기록한다. `skipped`는 일정 변경이라 허용)
+- 계획 모드에서는 위 제한이 없다.
+
+### 11.4 시계
+- 프롬프트의 '현재 시각'과 현재 상황 블록의 시각:
+  - 동행 모드: `TripState.now` (trip 도 safety 시각을 따른다). `clock: "sim"`이면 "(시뮬레이션 시각)"을 붙인다.
+  - 계획 모드: `AGENT_CLOCK=safety`이면 `GET /safety/sim`의 `now`(`SAFETY_SOURCE=mock`일 때만 있음)를 따른다. 시스템 시각과의 차이를
+    `AGENT_CLOCK_CACHE_SEC`(5초) 동안 기억한다. 404(`sim_disabled`)면 시스템 시각, 접근할 수 없으면 20초 동안 시스템 시각.
+- 동행 모드의 '지난 시각' 판정(§11.3)도 이 시각을 쓴다.
