@@ -1,6 +1,7 @@
 """Agent API. 앱은 어떤 LLM 이 돌고 있는지 몰라도 이 API 만 호출하면 된다. 명세: docs/agent/README.md
 
 흐름: 세션 생성(plan_id) -> chat (SSE) -> 카드 수신(제안·추천) -> 카드 동작(accept/reject/repropose, add/remove)
+가이드 준비: POST /agent/plans/{plan_id}/guide/prepare -> 202 작업 -> GET …/guide/jobs/{job_id} (대화 세션과 별개)
 여행 중에는 trip 이 선제 턴(events)을 부르고, 모든 턴이 동행 모드(현재 상황 블록)로 돈다.
 오류는 {"detail": {"code", "message", ...}} 형식이고, planner 가 거부한 오류는 코드·추가 필드를 그대로 전달한다.
 """
@@ -10,6 +11,7 @@ import time
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import timedelta
 from typing import Annotated
 
 import httpx
@@ -20,6 +22,7 @@ from starlette.background import BackgroundTask
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
+from app.agent import guide
 from app.agent.api import ApiError, ServiceApi, get_http
 from app.agent.errors import AgentError, AgentRoute
 from app.agent.harness import STEP_TITLE, add_note, run_turn
@@ -32,13 +35,15 @@ from app.agent.schemas import (
     ChatRequest,
     ChatResult,
     EventRequest,
+    GuideJobView,
+    GuidePrepareRequest,
     MessageView,
     SessionCreate,
     SessionDetail,
     SessionView,
     Step,
 )
-from app.core.auth import CurrentUser, ForwardAuth
+from app.core.auth import CurrentUser, ForwardAuth, issue_token
 from app.db import get_db
 
 router = APIRouter(prefix="/agent", tags=["agent"], route_class=AgentRoute)
@@ -353,6 +358,49 @@ async def remove_candidate(session_id: str, recommendation_id: int, candidate_id
                            user_id: UserId, auth: Auth, http: Http) -> dict:
     """추천 후보를 일정에서 뺀다. 응답은 planner {recommendation, plan}."""
     return await _candidate(session_id, recommendation_id, candidate_id, "remove", db, user_id, auth, http)
+
+
+# ---------- 가이드 준비 (docs/docent/README.md §3.3) ----------
+
+GUIDE_TOKEN_TTL = timedelta(hours=2)  # 작업이 길어도 받은 토큰 만료와 상관없이 끝나게
+
+
+@router.post("/plans/{plan_id}/guide/prepare", response_model=GuideJobView, status_code=202)
+async def prepare_guide(plan_id: int, user_id: UserId, auth: Auth, http: Http, llm: Llm,
+                        body: Annotated[GuidePrepareRequest | None, Body()] = None) -> dict:
+    """계획의 장소마다 맞춤 가이드 노트를 백그라운드로 만든다. 계획당 작업 하나: 진행 중이면 그 작업을 돌려준다.
+    대상: place_ids(일정에 있어야 함) 또는 일정의 모든 장소. force 가 아니면 이미 ready 인 노트는 건너뛴다."""
+    body = body or GuidePrepareRequest()
+    api = ServiceApi(http, auth)
+    plan = await api.get_plan(plan_id)  # 존재·소유 확인 (404 plan_not_found 전달)
+    if (job := guide.running_job(plan_id)) is not None:
+        if job.user_id != user_id:  # 계획 주인만 여기까지 온다. 혹시 모를 경우를 막는다
+            raise AgentError(409, "guide_busy", "이 계획의 가이드를 준비하는 중입니다.")
+        return job.view()
+    places = guide.plan_places(plan)
+    if body.place_ids is not None:
+        missing = sorted(set(body.place_ids) - {p["place_id"] for p in places})
+        if missing:
+            raise AgentError(422, "place_not_in_plan", "일정에 없는 장소입니다.", place_ids=missing)
+        places = [p for p in places if p["place_id"] in set(body.place_ids)]
+    if not body.force:
+        ready = {n["place_id"] for n in await api.list_notes(plan_id) if n["status"] == "ready"}
+        places = [p for p in places if p["place_id"] not in ready]
+    for p in places:  # 앱이 바로 '대기'로 보이게 먼저 표시 (이전 본문은 docent 가 남긴다)
+        await api.put_note(plan_id, p["place_id"], {"status": "pending"})
+    job_auth = {"Authorization": f"Bearer {issue_token(user_id, GUIDE_TOKEN_TTL)}"} if "Authorization" in auth else auth
+    job = guide.start(plan_id, user_id, places, llm, ServiceApi(http, job_auth))
+    log.info("guide plan=%s job=%s 시작: %d곳", plan_id, job.id[:8], len(places))
+    return job.view()
+
+
+@router.get("/plans/{plan_id}/guide/jobs/{job_id}", response_model=GuideJobView)
+def guide_job(plan_id: int, job_id: str, user_id: UserId) -> dict:
+    """가이드 준비 진행 상태 (장소별 상태·진행 수·남은 시간). 끝난 작업은 1시간 동안 조회할 수 있다."""
+    job = guide.get_job(job_id)
+    if job is None or job.plan_id != plan_id or job.user_id != user_id:
+        raise AgentError(404, "job_not_found", f"가이드 준비 작업 {job_id} 을(를) 찾을 수 없습니다.")
+    return job.view()
 
 
 # ---------- 탈퇴 ----------

@@ -1,4 +1,4 @@
-"""planner·places·routing·safety·trip 서비스를 HTTP API 로 호출하는 비동기 클라이언트 (서비스 간 규칙: 내부 코드 import 금지).
+"""planner·places·routing·safety·trip·docent 서비스를 HTTP API 로 호출하는 비동기 클라이언트 (서비스 간 규칙: 내부 코드 import 금지).
 
 Agent 는 앱·CLI 와 똑같은 공개 API 만 쓴다. 주소는 AGENT_API_BASE_URL (compose 에서는 게이트웨이).
 """
@@ -70,6 +70,11 @@ class ServiceApi:
     async def get_place(self, place_id: str) -> dict:
         return await self._req("GET", f"/places/{quote(place_id, safe='')}")
 
+    async def search_passages(self, q: str, place_id: str | None = None, limit: int = 6) -> list[dict]:
+        """RAG 근거 조각 (관광공사 소개문·오디오 가이드 대본), 의미 유사도 순."""
+        params = {"q": q, "limit": limit, **({"place_id": place_id} if place_id else {})}
+        return await self._req("GET", "/places/passages", params=params)
+
     # ----- planner: 계획 -----
     async def get_plan(self, plan_id: int) -> dict:
         return await self._req("GET", f"/planner/plans/{plan_id}")
@@ -112,6 +117,39 @@ class ServiceApi:
     # ----- trip (여행 중 상태) -----
     async def trip_state(self, plan_id: int) -> dict:
         return await self._req("GET", f"/trip/plans/{plan_id}/state", timeout=settings.trip_timeout_sec)
+
+    # ----- docent (메모리·가이드 노트·외부 검색) -----
+    async def memory_summary(self, plan_id: int | None) -> dict:
+        """매 턴 프롬프트에 넣는다. docent 가 느리면 메모리 없이 진행하도록 짧게 기다린다."""
+        return await self._req("GET", "/docent/memory/summary", params={"plan_id": plan_id} if plan_id else None,
+                               timeout=settings.memory_timeout_sec)
+
+    async def list_memory(self, plan_id: int | None) -> dict:
+        return await self._req("GET", "/docent/memory", params={"plan_id": plan_id} if plan_id else None)
+
+    async def add_memory(self, body: dict) -> dict:
+        return await self._req("POST", "/docent/memory", json=body)
+
+    async def update_memory(self, memory_id: int, body: dict) -> dict:
+        return await self._req("PATCH", f"/docent/memory/{memory_id}", json=body)
+
+    async def delete_memory(self, memory_id: int) -> None:
+        await self._req("DELETE", f"/docent/memory/{memory_id}")
+
+    async def list_notes(self, plan_id: int) -> list[dict]:
+        return await self._req("GET", f"/docent/plans/{plan_id}/notes")
+
+    async def get_note(self, plan_id: int, place_id: str) -> dict:
+        return await self._req("GET", f"/docent/plans/{plan_id}/notes/{quote(place_id, safe='')}")
+
+    async def put_note(self, plan_id: int, place_id: str, body: dict) -> dict:
+        return await self._req("PUT", f"/docent/plans/{plan_id}/notes/{quote(place_id, safe='')}", json=body)
+
+    async def web_search(self, q: str, limit: int = 5) -> dict:
+        return await self._req("GET", "/docent/search", params={"q": q, "limit": limit})
+
+    async def read_page(self, url: str) -> dict:
+        return await self._req("GET", "/docent/page", params={"url": url}, timeout=15)
 
     # ----- planner: 제안 -----
     async def list_proposals(self, plan_id: int, status: str | None = None) -> list[dict]:

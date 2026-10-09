@@ -1,7 +1,8 @@
 # docent — 사용자 맞춤 여행 가이드 설계
 
-> 상태: **docent 서비스 API 구현됨** (2026-10-09, §5: 메모리·검색·페이지 읽기·가이드 노트 저장). agent 쪽 도구(`remember`·`web_search`·가이드 준비 작업 등)는 아직 없다.
-> 구현하면서 바뀐 부분은 이 문서를 같이 고친다.
+> 상태: **docent 서비스 API 구현됨** (2026-10-09, §5: 메모리·검색·페이지 읽기·가이드 노트 저장).
+> **agent 쪽 구현됨** (2026-10-09, §8: 메모리 도구·`search_passages`·가이드 노트·웹 검색·가이드 준비 작업, 가짜 LLM 테스트까지).
+> 실제 OpenAI 로 확인하는 것은 아직이다 (§8.4 절차). 구현하면서 바뀐 부분은 이 문서를 같이 고친다.
 
 우리 서비스의 두 번째 특징은 **사용자 맞춤형 여행 가이드**다. 같은 장소라도 "역사·사진을 좋아하고 어머니와 함께 오는 서윤"에게 맞는 이야기를 한다.
 지금 places 에 모은 관광 정보(소개문·오디오 가이드 대본)만으로는 깊이와 다양성이 부족하므로 **외부 검색**으로 자료를 보강한다.
@@ -52,9 +53,11 @@ LLM 이 대화에서 알게 된 사용자 정보를 **문서로 정리해 두고
 
 | 도구 | 동작 |
 |---|---|
-| `remember` | `{scope, category, text}` 저장. 같은 뜻의 항목이 있으면 갱신 |
+| `remember` | `{scope, category, text}` 저장. 같은 뜻의 항목이 있으면 갱신 (`replace_id`) |
 | `forget` | 항목 삭제 (사용자가 "그건 아니야"라고 할 때) |
 | `view_memory` | 전체 보기 |
+
+구현: `docs/agent/README.md` §5 (도구·단계 kind `memory` "기억하기"·`forget`·`recall`), §8.1.
 
 ---
 
@@ -73,7 +76,9 @@ LLM 이 대화에서 알게 된 사용자 정보를 **문서로 정리해 두고
 - 인용 URL 은 docent 의 출처 등급 규칙(§2.2, `app/docent/tiers.py`)으로 분류해 노트 `sources` 에 저장한다 (신뢰도 표시 유지).
 - 브라우저(Chromium) 기반 읽기는 하지 않는다 (서버 메모리·속도·보안 부담. 로그인·JavaScript 전용 페이지는 범위 밖).
 - 아래 네이버 연동(`/docent/search`)과 페이지 읽기(`/docent/page`)는 지우지 않고 **대안**으로 둔다: 로컬 LLM(`AGENT_PROVIDER=local`)일 때, 또는 내장 검색의 한국 지역 정보가 부족할 때.
-- 데모 전에 구룡포 장소 2~3곳으로 내장 검색 결과(한국어 지역 정보 양·출처)를 확인하고 이 절에 기록한다.
+- 데모 전에 구룡포 장소 2~3곳으로 내장 검색 결과(한국어 지역 정보 양·출처)를 확인하고 이 절에 기록한다 (§8.4 절차).
+- 구현 (§8.2): `AGENT_PROVIDER=openai`(Responses API)면 내장 `web_search`, 그 밖의 공급자(`local`, `chat`)는 docent `/docent/search`·`/docent/page` 를
+  함수 도구 `web_search`·`read_page` 로 쓴다. 장소당·턴당 호출 수 상한이 있다.
 
 #### 대안: 네이버 검색 API (구현됨)
 docent 가 공급자를 감싸서 같은 형식으로 돌려준다 (agent 는 공급자를 모른다). 공급자 키는 docent 서비스에만 둔다.
@@ -169,6 +174,8 @@ GET  /agent/plans/{plan_id}/guide/jobs/{job_id}                   진행 상태
 4. 출처가 하나도 없으면 `failed` (지어내지 않는다)
 
 비용·시간 감: 장소당 도구 호출 4~8회. gpt-5.4-mini 기준 장소 6곳이면 1~2분 정도 예상 (실측해서 이 문서에 기록한다). 여행 전에 미리 돌리므로 현장 지연에는 영향이 없다.
+
+구현은 §8.3 과 `docs/agent/README.md` §12 (요청·응답 형식, 장소별 진행·남은 시간).
 
 ---
 
@@ -267,3 +274,65 @@ docent 는 **저장·검색·외부 요청 대행**만 한다 (LLM 없음, 결�
 - [x] 외부 검색 공급자 (§2.1): 네이버 검색 API 로 시작 (인터페이스는 공급자 중립)
 - [x] 메모리를 docent 에 둘지 agent(`agent_*` 테이블)에 둘지: docent 에 둔다 (계획·동행 모두 쓰고, 앱 편집 API 가 필요해서)
 - [ ] 가이드 준비 자동 시작 시점 (제안 승인 직후 vs [가이드 준비] 버튼만)
+
+---
+
+## 8. agent 쪽 구현 (2026-10-09)
+
+코드: `backend/app/agent/` (`tools.py` 도구, `harness.py` 대화 턴, `guide.py` 준비 작업, `llm.py` 내장 검색), 테스트: `backend/tests/agent/test_docent_tools.py`.
+API·단계·설정 명세는 `docs/agent/README.md` §3.2·§5·§7·§11.3.1·§12.
+
+### 8.1 메모리
+- 계획·동행 모드 모두 매 턴 시스템 프롬프트에 `GET /docent/memory/summary?plan_id=` 요약을 넣는다 (메모리가 없으면 "(아직 없음)").
+- `remember` 의 근거(`source`)는 `chat:{session_id}` (앱 31 은 `user_edit` 가 아니면 "대화"로 보여준다). 저장 뒤 같은 분류의 기존 항목을 LLM 에 돌려줘
+  "짧게" → "자세히" 같은 충돌을 `forget`·`replace_id` 로 정리하게 한다. 길이 선호는 문구에 "짧게"·"자세히"를 넣게 해서 `style_length`(§5.1)가 잡히게 한다.
+- 단계: `remember` → `memory` "기억하기" (detail = 저장한 문장, 항목마다 따로 — 앱 18 "기억했어요" 칩), `forget` → `forget`, `view_memory` → `recall`.
+
+### 8.2 자료 검색
+- `search_passages` → places `GET /places/passages?q=&place_id=&limit=` (최대 10). 단계 `research` "자료 찾기".
+- 웹 검색 상한: 동행 모드 대화 한 턴 `AGENT_WEB_SEARCH_PER_TURN`(기본 2), 가이드 준비 장소 하나 `AGENT_WEB_SEARCH_PER_PLACE`(기본 3).
+  내장 검색은 `max_tool_calls` = 남은 횟수로 묶고 검색 호출(`web_search_call`)마다 센다. 함수 도구는 `web_search`·`read_page` 를 합쳐 센다.
+  내장 검색의 `search_context_size` 는 `AGENT_WEB_SEARCH_CONTEXT`(기본 `low`).
+- 내장 검색 답변의 `url_citation` 인용은 모아서 가이드 노트 출처가 된다. 웹 검색은 계획 모드·선제 턴에는 쓰지 않는다.
+
+### 8.3 가이드 준비 작업
+- `POST /agent/plans/{plan_id}/guide/prepare` → 202, `GET …/guide/jobs/{job_id}` 로 장소별 상태·진행 수·남은 시간 (app gaps b9).
+- 장소마다: 노트 `preparing` → 장소 상세 + 근거 조각을 미리 넣은 프롬프트 → (LLM 이 필요하면 근거 조각·웹 검색) → 노트 JSON → `ready` 저장.
+- 출처는 실제로 본 자료(근거 조각·검색 결과·읽은 페이지·내장 검색 인용)에서만 고른다. 없으면 `failed` ("출처가 되는 자료를 찾지 못해 … 지어내지 않음").
+  근거 조각 출처 주소는 `https://api.visitkorea.or.kr/` (한국관광공사 TourAPI, docent 등급 official). 등급은 docent 가 URL 로 다시 정한다 (§5.2).
+- LLM·서비스 오류는 그 장소만 `failed`, 다음 장소로 넘어간다. 계획당 작업 하나. 작업 기록은 agent 프로세스 메모리 (재시작하면 노트 status 만 남는다).
+
+### 8.4 실제 OpenAI 로 확인하는 절차 (아직 하지 않음 — API 크레딧이 생기면)
+가짜 LLM 테스트만 끝난 상태다. 아래 명령은 **실제 OpenAI 를 부르고 비용이 든다** (예상: 장소 3곳 × 호출 2~4회, 내장 검색 3~9회).
+
+1. 준비: `backend/.env` 에 `AGENT_OPENAI_API_KEY=…` (기본 `AGENT_PROVIDER=openai`, `AGENT_OPENAI_API=responses`, `gpt-5.4-mini`).
+   전체 스택(`docker compose up -d --build`)과 장소 데이터·임베딩(places-init)이 있어야 한다. 시간 측정을 위해 다른 작업은 돌리지 않는다.
+2. 계획과 메모리 (사용자 `seoyun`, 개발 모드 `X-User-Id`):
+   ```bash
+   export API=http://127.0.0.1:8013 U="X-User-Id: seoyun"
+   # 장소 id 찾기: 일본인 가옥거리, 과메기문화관, 구룡포항
+   curl -s "$API/places?q=일본인가옥거리&limit=1" -H "$U"; curl -s "$API/places?q=과메기문화관&limit=1" -H "$U"; curl -s "$API/places?q=구룡포항&limit=1" -H "$U"
+   curl -s -X POST $API/planner/plans -H "$U" -H 'Content-Type: application/json' \
+        -d '{"title":"가이드 확인","start_date":"2026-10-20","day_start":"10:00","day_end":"18:00"}'
+   # 세 장소를 items 로 추가 (POST /planner/plans/{id}/items {"place_id"})
+   # 메모리 3개 (scope user 2개, 동행자는 이번 여행 plan)
+   curl -s -X POST $API/docent/memory -H "$U" -H 'Content-Type: application/json' -d '{"scope":"user","category":"interest","text":"역사·사진 좋아함","source":"user_edit"}'
+   curl -s -X POST $API/docent/memory -H "$U" -H 'Content-Type: application/json' -d '{"scope":"plan","plan_id":<id>,"category":"companion","text":"어머니 동행, 오래 걷기 부담","source":"user_edit"}'
+   curl -s -X POST $API/docent/memory -H "$U" -H 'Content-Type: application/json' -d '{"scope":"user","category":"style","text":"해설은 핵심만 짧게","source":"user_edit"}'
+   ```
+3. 준비 작업: `POST $API/agent/plans/<id>/guide/prepare` → `job_id`, `GET $API/agent/plans/<id>/guide/jobs/<job_id>` 를 3초마다 `status: done` 까지.
+4. 기록할 것 (이 절 아래 표로):
+   - 장소별 `status`·`seconds`·`web_searches`·`usage`(input·cached·output·reasoning·calls), 작업 전체 `usage`·걸린 시간. 비용 = 입력 $0.75 / 캐시 $0.075 / 출력 $4.50 per 1M (agent §7) + 내장 검색 호출 요금.
+   - 노트(`GET $API/docent/plans/<id>/notes/<place_id>`) 품질: 사실이 출처와 맞는지(몇 개 표본 대조), 지어낸 내용 없는지, short 가 30초 안에 읽히는지, long 이 2~3분 흐름인지, qa 가 현장 질문다운지.
+   - 출처 등급 분포: 장소별 `sources[].tier` 개수 (official·press·community·unknown), 근거 조각(관광공사) 대 웹 비율, 한국어 지역 정보가 충분한지.
+   - 메모리 반영: "역사·사진 좋아함" → `for_you`·`highlights` 에 역사·사진 포인트, "어머니 동행, 오래 걷기 부담" → `companion_tips` 에 걷기·계단·쉼터,
+     "해설은 핵심만 짧게" → `short` 가 짧고 핵심 위주인지. 메모리를 빼고 같은 장소를 한 번 더(`force`) 만들어 비교하면 차이가 분명하다.
+   - 실패한 장소가 있으면 `error` 와 로그(`docker compose logs agent | grep guide`).
+5. 동행 모드 추가 질문도 한 번: trip 을 시작(또는 CLI `trip goto`)해 가옥거리에 머무는 상태에서 `"저 계단은 언제 만들어졌어요?"` →
+   단계가 `가이드 노트 확인` → `자료 찾기` 순서인지, 웹 검색이 턴당 2회 안인지, `"더 짧게 해줘"` → `memory` 단계와 `style_length` 확인.
+
+| 장소 | status | 시간 | 웹 검색 | 토큰(in/cached/out) | 출처 tier 분포 | 메모리 반영 | 메모 |
+|---|---|---|---|---|---|---|---|
+| 일본인 가옥거리 | | | | | | | |
+| 과메기문화관 | | | | | | | |
+| 구룡포항 | | | | | | | |
