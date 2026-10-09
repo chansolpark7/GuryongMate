@@ -19,7 +19,7 @@ x-backend: &backend
   restart: unless-stopped
   logging: *logging
   env_file:
-    - path: ./backend.env
+    - path: ${BACKEND_ENV_FILE:-./backend.env}   # 로컬 확인: deploy/.env.backend.local
       required: true
   healthcheck:
     test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]

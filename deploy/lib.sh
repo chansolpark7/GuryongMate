@@ -42,7 +42,9 @@ parse_common() {
 }
 
 need_vm() { [[ -n "$VM" ]] || die "VM 주소가 없습니다. --vm user@host 또는 deploy/deploy.conf 의 VM=..."; }
-vm() { ssh $SSH_OPTS "$VM" "$@"; }                     # VM 에서 명령
+# VM 에서 명령. VM=local 이면 노트북에서 그대로 돈다 (스크립트 시험용: VM_DIR 를 따로 두고, 그 .env 에
+# COMPOSE_PROJECT_NAME·VALHALLA_VOLUME 을 넣어 개발 스택과 겹치지 않게. docs/deploy/README.md §9)
+vm() { if [[ "$VM" == local ]]; then bash -c "$*"; else ssh $SSH_OPTS "$VM" "$@"; fi; }
 vmc() { vm "cd ~/$VM_DIR && $*"; }                      # VM 의 배포 폴더에서
 vm_compose() { vmc "docker compose -f docker-compose.prod.yml $*"; }
 vm_env_get() { vmc "grep -E '^$1=' .env | tail -1 | cut -d= -f2-" 2>/dev/null || true; }
