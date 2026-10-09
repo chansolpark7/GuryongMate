@@ -9,7 +9,7 @@ need_vm
 case ${1:-} in
   logs) vm_compose logs --tail "${3:-100}" "${2:?서비스 이름}" ;;
   disk)
-    vm 'df -h /; echo; docker system df -v | sed -n "1,40p"; echo; sudo du -sh /var/lib/docker /var/lib/containerd 2>/dev/null' ;;
+    vm 'df -h /; echo; docker system df -v | sed -n "1,40p"; echo; sudo -n du -sh /var/lib/docker /var/lib/containerd 2>/dev/null' ;;
   *)
     log "태그: $(vm_env_get IMAGE_TAG) (이전 $(vm_env_get PREV_TAG))"
     vm_compose ps -a --format "'table {{.Service}}\t{{.Status}}'"
