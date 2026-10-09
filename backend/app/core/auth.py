@@ -13,6 +13,7 @@
 AUTH_REQUIRED=false (개발·테스트) 이고 토큰이 없으면 X-User-Id 헤더 값(없으면 'anonymous')을 사용자로 본다.
 토큰이 있는데 잘못됐으면 개발 모드에서도 401 이다.
 """
+import hmac
 from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
@@ -72,6 +73,14 @@ def forward_auth(
     return {"X-User-Id": user_id}
 
 
+def admin_request(
+    x_admin_token: Annotated[str | None, Header(alias="X-Admin-Token", description="관리 토큰 (공개 서버의 데모 조작 API)")] = None,
+) -> bool:
+    """관리 토큰(ADMIN_TOKEN)이 설정돼 있고 요청 헤더 X-Admin-Token 이 같으면 True. docs/deploy/README.md §3"""
+    return bool(settings.admin_token and x_admin_token and hmac.compare_digest(settings.admin_token, x_admin_token))
+
+
 CurrentUser = Annotated[str, Depends(current_user)]
 OptionalUser = Annotated[str | None, Depends(optional_user)]
 ForwardAuth = Annotated[dict[str, str], Depends(forward_auth)]
+AdminRequest = Annotated[bool, Depends(admin_request)]

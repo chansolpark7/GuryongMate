@@ -1,0 +1,205 @@
+# 운영 compose (공개 서버: 팀원·멘토 테스트 + 발표 데모). 개발용 docker-compose.yml 과 따로 쓴다.
+#   - 서버에서는 빌드하지 않는다. 노트북에서 만든 이미지(guryongmate/*:IMAGE_TAG)를 deploy/ 스크립트가 옮긴다
+#   - 코드는 이미지 안에 있다 (마운트·--reload 없음). 공개 포트는 게이트웨이 하나 (DB·내부 서비스 포트 매핑 없음)
+#   - 로그인 필수(AUTH_REQUIRED=true), 데모 조작 API 는 관리 토큰(X-Admin-Token)으로만, 사용자당 LLM 호출 수 제한
+# 서버 폴더(~/guryongmate)에 이 파일, .env(compose 값·비밀), backend.env(서비스 키·설정)를 둔다. 예시: deploy/env.example, deploy/backend.env.example
+# 로컬에서 확인: docker compose -f docker-compose.prod.yml --env-file deploy/.env.local -p guryongmate-prod up -d
+# 자세한 내용: docs/deploy/README.md
+
+name: guryongmate
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "5m"    # 컨테이너마다 로그 최대 15MB, 13개 합쳐 200MB 이하 (디스크가 작다)
+    max-file: "3"
+
+x-backend: &backend
+  image: guryongmate/backend:${IMAGE_TAG:?IMAGE_TAG 가 없습니다 (.env)}
+  restart: unless-stopped
+  logging: *logging
+  env_file:
+    - path: ${BACKEND_ENV_FILE:-./backend.env}   # 로컬 확인: deploy/.env.backend.local
+      required: true
+  healthcheck:
+    test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+    interval: 10s
+    timeout: 3s
+    retries: 20
+    start_period: 20s
+
+# backend.env 보다 우선한다 (공개 서버에서 바뀌면 안 되는 값)
+x-backend-env: &backend-env
+  DATABASE_URL: postgresql+psycopg://guryong:${DB_PASSWORD:?DB_PASSWORD 가 없습니다}@db:5432/guryongmate
+  AUTH_REQUIRED: "true"
+  JWT_SECRET: ${JWT_SECRET:?JWT_SECRET 이 없습니다 (.env)}
+  ADMIN_TOKEN: ${GATEWAY_ADMIN_TOKEN:?GATEWAY_ADMIN_TOKEN 이 없습니다 (.env)}
+  EMBEDDING_URL: http://embedding:80
+  PLANNER_PLACES_BASE_URL: http://gateway
+  PLANNER_SAFETY_BASE_URL: http://gateway
+  SAFETY_PLACES_BASE_URL: http://gateway
+  AGENT_API_BASE_URL: http://gateway
+  ACCOUNT_API_BASE_URL: http://gateway
+  PLANNER_ROUTING_BASE_URL: http://gateway
+  ROUTING_SAFETY_BASE_URL: http://gateway
+  ROUTING_VALHALLA_URL: http://valhalla:8002
+  TRIP_PLANNER_BASE_URL: http://gateway
+  TRIP_SAFETY_BASE_URL: http://gateway
+  TRIP_AGENT_BASE_URL: http://gateway
+  DOCENT_API_BASE_URL: http://gateway
+
+services:
+  gateway:
+    image: guryongmate/gateway:${IMAGE_TAG:?}
+    restart: unless-stopped
+    logging: *logging
+    ports:
+      - "${API_PORT:-8000}:80"
+    environment:
+      GATEWAY_ADMIN_TOKEN: ${GATEWAY_ADMIN_TOKEN:?}
+    depends_on:
+      - places
+      - planner
+      - agent
+      - safety
+      - account
+      - routing
+      - trip
+      - docent
+
+  db:
+    image: guryongmate/db:${IMAGE_TAG:?}
+    restart: unless-stopped
+    logging: *logging
+    environment:
+      POSTGRES_USER: guryong
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?}   # 볼륨을 처음 만들 때만 쓰인다. 바꾸지 않는다
+      POSTGRES_DB: guryongmate
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U guryong -d guryongmate"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # 임베딩 경량판 (ONNX int8, 모델이 이미지 안에 있다). services/embedding-onnx/
+  embedding:
+    image: guryongmate/embedding-onnx:${IMAGE_TAG:?}
+    restart: unless-stopped
+    logging: *logging
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:80/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 60
+
+  places-init:
+    <<: *backend
+    environment:
+      <<: *backend-env
+      SERVICE: places
+    command: python -m app.places.ingest init
+    healthcheck:
+      disable: true
+    restart: "no"
+    depends_on:
+      db:
+        condition: service_healthy
+      embedding:
+        condition: service_healthy
+
+  places:
+    <<: *backend
+    environment:
+      <<: *backend-env
+      SERVICE: places
+    depends_on:
+      places-init:
+        condition: service_completed_successfully
+
+  planner:
+    <<: *backend
+    environment:
+      <<: *backend-env
+      SERVICE: planner
+      PLANNER_SAFETY_WATCH_SEC: ${PLANNER_SAFETY_WATCH_SEC:-10}   # 발표 서버 권장 10초 (docs/demo/README.md §1)
+    depends_on:
+      db:
+        condition: service_healthy
+
+  safety:
+    <<: *backend
+    environment:
+      <<: *backend-env
+      SERVICE: safety
+    depends_on:
+      db:
+        condition: service_healthy
+
+  # 타일은 노트북에서 만든 볼륨을 옮긴다 (deploy/first_deploy.sh). 서버에서 OSM 다운로드·빌드를 하지 않는다
+  valhalla:
+    image: guryongmate/valhalla:${IMAGE_TAG:?}
+    restart: unless-stopped
+    logging: *logging
+    environment:
+      server_threads: 2
+    volumes:
+      - valhalla-data:/custom_files:ro
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8002/status"]
+      interval: 10s
+      timeout: 3s
+      retries: 30
+
+  routing:
+    <<: *backend
+    environment:
+      <<: *backend-env
+      SERVICE: routing
+    depends_on:
+      valhalla:
+        condition: service_started
+
+  account:
+    <<: *backend
+    environment:
+      <<: *backend-env
+      SERVICE: account
+    depends_on:
+      db:
+        condition: service_healthy
+
+  trip:
+    <<: *backend
+    environment:
+      <<: *backend-env
+      SERVICE: trip
+      TRIP_TICK_SEC: ${TRIP_TICK_SEC:-30}
+    depends_on:
+      db:
+        condition: service_healthy
+
+  docent:
+    <<: *backend
+    environment:
+      <<: *backend-env
+      SERVICE: docent
+    depends_on:
+      db:
+        condition: service_healthy
+
+  agent:
+    <<: *backend
+    environment:
+      <<: *backend-env
+      SERVICE: agent
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  pgdata:
+  valhalla-data:
+    name: ${VALHALLA_VOLUME:-guryongmate-valhalla}   # 첫 배포 때 노트북 볼륨에서 옮긴다 (deploy/first_deploy.sh)
+    external: true

@@ -13,6 +13,8 @@
 - 기존 코드를 그대로 쓴다: API 클라이언트(scripts/planner/client.py), 대화 출력(cli.ChatPrinter), 재생기(trip_cli.Player, scene.expand).
 - LLM 은 서버 설정(AGENT_PROVIDER=claude | scripted)을 그대로 쓴다. 시작할 때 어느 쪽인지 보여준다.
 - safety 는 SAFETY_SIM_ENABLED=true 여야 장면 ④ 의 '실제 데이터 -> 가상 악천후' 전환을 보여줄 수 있다 (없으면 그 단계만 건너뜀).
+- 공개 서버(docker-compose.prod.yml)는 가상 상황·즉시 안전 점검·trip 틱·가입을 관리 토큰으로만 연다: --admin-token 또는
+  환경변수 GURYONG_ADMIN_TOKEN (deploy/admin_token.sh 로 확인, docs/deploy/README.md §3). 토큰이 있으면 planner 점검 주기를 기다리지 않는다.
 """
 import argparse
 import json
@@ -83,7 +85,8 @@ class Demo:
     def __init__(self, a):
         self.a = a
         self.url = a.url.rstrip("/")
-        self.c = PlannerClient(self.url, timeout=60, session=Session(self.url, STATE_DIR / "demo_session.json"))
+        self.c = PlannerClient(self.url, timeout=60, session=Session(self.url, STATE_DIR / "demo_session.json"),
+                               admin_token=a.admin_token)
         self.state_file = Path(a.state) if a.state else STATE_DIR / "demo_state.json"
         self.p = Progress()
         self.places: dict[str, tuple[float, float]] = {}
@@ -789,6 +792,9 @@ def main() -> None:
     ap.add_argument("--password", default=os.environ.get("GURYONG_DEMO_PASSWORD", "guryong2026"),
                     help="데모 사용자 비밀번호 (없으면 이 값으로 가입)")
     ap.add_argument("--name", default="서윤", help="가입할 때 이름")
+    ap.add_argument("--admin-token", default=os.environ.get("GURYONG_ADMIN_TOKEN"),
+                    help="공개 서버의 관리 토큰 (가상 상황·즉시 안전 점검·trip 틱·가입). 기본: 환경변수 GURYONG_ADMIN_TOKEN. "
+                         "docs/deploy/README.md §3")
     ap.add_argument("--plan", choices=["chat", "prebuilt"], default="chat",
                     help="장면 ①: chat 대화로 일정 짜기 / prebuilt 미리 만든 계획 (기본 chat)")
     ap.add_argument("--answer", default=ANSWER, help="장면 ① 에서 Agent 가 조건을 되물을 때 보낼 답")

@@ -16,7 +16,7 @@ from pydantic import TypeAdapter
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.core.auth import CurrentUser
+from app.core.auth import AdminRequest, CurrentUser
 from app.core.config import settings as core_settings
 from app.db import get_db
 from app.planner import ops as engine
@@ -508,11 +508,12 @@ def mark_safety_alert_seen(plan_id: int, alert_id: int, db: DbSession, user_id: 
 
 
 @router.post("/safety/scan", response_model=SafetyScanReport)
-def scan_safety(watcher: Annotated[SafetyWatcher, Depends(get_watcher)],
+def scan_safety(watcher: Annotated[SafetyWatcher, Depends(get_watcher)], admin: AdminRequest,
                 force: Annotated[bool, Query(description="상황이 같아도 점검")] = False) -> SafetyScanReport:
-    """주기 점검을 지금 한 번 돌린다 (개발·시연용, AUTH_REQUIRED=false 일 때만). 모든 사용자의 계획이 대상이다."""
-    if core_settings.auth_required:
-        raise PlannerError(404, "not_available", "개발 모드(AUTH_REQUIRED=false)에서만 쓸 수 있습니다.")
+    """주기 점검을 지금 한 번 돌린다 (개발·시연용). 모든 사용자의 계획이 대상이다.
+    AUTH_REQUIRED=false 이거나, 관리 토큰(X-Admin-Token = ADMIN_TOKEN)이 맞을 때만 (공개 서버의 발표 진행 스크립트)."""
+    if core_settings.auth_required and not admin:
+        raise PlannerError(404, "not_available", "개발 모드(AUTH_REQUIRED=false)나 관리 토큰으로만 쓸 수 있습니다.")
     try:
         return watcher.tick(force=force)
     except SafetyUnavailable as e:

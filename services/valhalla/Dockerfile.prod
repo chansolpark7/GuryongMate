@@ -1,0 +1,6 @@
+# 길찾기 엔진 운영 이미지 (서버 배포용, docker-compose.prod.yml). 타일을 만들지 않고 띄우기만 한다.
+# 타일·설정은 노트북에서 만든 볼륨(guryongmate-valhalla)을 deploy/first_deploy.sh 가 옮긴다 (OSM 다운로드·빌드 없음).
+# 필요한 파일: /custom_files/valhalla.json, valhalla_tiles.tar, admins.sqlite
+FROM ghcr.io/valhalla/valhalla-scripted:3.9.0
+ENTRYPOINT []
+CMD ["sh", "-c", "exec valhalla_service /custom_files/valhalla.json ${server_threads:-2}"]

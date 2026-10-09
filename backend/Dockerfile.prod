@@ -1,0 +1,17 @@
+# 백엔드 운영 이미지 (서버 배포용, docker-compose.prod.yml). 빌드 컨텍스트는 저장소 루트:
+#   docker build -f backend/Dockerfile.prod -t guryongmate/backend .
+# 개발 이미지(backend/Dockerfile)와 같고, 코드를 마운트하지 않으므로 장소 스냅샷(data/places → /data/places)과
+# 테스트가 읽는 재생 파일(scripts → /scripts)을 이미지에 넣는다. --reload 없음.
+FROM python:3.12-slim
+
+WORKDIR /srv
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+
+COPY backend/requirements/ requirements/
+RUN for f in requirements/*.txt; do pip install --no-cache-dir -r "$f"; done
+
+COPY data/places/snapshot /data/places/snapshot
+COPY data/places/manual /data/places/manual
+COPY scripts /scripts
+COPY backend/ .
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

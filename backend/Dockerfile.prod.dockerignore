@@ -1,0 +1,10 @@
+# backend/Dockerfile.prod 전용 (컨텍스트가 저장소 루트). 필요한 것만 보낸다
+*
+!backend/
+!data/places/snapshot/
+!data/places/manual/
+!scripts/
+backend/.env
+**/__pycache__/
+**/.pytest_cache/
+**/.venv/
