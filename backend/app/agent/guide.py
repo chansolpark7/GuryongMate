@@ -65,6 +65,8 @@ PREP_SYSTEM = """너는 포항 구룡포 여행 앱 "구룡메이트"의 현장 
 PREP_WEB = ("근거가 부족하면(역사·배경·볼거리) 웹 검색을 한다 (최대 {n}번). 결과는 공식·언론 출처를 우선한다. "
             "검색 결과로 쓴 내용은 그 source_id 를 sources 에 넣는다 (내장 검색의 인용은 자동으로 출처가 된다).")
 PREP_NO_WEB = "웹 검색은 쓸 수 없다. 근거 자료에 있는 것만으로 쓴다."
+# 검색 결과를 알려 주는 내장 검색(Claude): 결과에 source_id 가 없고, JSON 답에는 인용이 붙지 않는다
+PREP_WEB_URLS = " 웹 검색 결과에는 source_id 가 없으니, 노트에 쓴 검색 결과는 그 URL 을 sources 에 넣는다."
 JSON_NOTE = "[시스템] 노트를 위 형식의 JSON 객체 하나로만 답하라. 설명이나 코드블록 없이 {로 시작해 }로 끝나야 한다."
 FINAL_NOTE = "[시스템] 더는 도구를 쓸 수 없다. 지금까지 찾은 자료로 노트를 위 형식의 JSON 객체 하나로만 답하라."
 WEB_DONE_NOTE = "[시스템] 이 장소의 웹 검색 한도({n}번)를 다 썼다. 더 검색하지 말고 지금까지 찾은 자료로 쓴다."
@@ -215,14 +217,15 @@ async def write_note(llm: LLMProvider, api: ServiceApi, toolbox: Toolbox, place_
     web_on = toolbox.web_limit > 0
     specs = [PASSAGES_SPEC] + (WEB_SPECS if web_on and not builtin else [])
     allowed = {s["function"]["name"] for s in specs}
-    system = PREP_SYSTEM.replace("<<WEB>>", PREP_WEB.format(n=toolbox.web_limit) if web_on else PREP_NO_WEB)
+    append_only = getattr(llm, "append_only", False)
+    web_rule = PREP_WEB.format(n=toolbox.web_limit) + (PREP_WEB_URLS if builtin and append_only else "")
+    system = PREP_SYSTEM.replace("<<WEB>>", web_rule if web_on else PREP_NO_WEB)
     user = (f"## 장소 (place_id {place_id})\n{json.dumps(_place_brief(place), ensure_ascii=False)}\n\n"
             f"## 사용자에 대해 기억하는 것\n{memory or '(아직 없음)'}\n\n"
             f"## 근거 자료 (search_passages 결과)\n{first.content}")
     messages: list[dict] = [{"role": "system", "content": system}, {"role": "user", "content": user}]
     # 기록 편집 금지 공급자(Claude, docs/agent/README.md §7.1): 도구 목록(웹 검색 도구와 그 상한 포함)은 장소 내내 같게 두고
     # (마지막 단계는 tool_choice none), 안내는 메시지 끝에 덧붙이기만 한다. 같은 장소 안의 응답은 원본 블록(native)으로 이어 간다
-    append_only = getattr(llm, "append_only", False)
     extra: list[str] = []  # 이번 호출에 붙이는 안내
     retried = False
     for step in range(max(1, settings.guide_max_steps)):
@@ -247,8 +250,10 @@ async def write_note(llm: LLMProvider, api: ServiceApi, toolbox: Toolbox, place_
                     text += t
                 case ToolCall():
                     calls.append(ev)
-                case WebSearchCall():
+                case WebSearchCall(results=found):
                     toolbox.web_used += 1
+                    for r in found:  # 검색 결과를 본 자료로 (URL 로 sources 에 고를 수 있다)
+                        toolbox.add_source("W", r["title"], r["url"])
                 case Citation(url=u, title=t):
                     toolbox.cite(u, t)
                 case Finish(usage=u):

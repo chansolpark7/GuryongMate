@@ -18,7 +18,7 @@
 import json
 import uuid
 from collections.abc import AsyncIterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import Protocol
 
@@ -48,6 +48,8 @@ class ToolCall:
 class WebSearchCall:
     """공급자 내장 웹 검색을 한 번 했다 (검색 수 상한·처리 단계 표시용)."""
     query: str
+    # 검색 결과 [{"url", "title"}] (공급자가 알려줄 때만, Claude). 본 자료로 등록해 노트 출처로 고를 수 있게 한다
+    results: list[dict] = field(default_factory=list)
 
 
 @dataclass

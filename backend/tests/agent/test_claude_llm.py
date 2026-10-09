@@ -229,7 +229,8 @@ def test_web_search_events_and_server_blocks_round_trip(caplog):
     p = provider(fake, "claude-haiku-5-5")
     events = run(p, web_search=2)
     assert [e for e in events if isinstance(e, WebSearchCall | Citation)] == [
-        WebSearchCall("구룡포 돌계단"), Citation("https://www.pohang.go.kr/x", "포항시")]
+        WebSearchCall("구룡포 돌계단", [{"url": "https://www.pohang.go.kr/x", "title": "포항시"}]),
+        Citation("https://www.pohang.go.kr/x", "포항시")]
     assert "max_uses_exceeded" in caplog.text
     fin = events[-1]
     assert [b["type"] for b in fin.native["content"][0]] == [
@@ -247,7 +248,7 @@ def test_pause_turn_with_server_search_resumes():
     fake = Fake((200, message(SEARCH_TURN[:1], stop="pause_turn")),
                 (200, message(SEARCH_TURN[1:2] + [{"type": "text", "parts": ["찾았어요"]}])))
     events = run(provider(fake), web_search=1)
-    assert WebSearchCall("구룡포 돌계단") in events  # 검색어는 앞 응답의 server_tool_use 에서
+    assert [e.query for e in events if isinstance(e, WebSearchCall)] == ["구룡포 돌계단"]  # 검색어는 앞 응답의 server_tool_use 에서
     second = fake.requests[1]["body"]["messages"]
     assert second[-1] == {"role": "assistant", "content": [
         {"type": "server_tool_use", "id": "srvtoolu_1", "name": "web_search", "input": {"query": "구룡포 돌계단"}}]}

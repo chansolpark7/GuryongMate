@@ -345,8 +345,10 @@ async def run_turn(session_id: str, plan_id: int, user_text: str, llm: LLMProvid
                             case ReasoningDelta(text=t):
                                 reasoning_len += len(t)
                                 yield _ev("thinking", delta=t)
-                            case WebSearchCall(query=q):
+                            case WebSearchCall(query=q, results=found):
                                 toolbox.web_used += 1
+                                for r in found:  # 결과를 본 자료로 (Claude: 인용이 없는 답에서도 출처로 고를 수 있게)
+                                    toolbox.add_source("W", r["title"], r["url"])
                                 for e in steps.start("research"):
                                     yield e
                                 yield steps.finish(True, f"웹 검색 · {q}"[:60] if q else "웹 검색")

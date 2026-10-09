@@ -217,3 +217,28 @@ def test_guide_prepare_final_step_keeps_tools_on_claude(client, claude, user, mo
     assert_append_only(claude.bodies)
     assert "tool_choice" not in first and final["tool_choice"] == {"type": "none"}  # 목록은 그대로, 쓰지 못하게만
     assert final["messages"][-1]["role"] == "system" and "더는 도구를 쓸 수 없다" in final["messages"][-1]["content"]
+
+
+def test_guide_prepare_search_result_url_as_source_on_claude(client, claude, user, monkeypatch):  # noqa: F811
+    """Claude 의 JSON 노트에는 인용이 붙지 않는다 -> 검색 결과 URL 을 sources 에 넣으면 본 자료라 출처가 된다 (지어낸 URL 은 버림)."""
+    monkeypatch.setattr(settings, "web_search_per_place", 1)
+    pid = new_plan(client, user, ("p-house",))
+    claude.script = [
+        [("search", "과메기 어원"), json.dumps(NOTE | {"sources": [CITE["url"], "https://made-up.example/"]},
+                                               ensure_ascii=False)]]
+    job = wait_job(client, user, pid, prepare(client, user, pid)["job_id"])
+    assert job["places"][0]["status"] == "ready" and job["places"][0]["web_searches"] == 1
+    assert [(s["url"], s["tier"]) for s in note(client, user, pid, "p-house")["sources"]] == [(CITE["url"], "official")]
+    assert "그 URL 을 sources 에 넣는다" in claude.bodies[0]["system"][0]["text"]  # Claude 에만 붙는 안내
+
+
+def test_openai_guide_prompt_unchanged(client, up, user, monkeypatch):  # noqa: F811
+    """검색 결과 URL 안내는 결과를 알려 주는 Claude 에만. 내장 검색 가짜(OpenAI 흉내)의 프롬프트에는 없다."""
+    from tests.agent.test_docent_tools import BuiltinLLM
+    monkeypatch.setattr(settings, "web_search_per_place", 1)
+    fake = BuiltinLLM()
+    app.dependency_overrides[get_llm] = lambda: fake
+    pid = new_plan(client, user, ("p-house",))
+    fake.script = [[json.dumps(NOTE | {"sources": ["P1"]}, ensure_ascii=False)]]
+    wait_job(client, user, pid, prepare(client, user, pid)["job_id"])
+    assert "그 URL 을 sources 에 넣는다" not in fake.calls[0][0]["content"]

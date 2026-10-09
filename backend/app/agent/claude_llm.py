@@ -164,7 +164,8 @@ class ClaudeProvider:
             queries[block.id] = str((block.input or {}).get("query") or "")
         elif block.type == "web_search_tool_result":
             if isinstance(block.content, list):
-                return WebSearchCall(queries.get(block.tool_use_id, ""))
+                return WebSearchCall(queries.get(block.tool_use_id, ""),
+                                     [{"url": r.url, "title": r.title or ""} for r in block.content if r.url])
             log.warning("%s 웹 검색 오류: %s", self.name, getattr(block.content, "error_code", block.content))
         return None
 
