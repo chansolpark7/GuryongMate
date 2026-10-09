@@ -397,6 +397,10 @@ def test_scan_endpoint(client, sc, watcher, monkeypatch):
         sc.down = False
         monkeypatch.setattr(core_settings, "auth_required", True)
         err(client.post("/planner/safety/scan"), 404, "not_available")
+        # 공개 서버: 관리 토큰이 맞으면 연다 (발표 진행 스크립트)
+        monkeypatch.setattr(core_settings, "admin_token", "t0ken")
+        err(client.post("/planner/safety/scan", headers={"X-Admin-Token": "wrong"}), 404, "not_available")
+        assert "ran" in ok(client.post("/planner/safety/scan", headers={"X-Admin-Token": "t0ken"}))
     finally:
         app.dependency_overrides.pop(get_watcher, None)
 
