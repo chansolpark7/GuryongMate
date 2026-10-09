@@ -194,10 +194,10 @@ docent 는 **저장·검색·외부 요청 대행**만 한다 (LLM 없음, 결�
 
 | 메서드 | 경로 | 설명 |
 |---|---|---|
-| GET | `/docent/memory?plan_id=` | 메모리 전체 `{items, memory_version}`. user 범위 + (plan_id 가 있으면) 그 plan 범위, 최신순 |
+| GET | `/docent/memory?plan_id=` | 메모리 전체 `{items, memory_version, style_length}`. user 범위 + (plan_id 가 있으면) 그 plan 범위, 최신순 |
 | POST | `/docent/memory` | `{scope, plan_id?, category, text, source}` 추가 → 201. 같은 범위·분류에 **글자가 같은** 항목이 있으면 새로 만들지 않고 source·시각만 갱신 → 200. 같은 뜻의 다른 문장은 agent 가 id 로 PATCH |
 | PATCH·DELETE | `/docent/memory/{id}` | 수정(`category`·`text`·`source` 중 일부)·삭제 → 204 (앱 편집, agent `forget`) |
-| GET | `/docent/memory/summary?plan_id=` | 프롬프트용 요약 `{text, count, memory_version}` |
+| GET | `/docent/memory/summary?plan_id=` | 프롬프트용 요약 `{text, count, memory_version, style_length}` |
 | GET | `/docent/search?q=&limit=` | 외부 검색 (§2.1~2.2) |
 | GET | `/docent/page?url=` | 페이지 본문 `{url, title, text, truncated, tier, fetched_at, cached}` (§2.3) |
 | GET | `/docent/plans/{plan_id}/notes` | 노트 목록 `[{plan_id, place_id, status, memory_version, prepared_at, updated_at}]` |
@@ -217,10 +217,14 @@ docent 는 **저장·검색·외부 요청 대행**만 한다 (LLM 없음, 결�
   - 관심사: 사진; 역사·근대 건축
   - 동행자·제약: 계단은 피하고 싶음; (이번 여행) 어머니(60대) 동행
   ```
+- `style_length`: 해설 길이 선호 `short` | `long` | `null` (앱 16 의 [짧게]/[자세히] 강조, app gaps b19). 보이는 `style` 항목을 최신부터 보며
+  문구에 짧·핵심·간단·요약이 있으면 `short`, 자세·길게·깊이·상세가 있으면 `long` (둘 다 있거나 둘 다 없으면 다음 항목). agent 의 `remember` 는
+  길이 선호를 저장할 때 "짧게"·"자세히" 같은 말을 문구에 넣는다.
 
 ### 5.2 가이드 노트 저장 규칙 (PUT)
 - 본문: §3.1 GuideNote 의 `short`·`long`·`for_you`·`highlights`·`companion_tips`·`cautions`·`qa`·`sources` + `status`·`memory_version`·`model`·`error`(failed 이유).
 - `status=ready` 는 `short`·`long` 과 **출처 하나 이상**이 있어야 한다 (없으면 422. 출처가 없으면 `failed` 로 저장한다).
+- 출처마다 `tier` 는 **보낸 값을 무시하고** docent 가 `url` 의 도메인 규칙(§2.2, `tiers.py`)으로 다시 정해 저장한다 (LLM 이 붙인 등급을 믿지 않는다). `url` 이 없으면 `unknown`.
 - 본문을 비워 보낸 `pending`·`preparing`·`failed` 는 **이전 본문을 남긴다** (다시 만드는 중이거나 실패해도 현장에서 이전 노트를 쓸 수 있게).
 - `prepared_at` 은 서버가 `ready` 로 저장한 시각.
 

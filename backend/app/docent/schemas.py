@@ -50,15 +50,21 @@ class MemoryItem(BaseModel):
     updated_at: datetime
 
 
+StyleLength = Literal["short", "long"]
+STYLE_LENGTH_DESC = "해설 길이 선호. 최신 style 항목 문구로 정한다 (짧·핵심·간단·요약 -> short, 자세·길게·깊이·상세 -> long)"
+
+
 class MemoryList(BaseModel):
     items: list[MemoryItem]
     memory_version: int
+    style_length: StyleLength | None = Field(None, description=STYLE_LENGTH_DESC)
 
 
 class MemorySummary(BaseModel):
     text: str = Field(description="시스템 프롬프트에 넣을 요약 (분류별 몇 줄). 메모리가 없으면 빈 문자열")
     count: int
     memory_version: int
+    style_length: StyleLength | None = Field(None, description=STYLE_LENGTH_DESC)
 
 
 # ---------- 외부 검색·페이지 (§2) ----------
@@ -95,6 +101,8 @@ class QA(BaseModel):
 
 
 class NoteSource(BaseModel):
+    """tier 는 저장할 때 docent 가 url 로 다시 정한다 (보낸 값은 무시)."""
+
     title: Annotated[str, StringConstraints(strip_whitespace=True, max_length=300)] = ""
     url: Annotated[str, StringConstraints(strip_whitespace=True, max_length=2000)] = ""
     tier: Tier = "unknown"
