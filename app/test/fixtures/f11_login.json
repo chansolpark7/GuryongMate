@@ -1,0 +1,172 @@
+{
+ "flow": "F11",
+ "title": "로그인 (아이디)",
+ "screens": "01·34·35",
+ "recorded_at": "2026-10-09T23:37:37+09:00",
+ "backend": {
+  "agent_provider": "scripted:scripts",
+  "safety_source": "mock",
+  "git": "6a7d484"
+ },
+ "exchanges": [
+  {
+   "name": "signup_taken",
+   "method": "POST",
+   "route": "/auth/signup",
+   "path": "/auth/signup",
+   "query": {},
+   "body": {
+    "login_id": "seoyun-demo",
+    "password": "guryong2026"
+   },
+   "status": 409,
+   "elapsed_ms": 8,
+   "response": {
+    "detail": {
+     "code": "login_id_taken",
+     "message": "이미 사용 중인 아이디입니다."
+    }
+   }
+  },
+  {
+   "name": "signup_weak_password",
+   "method": "POST",
+   "route": "/auth/signup",
+   "path": "/auth/signup",
+   "query": {},
+   "body": {
+    "login_id": "seoyun-new",
+    "password": "short"
+   },
+   "status": 422,
+   "elapsed_ms": 3,
+   "response": {
+    "detail": {
+     "code": "invalid_request",
+     "message": "요청 형식이 잘못됐습니다: body.password — String should have at least 8 characters",
+     "errors": [
+      {
+       "loc": [
+        "body",
+        "password"
+       ],
+       "msg": "String should have at least 8 characters"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "name": "login_wrong_password",
+   "method": "POST",
+   "route": "/auth/login",
+   "path": "/auth/login",
+   "query": {},
+   "body": {
+    "login_id": "seoyun-demo",
+    "password": "wrong-pass1"
+   },
+   "status": 401,
+   "elapsed_ms": 113,
+   "response": {
+    "detail": {
+     "code": "invalid_credentials",
+     "message": "아이디 또는 비밀번호가 맞지 않습니다."
+    }
+   }
+  },
+  {
+   "name": "login",
+   "method": "POST",
+   "route": "/auth/login",
+   "path": "/auth/login",
+   "query": {},
+   "body": {
+    "login_id": "seoyun-demo",
+    "password": "guryong2026"
+   },
+   "status": 200,
+   "elapsed_ms": 121,
+   "response": {
+    "access_token": "<access_token>",
+    "token_type": "bearer",
+    "expires_in": 3600,
+    "refresh_token": "<refresh_token>",
+    "refresh_expires_in": 2592000,
+    "user": {
+     "id": "74bb7f62aa554ec1861a8a24288ff267",
+     "provider": "password",
+     "login_id": "seoyun-demo",
+     "email": null,
+     "display_name": "서윤",
+     "created_at": "2026-10-09T14:37:37.302985Z"
+    },
+    "created": false
+   }
+  },
+  {
+   "name": "me",
+   "method": "GET",
+   "route": "/users/me",
+   "path": "/users/me",
+   "query": {},
+   "body": null,
+   "status": 200,
+   "elapsed_ms": 5,
+   "response": {
+    "id": "74bb7f62aa554ec1861a8a24288ff267",
+    "provider": "password",
+    "login_id": "seoyun-demo",
+    "email": null,
+    "display_name": "서윤",
+    "created_at": "2026-10-09T14:37:37.302985Z"
+   }
+  },
+  {
+   "name": "refresh",
+   "method": "POST",
+   "route": "/auth/refresh",
+   "path": "/auth/refresh",
+   "query": {},
+   "body": {
+    "refresh_token": "<refresh_token>"
+   },
+   "status": 200,
+   "elapsed_ms": 11,
+   "response": {
+    "access_token": "<access_token>",
+    "token_type": "bearer",
+    "expires_in": 3600,
+    "refresh_token": "<refresh_token>",
+    "refresh_expires_in": 2592000,
+    "user": {
+     "id": "74bb7f62aa554ec1861a8a24288ff267",
+     "provider": "password",
+     "login_id": "seoyun-demo",
+     "email": null,
+     "display_name": "서윤",
+     "created_at": "2026-10-09T14:37:37.302985Z"
+    },
+    "created": false
+   }
+  },
+  {
+   "name": "refresh_reused",
+   "method": "POST",
+   "route": "/auth/refresh",
+   "path": "/auth/refresh",
+   "query": {},
+   "body": {
+    "refresh_token": "<refresh_token>"
+   },
+   "status": 401,
+   "elapsed_ms": 8,
+   "response": {
+    "detail": {
+     "code": "refresh_token_reused",
+     "message": "보안을 위해 모든 기기에서 로그아웃됐습니다. 다시 로그인해 주세요."
+    }
+   }
+  }
+ ]
+}

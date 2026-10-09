@@ -1,0 +1,216 @@
+{
+ "flow": "F3",
+ "title": "여행 시작 (정상·다른 날·실수)",
+ "screens": "11·12·14·30",
+ "recorded_at": "2026-10-09T23:38:01+09:00",
+ "backend": {
+  "agent_provider": "scripted:scripts",
+  "safety_source": "mock",
+  "git": "6a7d484"
+ },
+ "exchanges": [
+  {
+   "name": "state_before",
+   "method": "GET",
+   "route": "/trip/plans/{plan_id}/state",
+   "path": "/trip/plans/241/state",
+   "query": {},
+   "body": null,
+   "status": 200,
+   "elapsed_ms": 19,
+   "response": {
+    "plan_id": 241,
+    "active": false,
+    "day": null,
+    "date": null,
+    "started_at": null,
+    "ended_at": null,
+    "ended_reason": null,
+    "now": "2026-10-10T12:20:01.233891+09:00",
+    "clock": "sim",
+    "location": null,
+    "current": null,
+    "next": null,
+    "delay_minutes": null,
+    "session_id": null
+   }
+  },
+  {
+   "name": "start_not_trip_day",
+   "method": "POST",
+   "route": "/trip/plans/{plan_id}/start",
+   "path": "/trip/plans/242/start",
+   "query": {},
+   "body": {},
+   "status": 409,
+   "elapsed_ms": 14,
+   "response": {
+    "detail": {
+     "code": "not_trip_day",
+     "message": "오늘(2026-10-10)은 여행 기간(2026-10-17 ~ 2026-10-17)이 아닙니다.",
+     "start_date": "2026-10-17",
+     "end_date": "2026-10-17",
+     "today": "2026-10-10"
+    }
+   }
+  },
+  {
+   "name": "start",
+   "method": "POST",
+   "route": "/trip/plans/{plan_id}/start",
+   "path": "/trip/plans/241/start",
+   "query": {},
+   "body": {
+    "session_id": "5b9583d4c6a34b8d9f4a2da8b0a2b883"
+   },
+   "status": 200,
+   "elapsed_ms": 25,
+   "response": {
+    "plan_id": 241,
+    "active": true,
+    "day": 1,
+    "date": "2026-10-10",
+    "started_at": "2026-10-10T12:20:01.261640+09:00",
+    "ended_at": null,
+    "ended_reason": null,
+    "now": "2026-10-10T12:20:01.272002+09:00",
+    "clock": "sim",
+    "location": null,
+    "current": {
+     "item_id": null,
+     "state": "idle",
+     "since": null
+    },
+    "next": null,
+    "delay_minutes": null,
+    "session_id": "5b9583d4c6a34b8d9f4a2da8b0a2b883"
+   }
+  },
+  {
+   "name": "start_again_same_day",
+   "method": "POST",
+   "route": "/trip/plans/{plan_id}/start",
+   "path": "/trip/plans/241/start",
+   "query": {},
+   "body": {
+    "session_id": "5b9583d4c6a34b8d9f4a2da8b0a2b883"
+   },
+   "status": 200,
+   "elapsed_ms": 14,
+   "response": {
+    "plan_id": 241,
+    "active": true,
+    "day": 1,
+    "date": "2026-10-10",
+    "started_at": "2026-10-10T12:20:01.261640+09:00",
+    "ended_at": null,
+    "ended_reason": null,
+    "now": "2026-10-10T12:20:01.285930+09:00",
+    "clock": "sim",
+    "location": null,
+    "current": {
+     "item_id": null,
+     "state": "idle",
+     "since": null
+    },
+    "next": null,
+    "delay_minutes": null,
+    "session_id": "5b9583d4c6a34b8d9f4a2da8b0a2b883"
+   }
+  },
+  {
+   "name": "events_day_started",
+   "method": "GET",
+   "route": "/trip/plans/{plan_id}/events",
+   "path": "/trip/plans/241/events",
+   "query": {
+    "after": 0,
+    "limit": 50
+   },
+   "body": null,
+   "status": 200,
+   "elapsed_ms": 7,
+   "response": [
+    {
+     "id": 343,
+     "plan_id": 241,
+     "day": 1,
+     "type": "day_started",
+     "level": 0,
+     "severity": "info",
+     "created_at": "2026-10-09T14:38:01.365633Z",
+     "now": "2026-10-10T12:20:01.261640+09:00",
+     "item_ids": [],
+     "message": "1일차 여행을 시작했어요.",
+     "payload": {},
+     "status": "delivered",
+     "agent": null,
+     "card": null,
+     "seen_at": null,
+     "attempts": 0,
+     "last_error": null
+    }
+   ]
+  },
+  {
+   "name": "end_by_mistake",
+   "method": "POST",
+   "route": "/trip/plans/{plan_id}/end",
+   "path": "/trip/plans/241/end",
+   "query": {},
+   "body": null,
+   "status": 200,
+   "elapsed_ms": 11,
+   "response": {
+    "plan_id": 241,
+    "active": false,
+    "day": 1,
+    "date": "2026-10-10",
+    "started_at": "2026-10-10T12:20:01.261640+09:00",
+    "ended_at": "2026-10-10T12:20:01.298890+09:00",
+    "ended_reason": "user",
+    "now": "2026-10-10T12:20:01.303806+09:00",
+    "clock": "sim",
+    "location": null,
+    "current": {
+     "item_id": null,
+     "state": "idle",
+     "since": null
+    },
+    "next": null,
+    "delay_minutes": null,
+    "session_id": "5b9583d4c6a34b8d9f4a2da8b0a2b883"
+   }
+  },
+  {
+   "name": "state_after_end",
+   "method": "GET",
+   "route": "/trip/plans/{plan_id}/state",
+   "path": "/trip/plans/241/state",
+   "query": {},
+   "body": null,
+   "status": 200,
+   "elapsed_ms": 6,
+   "response": {
+    "plan_id": 241,
+    "active": false,
+    "day": 1,
+    "date": "2026-10-10",
+    "started_at": "2026-10-10T12:20:01.261640+09:00",
+    "ended_at": "2026-10-10T12:20:01.298890+09:00",
+    "ended_reason": "user",
+    "now": "2026-10-10T12:20:01.309829+09:00",
+    "clock": "sim",
+    "location": null,
+    "current": {
+     "item_id": null,
+     "state": "idle",
+     "since": null
+    },
+    "next": null,
+    "delay_minutes": null,
+    "session_id": "5b9583d4c6a34b8d9f4a2da8b0a2b883"
+   }
+  }
+ ]
+}

@@ -27,15 +27,34 @@ docker compose run --rm places python -m app.places.ingest embed           # 임
 docker compose run --rm places pytest tests/places
 ```
 
-- `load`/`fetch`는 places 테이블을 **새로 만든다**. 임베딩도 지워지므로 `--embed`를 붙인다.
+- `load`/`fetch`는 places 테이블을 **새로 만든다**. 임베딩도 지워지므로 `--embed`를 붙인다. 둘 다 아래 **직접 정의한 장소**를 함께 넣는다.
 - 원본 응답은 `data/places/raw/`에 캐시하고 커밋하지 않는다. `data/places/snapshot/*.json`은 정규화된 결과이며 커밋한다.
+
+## 직접 정의한 장소 (관광공사 데이터에 없는 곳)
+
+데모·안전 판단에 필요한데 관광공사 데이터에 없는 장소(방파제 등)는 `data/places/manual/*.json`에 직접 적는다. 스냅샷(`snapshot/`)과 따로 두고 커밋한다.
+
+| place_id | 이름 | 좌표 | 종류 | 왜 |
+|---|---|---|---|---|
+| `poi-gr-breakwater-north` | 구룡포 북방파제 | 35.988078, 129.559279 | 관광지 (야외) | 장면 ④ — 풍랑 특보·방파제 CCTV 로 '위험'이 나오는 곳 (docs/app/README.md §6.1) |
+| `poi-gr-breakwater-south` | 구룡포 남방파제 | 35.984879, 129.559033 | 관광지 (야외) | 같음 |
+
+- 형식: 장소 목록. 필수 `id`(관광공사와 겹치지 않게 `kto-`가 아닌 접두사, 예: `poi-gr-…`), `title`, `lat`, `lng`, `content_type`(관광공사 종류 이름 중 하나).
+  선택 `addr`·`area`·`overview`·`open_hours`·`rest_date`·`fee`·`parking`·`menu`·`category_names`·`tags`, 기록용 `note`(적재하지 않음).
+  적재하면 `source: "manual"`, 소개문(`overview`)은 의미 검색·근거 조각에 쓰이도록 임베딩한다.
+- 방파제 좌표는 safety 의 방파제 기준선(`backend/app/safety/geo.py`, 60m 버퍼) 위의 점이다. 그래야 safety 가 '방파제' 성질(바람·파고·풍랑 특보)로 판단한다.
+  종류가 관광지라 실내로 추정되지 않는다 (docs/safety/README.md §3). 테스트 `tests/places/test_manual.py` 가 확인한다.
+- 소개문은 관광공사 자료(구룡포항 소개문의 방파제 길이·1923년 축조)와 safety 의 CCTV 정보를 바탕으로 우리가 썼다.
+  근거 조각의 `source` 가 `manual` 이라 Agent·가이드 노트는 출처를 관광공사가 아니라 "구룡메이트 장소 정보"로 적는다.
+- 반영: `docker compose run --rm places python -m app.places.ingest manual` (수동 장소만 넣고 그 조각만 임베딩, 다른 데이터는 그대로).
+  `places-init`(compose up)은 DB 에 수동 장소가 없으면 그것만 넣는다. `load`·`fetch`는 스냅샷과 함께 넣는다 (같은 id 면 수동 장소가 이긴다).
 
 ## API
 
 | 메서드 | 경로 | 설명 |
 |---|---|---|
 | GET | `/places` | 장소 검색 (아래 참고) |
-| GET | `/places/passages?q=` | **RAG용 근거 조각** 검색. 소개문·오디오 가이드 대본 조각을 의미 유사도 순으로 반환. `place_id`, `kind`(place/story), `lat`+`lng`+`radius_m`로 범위를 좁힐 수 있음 |
+| GET | `/places/passages?q=` | **RAG용 근거 조각** 검색. 소개문·오디오 가이드 대본 조각을 의미 유사도 순으로 반환. `place_id`, `kind`(place/story), `lat`+`lng`+`radius_m`로 범위를 좁힐 수 있음. 조각마다 `source`: `kto`(관광공사) / `manual`(직접 정의한 장소의 소개문) |
 | GET | `/places/tags` | 태그 목록과 개수 |
 | GET | `/places/{place_id}` | 상세 (운영시간 `open_hours`, 휴무 `rest_date`, 메뉴, 이미지, 반복정보, 원본 `intro`) |
 | GET | `/places/{place_id}/stories` | 해당 장소의 오디오 가이드 이야기 |
@@ -52,7 +71,7 @@ docker compose run --rm places pytest tests/places
 | `hybrid` | keyword 순위와 semantic 순위를 RRF로 결합. 정확한 이름도 맞히고 뜻도 반영 | `과메기` → 과메기 음식점, 과메기문화관, 구룡포항 |
 
 - semantic의 `score`는 e5 모델 특성상 0.80~0.85 사이에 몰려 있다. 절대값보다 **순위**로 쓴다.
-- `place_id` 형식은 `kto-{contentid}`이다. **다른 모듈은 이 ID로만 장소를 참조한다.**
+- `place_id` 형식은 `kto-{contentid}`이다 (직접 정의한 장소는 `poi-…`, 위 절). **다른 모듈은 이 ID로만 장소를 참조한다.**
 
 ## 임베딩 (로컬, embedding 컨테이너)
 

@@ -1,6 +1,6 @@
 {
   "name": "장면 ③ 지연 대응",
-  "description": "일본인 가옥거리에서 30분 더 머묾. 처음 1시간은 예정대로라 알리지 않고, 카페 종료가 18:00 을 넘게 되면(day_overflow·end_before) delay(단계 3, Agent 선제 턴)가 한 번 나온다. 계획: 일본인 가옥거리 12:30 → 구룡포항(점심) 13:40 → 과메기문화관 14:47 → 구룡포해수욕장 16:01 → 카페파도 16:54(차량) → 17:39 종료, 규칙 end_before 18:00 (hard). docs/app/README.md §6.1",
+  "description": "일본인 가옥거리에서 30분 더 머묾. 처음 1시간은 예정대로라 알리지 않고, 카페 종료가 18:00 을 넘게 되면(day_overflow·end_before) delay(단계 3, Agent 선제 턴)가 한 번 나온다. 계획: 일본인 가옥거리 12:30 → 구룡포항(점심) 13:40 → 과메기문화관 14:47 → 북방파제 16:00 → 카페파도 16:53(차량) → 17:38 종료, 규칙 end_before 18:00 (hard). docs/app/README.md §6.1",
   "plan_fixture": "seoyun_mom_1010",
   "plan": {
     "title": "엄마랑 구룡포",
@@ -21,7 +21,7 @@
         "stay_minutes": 60
       },
       {
-        "place_id": "kto-127214",
+        "place_id": "poi-gr-breakwater-north",
         "stay_minutes": 40
       },
       {

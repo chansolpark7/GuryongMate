@@ -42,6 +42,8 @@ def replay(env, name: str) -> tuple[dict, list[dict]]:
                 "lat": a.lat, "lng": a.lng, "accuracy": 10, "recorded_at": a.at.isoformat(), "source": "replay"}))
         elif a.kind == "skip":
             env.planner.skip(env.plan_id, a.data["place_id"])
+        elif a.kind == "accept":  # 가짜 agent 는 제안을 만들지 않으므로 기대하는 변경을 가짜 planner 에 그대로
+            env.planner.replace(env.plan_id, a.data["remove"], a.data["add"])
         elif a.kind == "tick":
             ok(env.c.post(env.url("/tick"), headers=H))
         elif a.kind == "expect":
@@ -76,15 +78,19 @@ def test_scene4_safety(env):
     _, events = replay(env, "scene4_safety.json")
     raised = [e for e in events if e["type"] == "safety_raised"]
     assert len(raised) == 1 and raised[0]["status"] == "delivered" and raised[0]["now"][11:16] == "15:20"
-    assert raised[0]["payload"]["changes"][0]["item"]["place_id"] == "kto-127214"  # 구룡포해수욕장 주의
+    change = raised[0]["payload"]["changes"][0]
+    assert change["item"]["place_id"] == "poi-gr-breakwater-north" and change["to_risk"] == "danger"  # 북방파제 위험
     hazard = next(e for e in events if e["type"] == "near_hazard")
     assert hazard["payload"]["zones"][0]["id"] == "flood_4" and hazard["level"] == 1
     assert hazard["now"] > raised[0]["now"]  # 카페로 가는 길
     # 선제 턴은 안전 경고 하나뿐 (near_hazard 는 LLM 없이 고정 문구)
     assert [r[1]["type"] for r in env.agent.received] == ["safety_raised"]
     assert env.agent.received[0][2]["current"]["state"] == "visiting"  # 과메기문화관에 있을 때
+    # 제안 승인(북방파제 -> 근대문화역사관) 뒤 역사관에 순서대로 도착하고 카페로
+    museum = next(e for e in events if e["type"] == "arrived" and e["payload"]["place_id"] == "kto-2603493")
     cafe = next(e for e in events if e["type"] == "arrived" and e["payload"]["place_id"] == "kto-2834344")
-    assert cafe["payload"]["out_of_order"] is False  # 해수욕장은 일정에서 뺐다 (skip)
+    assert museum["payload"]["out_of_order"] is False and cafe["payload"]["out_of_order"] is False
+    assert museum["now"] < hazard["now"] < cafe["now"]
     assert "delay" not in [e["type"] for e in events]
 
 

@@ -24,7 +24,7 @@ Flutter 앱 (예정) ──► gateway :8000 (Caddy)
                      valhalla     길찾기 엔진, OSM 포항 데이터 (내부 전용)
                      places-init  시작 시 장소 데이터·임베딩 자동 적재
                      db           PostgreSQL + pgvector
-LLM: 호스트의 Ollama 또는 OpenAI API (Docker 밖)
+LLM: Claude API (운영, Haiku 5.5) · OpenAI · 호스트 Ollama — Docker 밖. 키 없이 개발·데모는 각본 LLM(AGENT_PROVIDER=scripted)
 ```
 
 - 백엔드는 FastAPI 프로젝트 하나(`backend/`)를 서비스마다 컨테이너로 나눠 띄운다(`SERVICE` 환경변수).
@@ -88,7 +88,7 @@ curl http://localhost:8000/health
 | `SAFETY_SOURCE=mock` | — | 키 없이 safety를 고정 데이터로 테스트 (`SAFETY_MOCK_SCENARIO=calm\|storm`) |
 | `DATA_GO_KR_SERVICE_KEY` | 관광지 재수집, safety의 기상·조위 예보 불가 | [data.go.kr](https://www.data.go.kr)에서 서비스별 활용신청 후 발급 |
 | `DT_SERVICE_KEY` | safety의 디지털 트윈 실측 불가 | [E-UM 디지털트윈 포항](https://pohang-eum.kr)에서 발급 |
-| `AGENT_PROVIDER`, `AGENT_LOCAL_*` / `LLM_API_KEY` | Agent 채팅 불가 | 로컬 Ollama 또는 OpenAI ([docs/agent/README.md §7](docs/agent/README.md)) |
+| `AGENT_PROVIDER`, `AGENT_CLAUDE_API_KEY` | Agent 채팅 불가 (`llm_unavailable`). 키 없이는 `AGENT_PROVIDER=scripted`(각본 LLM, 데모 문장만) | 운영 기본 Claude Haiku 5.5. OpenAI·로컬 Ollama 도 가능 ([docs/agent/README.md §7](docs/agent/README.md)) |
 | `ACCOUNT_GOOGLE_CLIENT_IDS` | Google 로그인 불가 | Google OAuth 클라이언트 ID |
 
 전체 변수와 설명은 [backend/.env.example](backend/.env.example)에 있다.

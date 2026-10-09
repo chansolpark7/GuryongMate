@@ -30,6 +30,8 @@ MODE_DESC = ("직전 장소에서 여기까지 오는 이동 수단 (walk 도보
 MEMORY_CATEGORIES = ["interest", "style", "companion", "food", "avoid", "known", "feedback"]
 # 근거 조각(관광공사 소개문·오디오 가이드 대본)은 places 가 한국관광공사 TourAPI 에서 받은 자료다. 노트 출처에 쓸 주소
 KTO_SOURCE_URL = "https://api.visitkorea.or.kr/"
+# places 에 직접 정의한 장소(관광공사 데이터가 아님, place_id 가 kto- 가 아님. docs/places/README.md)의 소개문 출처 이름. 주소 없음
+MANUAL_SOURCE = "구룡메이트 장소 정보"
 MAX_PAGE_CHARS = 4000  # read_page 결과를 LLM 에 줄 때의 길이
 
 
@@ -669,14 +671,19 @@ class Toolbox:
         rows = await self.api.search_passages(query, place_id or None, max(1, min(int(limit), 10)))
         items = []
         for r in rows:
-            label = "한국관광공사 " + ("소개" if r["kind"] == "place" else "오디오 가이드")
-            sid = self.add_source("P", f"{label} · {r['title']}", KTO_SOURCE_URL)
+            manual = r.get("source") == "manual"
+            if manual:  # 직접 정의한 장소 (방파제 등): 관광공사 자료가 아니다
+                sid = self.add_source("P", f"{MANUAL_SOURCE} · {r['title']}", "")
+            else:
+                label = "한국관광공사 " + ("소개" if r["kind"] == "place" else "오디오 가이드")
+                sid = self.add_source("P", f"{label} · {r['title']}", KTO_SOURCE_URL)
             items.append({"source_id": sid, "title": r["title"], "kind": "소개문" if r["kind"] == "place" else "오디오 가이드",
-                          "place_id": r["place_id"], "text": r["text"]})
+                          "place_id": r["place_id"], "text": r["text"], "origin": "구룡메이트" if manual else "한국관광공사"})
         if not items:
             return ToolOutcome(True, _dump({"items": [], "hint": "근거 자료가 없다. 다른 질문으로 찾거나, 모른다고 말한다."}),
                                "결과 없음")
-        return ToolOutcome(True, _dump({"items": items, "note": "공식 자료(한국관광공사). 요약해서 새로 말한다."}),
+        return ToolOutcome(True, _dump({"items": items, "note": "origin 한국관광공사는 공식 자료, 구룡메이트는 앱이 직접 정리한 "
+                                                                "장소 정보다. 요약해서 새로 말한다."}),
                            f"근거 {len(items)}개")
 
     async def _t_get_guide_note(self, place_id: str) -> ToolOutcome:

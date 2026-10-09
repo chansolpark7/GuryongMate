@@ -19,7 +19,8 @@ Flutter 앱 ──► gateway (:API_PORT, 기본 8000)   Caddy. URL 앞부분으
                valhalla    길찾기 엔진, OSM 포항 데이터 (내부 전용, routing 이 호출)
                places-init 시작 시 장소 데이터·임베딩이 비어 있으면 채우고 종료
                db          Postgres + pgvector (모든 서비스 공용, 테이블 접두사로 구분)
-LLM: 호스트의 Ollama(host.docker.internal:11434) 또는 OpenAI API — Docker 밖
+LLM: Claude API(운영 기본, Haiku 5.5) · OpenAI · 호스트 Ollama(host.docker.internal:11434) — Docker 밖.
+     개발·테스트·앱 fixture 는 각본 LLM(AGENT_PROVIDER=scripted, 호출 없음)
 ```
 
 | 서비스 | 담당 | 코드 | 소유 경로 | DB 테이블 | 문서 |
@@ -63,6 +64,8 @@ LLM: 호스트의 Ollama(host.docker.internal:11434) 또는 OpenAI API — Docke
 - **장소 식별자**: 장소는 `place_id`(문자열, 예: `kto-126128`)로만 참조한다. 상세는 `GET /places/{place_id}`.
 - **다른 서비스의 테이블을 직접 읽거나 쓰지 않는다.** DB는 하나지만 테이블 접두사가 소유 경계다.
 - **API 를 추가·변경하면 같은 브랜치에서 CLI 명령과 `docs/planner/README.md` §11 CLI 목록도 갱신한다.** (`scripts/planner/`, trip 은 `scripts/trip/`)
+- **앱이 받는 응답(API·SSE·trip 이벤트·데모 데이터·각본)이 바뀌면 같은 브랜치에서 앱 fixture 를 다시 녹화한다**: 각본 LLM 스택(`AGENT_PROVIDER=scripted`, `SAFETY_SOURCE=mock`)에서
+  `python scripts/app/record_fixtures.py --url http://127.0.0.1:$API_PORT` → `app/test/fixtures/` 커밋 (형식: `docs/app/fixtures.md`).
 
 ## 3. 인증
 

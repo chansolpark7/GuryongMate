@@ -360,13 +360,14 @@ python scripts/planner/cli.py trip end 7      # 재생이 끝나도 여행일은
 ```
 
 **재생 파일** (`scripts/trip/scenes/*.json`): 데모 장면과 테스트를 같은 파일로 만든다. 펼침(시간순 동작 목록)은 `scripts/trip/scene.py` 하나를 CLI 와 pytest 가 같이 쓴다.
-세 파일 모두 데모 데이터(`docs/app/README.md` §6.1)의 계획이다: 가옥거리 12:30 → 구룡포항 13:40 → 과메기문화관 14:47 → 구룡포해수욕장 16:01 → 카페파도 16:54(차량) → 17:39 종료, `end_before 18:00`.
+세 파일 모두 데모 데이터(`docs/app/README.md` §6.1)의 계획이다: 가옥거리 12:30 → 구룡포항 13:40 → 과메기문화관 14:47 → 북방파제 16:00 → 카페파도 16:53(차량) → 17:38 종료, `end_before 18:00`.
+북방파제(`poi-gr-breakwater-north`)는 places 에 직접 정의한 장소다 (docs/places/README.md "직접 정의한 장소").
 
 | 파일 | 장면 | 기대 이벤트 |
 |---|---|---|
 | `scene2_arrival.json` | ② 12:30 가옥거리 도착 | `arrived`(단계 2) + 해설 카드(`card.kind=docent`), 지연 없음 |
 | `scene3_delay.json` | ③ 가옥거리에서 30분 더 머묾 | 처음 60분은 `delay` 없음 → 카페 종료가 18:00 을 넘으면 `delay`(단계 3) 한 번 → 구룡포항 도착 |
-| `scene4_safety.json` | ④ 15:20 과메기문화관에서 storm | `safety_raised`(단계 3) → 15:47 해수욕장을 일정에서 빼고 차로 카페로 → 구룡포수협 주변 `near_hazard`(단계 1) → 카페 도착 |
+| `scene4_safety.json` | ④ 15:20 과메기문화관에서 storm | `safety_raised`(단계 3, 북방파제 위험) → 15:25 선제 제안 승인(북방파제 → 근대문화역사관) → 역사관 도착 → 차로 카페 가는 길에 구룡포수협 주변 `near_hazard`(단계 1) → 카페 도착 |
 
 ```jsonc
 {"name": "장면 ③ 지연 대응", "description": "…",
@@ -381,20 +382,28 @@ python scripts/planner/cli.py trip end 7      # 재생이 끝나도 여행일은
    {"walk_to": "kto-2610501"},                                // routing 도보 경로선을 따라 걸음 (70m/분, 점 간격 30초. 경로선이 없으면 직선)
    {"drive_to": [35.9912, 129.5572]},                         // 차량 경로선을 따라 감 (400m/분, 점 간격 10초). 장소 자리에 [lat, lng] (경유 지점)도 된다
    {"at": "+95", "sim": {"scenario": "storm"}, "tick": true}, // 시작 +95분(또는 "HH:MM")까지 그 자리에서 기다린 뒤 안전 상황 변경, 틱
-   {"skip": "kto-127214"},                                    // 그 장소 항목을 건너뜀으로 (사용자가 일정에서 뺌, PATCH status=skipped)
+   {"skip": "kto-2660046"},                                   // 그 장소 항목을 건너뜀으로 (사용자가 일정에서 뺌, PATCH status=skipped)
+   {"accept": {"remove": "poi-gr-breakwater-north", "add": "kto-2603493"}},  // 가장 최근 선제 턴(단계 3)의 제안을 승인 (앱 [전체 적용]).
+                                                              // remove·add 는 기대하는 변경: CLI 는 Agent 로 승인하고 확인만, pytest 의 가짜 planner 는 이대로 바꾼다
    {"expect": {"type": "delay", "level": 3}},                 // 지금까지 이런 이벤트가 있어야 함. 키가 이벤트에 없으면 payload 에서 찾음 (place_id 등)
    {"expect": {"card": {"kind": "docent"}}},                  // 값이 dict 면 그 키만 비교
    {"expect": {"type": "delay", "not": true}}]}               // "not": 없어야 함
 ```
-- 한 단계 안에서는 at → sim → skip → goto → walk_to → drive_to → stay → tick → expect 순서다.
-- `skip` 은 보내는 중인 선제 턴(단계 3 `queued`)이 끝난 뒤에 한다 (CLI). 사용자는 Agent 의 말을 보고 일정을 바꾸므로,
+- 한 단계 안에서는 at → sim → skip → accept → goto → walk_to → drive_to → stay → tick → expect 순서다.
+- `skip`·`accept` 는 보내는 중인 선제 턴(단계 3 `queued`)이 끝난 뒤에 한다 (CLI). 사용자는 Agent 의 말을 보고 일정을 바꾸므로,
   `--speed 0` 에서 일정 변경이 응답 도중에 끼어들면 agent 가 "응답을 만드는 동안 일정이 바뀌어" 제안을 버리기 때문이다.
 - `--speed` 는 시뮬레이션 시각이 흐르는 배속이다 (0 이면 기다리지 않음). 배속과 상관없이 동작(위치·틱·기대 확인)마다 safety sim 의 `now` 를 재생 시각으로 옮기고,
   `sim` 단계 뒤에는 planner 안전 점검(`POST /planner/safety/scan`, 개발 모드)과 trip 틱(`now` = 재생 시각)을 바로 부른다.
 - pytest(`backend/tests/trip/test_scenes.py`)는 같은 파일을 서버 없이 재생한다: 이벤트 판정 함수는 **순수 함수**(`judge.py`, 입력: 오늘 일정·마지막 상태·위치·now → 출력: 새 상태·감지)와
   Event Policy(`policy.py`)로 두고, planner·safety·agent 는 가짜 클라이언트(`tests/trip/fakes.py`)로 바꾼다. 가짜 planner 는 planner 시간 모델을 단순하게 흉내 낸다 (도보 = 직선 × 1.3 / 70m).
   컨테이너에서 재생 파일을 읽도록 compose 가 `./scripts` 를 `/scripts` 로 마운트한다.
-- 데모 데이터로 바꾼 재생 파일을 실제 서비스로 확인 (2026-10-09, `SAFETY_SOURCE=mock`, `--speed 0`, Claude Haiku 5.5): 장면 ② 3개, ③ 4개, ④ 5개 기대 모두 통과.
+- 북방파제 계획으로 되돌린 재생 파일을 각본 LLM(`AGENT_PROVIDER=scripted`, docs/agent/README.md §7.2)으로 확인 (2026-10-09, `SAFETY_SOURCE=mock`, `--speed 0`, LLM 호출 없음):
+  장면 ② 3개, ③ 4개, ④ 6개 기대 모두 통과. 같은 재생을 `scripts/app/record_fixtures.py` 가 앱 fixture(`app/test/fixtures/trip/`)로 녹화한다 (docs/app/fixtures.md).
+  - ③: 13:53 에 delay (`day_overflow` 18:01 + `end_before`) 한 번 → 선제 턴 "과메기문화관 빼기"(18:08 → 16:53) → "과메기문화관은 유지해줘" 에 `must_include` + 구룡포항 30분(17:45) 새 제안이 이전 제안을 대체.
+  - ④: 15:20 safety_raised — 북방파제 방문 안전 → 위험(풍속 16m/s·파고 3.5m 예보, 강풍·풍랑주의보, 방파제 CCTV 실족 감지), 가는 길(도보)과 카페 가는 차량 구간(구룡포수협 맨홀 등급 3)도 위험.
+    선제 턴은 북방파제를 근대문화역사관(실내)으로 바꾸는 제안(17:30 → 17:22). 15:25 승인 → 15:52 역사관 도착 → 16:33~16:35 near_hazard 3번(수협 맨홀·파출소 지표면·구룡포교 하천) → 16:39 카페 도착.
+  - pytest 의 가짜 planner 는 직선거리 모델이라, 방파제(항구를 돌아감)·카페(해안도로) 구간에 실제 길찾기 거리 비율(`road`)을 줘 실제와 같은 시각에 delay 가 나게 맞췄다 (`tests/trip/fakes.py`).
+- 해수욕장 계획(북방파제 대신 구룡포해수욕장, 2026-10-09 잠시 사용)으로 실제 서비스 확인 (`SAFETY_SOURCE=mock`, `--speed 0`, Claude Haiku 5.5): 장면 ② 3개, ③ 4개, ④ 5개 기대 모두 통과.
   - ③: 13:53 에 delay (`day_overflow` 18:02 + `end_before`) 한 번. 선제 턴은 "구룡포항 50분 → 30분, 17:46 종료" 제안.
   - ④: 15:20 safety_raised (해수욕장·가는 길 주의, 카페 가는 차량 구간 위험 — 구룡포수협 맨홀 등급 3). 선제 턴은 "해수욕장 대신 근대문화역사관(실내)" 제안.
     차로 카페에 가는 길에 near_hazard 가 구역마다 하나씩 3번 나온다 (구룡포수협 맨홀 15:49, 파출소 지표면 15:50, 구룡포교 하천 15:51 — 원인 키가 구역별이라).

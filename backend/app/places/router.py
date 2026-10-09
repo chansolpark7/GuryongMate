@@ -172,11 +172,13 @@ def search_passages(
     if radius_m is not None:
         conds.append(dist <= radius_m)
     dist_col = dist.label("d") if dist is not None else literal(None).label("d")
-    rows = db.execute(select(PlaceChunk, sim, dist_col).where(*conds).order_by(sim.desc()).limit(limit)).all()
+    src = func.coalesce(Place.source, "kto").label("source")  # 이야기 조각(place_id 없음)은 관광공사 오디오 가이드
+    rows = db.execute(select(PlaceChunk, sim, dist_col, src).outerjoin(Place, Place.id == PlaceChunk.place_id)
+                      .where(*conds).order_by(sim.desc()).limit(limit)).all()
     return [
         Passage(id=c.id, kind=c.kind, place_id=c.place_id, story_id=c.story_id, title=c.title, text=c.text,
-                score=round(float(s), 4), distance_m=d)
-        for c, s, d in rows
+                score=round(float(s), 4), distance_m=d, source="manual" if c.kind == "place" and source == "manual" else "kto")
+        for c, s, d, source in rows
     ]
 
 

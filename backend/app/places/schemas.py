@@ -87,3 +87,4 @@ class Passage(BaseModel):
     text: str
     score: float
     distance_m: float | None = None
+    source: str = Field("kto", description="kto 한국관광공사(소개문·오디오 가이드) | manual 직접 정의한 장소의 소개문 (data/places/manual)")

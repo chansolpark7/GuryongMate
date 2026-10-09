@@ -6,12 +6,14 @@ CLI(`trip replay`)와 pytest(backend/tests/trip/test_scenes.py)가 같은 파일
                {"walk_to": "kto-2610501"},               # 도보 경로선(없으면 직선)을 따라 걸음 (70m/분, 점 간격 30초)
                {"drive_to": [35.9912, 129.5572]},        # 차량 경로선을 따라 감 (400m/분, 점 간격 10초). 장소 자리에 [lat, lng] 도 된다
                {"at": "+95", "sim": {"scenario": "storm"}},  # 시작 +95분까지 기다린 뒤 safety 가상 상황 변경
-               {"skip": "kto-127214"},                   # 그 장소 항목을 건너뜀으로 (사용자가 일정에서 뺌, planner PATCH status)
+               {"skip": "kto-2660046"},                  # 그 장소 항목을 건너뜀으로 (사용자가 일정에서 뺌, planner PATCH status)
+               {"accept": {"remove": "poi-gr-breakwater-north", "add": "kto-2603493"}},  # 선제 턴의 제안을 승인 (앱 [전체 적용]).
+                                                         # remove·add 는 기대하는 변경 (CLI 는 확인만, pytest 의 가짜 planner 는 이대로 바꾼다)
                {"tick": true},                           # trip 틱 (planner 안전 점검 포함)
                {"expect": {"type": "delay"}},            # 지금까지 이 이벤트가 있어야 함 ("not": true 면 없어야 함)
      ]}
 
-한 단계 안에서는 at → sim → skip → goto → walk_to → drive_to → stay → tick → expect 순서로 처리한다.
+한 단계 안에서는 at → sim → skip → accept → goto → walk_to → drive_to → stay → tick → expect 순서로 처리한다.
 """
 import math
 from collections.abc import Callable
@@ -30,7 +32,7 @@ LatLng = tuple[float, float]
 
 @dataclass
 class Action:
-    kind: str  # loc | sim | skip | tick | expect
+    kind: str  # loc | sim | skip | accept | tick | expect
     at: datetime
     lat: float | None = None
     lng: float | None = None
@@ -111,6 +113,8 @@ def expand(scene: dict, coords: Callable[[str], LatLng],
             out.append(Action("sim", t, data={**step["sim"], "now": t.isoformat()}))
         if "skip" in step:
             out.append(Action("skip", t, data={"place_id": step["skip"]}))
+        if "accept" in step:
+            out.append(Action("accept", t, data=dict(step["accept"] or {})))
         if "goto" in step:
             pos = where(step["goto"])
             loc()

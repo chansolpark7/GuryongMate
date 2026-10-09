@@ -6,7 +6,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class AgentSettings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_prefix="AGENT_", extra="ignore")
 
-    provider: str = Field("openai", description="openai (기본, gpt-5.4-mini) | local (Ollama 등) | claude (Claude API)")
+    provider: str = Field("claude", description="claude (기본, 운영: Claude API Haiku 5.5) | openai (gpt-5.4-mini) | "
+                                                "local (Ollama 등) | scripted (각본 LLM: 개발·테스트·비상 데모, LLM 호출 없음)")
 
     # 로컬 LLM. 컨테이너에서 호스트의 Ollama 로 접속.
     #   local_api=ollama : Ollama 네이티브 API (컨텍스트 길이 지정 가능, 권장)
@@ -34,6 +35,11 @@ class AgentSettings(BaseSettings):
     claude_max_tokens: int = Field(64000, description="응답 하나의 최대 토큰 (thinking 포함). 스트리밍이라 넉넉히")
     claude_thinking_mismatch: str = Field("drop_block", description="기록이 바뀌어 thinking 블록이 무효일 때: "
                                                                    "drop_block (버리고 계속, 로그) | error (400)")
+
+    # 각본 LLM (provider=scripted, docs/agent/README.md §7.2). 실제 LLM 없이 각본 파일대로 답한다
+    scripted_dir: str = Field("", description="각본 파일(*.json) 디렉터리. 비우면 backend/app/agent/scripts")
+    scripted_delay_ms: float = Field(30, description="텍스트·추론 조각 사이 지연(ms). 0 이면 바로")
+    scripted_latency_ms: float = Field(300, description="LLM 호출마다 첫 조각 전 지연(ms)")
 
     temperature: float | None = None
     request_timeout_sec: float = 300

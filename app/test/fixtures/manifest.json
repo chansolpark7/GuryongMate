@@ -1,0 +1,185 @@
+{
+ "recorded_at": "2026-10-09T23:38:56+09:00",
+ "backend": {
+  "agent_provider": "scripted:scripts",
+  "safety_source": "mock",
+  "git": "6a7d484"
+ },
+ "format": "docs/app/fixtures.md",
+ "files": [
+  {
+   "file": "errors.json",
+   "flow": "공통",
+   "title": "오류 예시 (LLM 오류 SSE, 503 서비스 장애, 404·422)",
+   "screens": "05·States_Feedback",
+   "exchanges": [
+    "chat_llm_unavailable",
+    "chat_no_script",
+    "chat_empty_message",
+    "session_not_found",
+    "plan_not_found",
+    "planner_safety_unavailable",
+    "agent_upstream_unavailable"
+   ]
+  },
+  {
+   "file": "f10_guide_prep.json",
+   "flow": "F10",
+   "title": "가이드 준비 (여행 전)",
+   "screens": "32·17",
+   "exchanges": [
+    "notes_before",
+    "prepare",
+    "job_poll_1",
+    "job_poll_2",
+    "job_poll_3",
+    "job_poll_4",
+    "notes_after",
+    "note_house_street",
+    "note_breakwater",
+    "prepare_again_nothing_to_do",
+    "job_not_found"
+   ]
+  },
+  {
+   "file": "f11_login.json",
+   "flow": "F11",
+   "title": "로그인 (아이디)",
+   "screens": "01·34·35",
+   "exchanges": [
+    "signup_taken",
+    "signup_weak_password",
+    "login_wrong_password",
+    "login",
+    "me",
+    "refresh",
+    "refresh_reused"
+   ]
+  },
+  {
+   "file": "f1_plan_with_ai.json",
+   "flow": "F1",
+   "title": "AI 로 계획 만들기 + 장소 추천 (장면 ①)",
+   "screens": "03·05·06·06B·08",
+   "exchanges": [
+    "create_plan",
+    "list_sessions_empty",
+    "create_session",
+    "chat_make_plan",
+    "session_detail",
+    "proposal_detail",
+    "accept",
+    "plan_after_accept",
+    "plan_safety",
+    "chat_recommend_cafe",
+    "candidate_add",
+    "candidate_add_again",
+    "candidate_remove",
+    "session_detail_end"
+   ]
+  },
+  {
+   "file": "f2_proposal_actions.json",
+   "flow": "F2",
+   "title": "제안 승인·거절·base_changed·다시 제안",
+   "screens": "06·19·20·22·36",
+   "exchanges": [
+    "chat_longer_lunch",
+    "edit_plan_directly",
+    "accept_base_changed",
+    "repropose",
+    "old_proposal_superseded",
+    "reject",
+    "reject_again",
+    "chat_longer_lunch_again",
+    "accept_base_changed_2",
+    "accept_overwrite",
+    "chat_while_busy_first",
+    "chat_agent_busy"
+   ]
+  },
+  {
+   "file": "f3_trip_start.json",
+   "flow": "F3",
+   "title": "여행 시작 (정상·다른 날·실수)",
+   "screens": "11·12·14·30",
+   "exchanges": [
+    "state_before",
+    "start_not_trip_day",
+    "start",
+    "start_again_same_day",
+    "events_day_started",
+    "end_by_mistake",
+    "state_after_end"
+   ]
+  },
+  {
+   "file": "f4_arrival_docent.json",
+   "flow": "F4",
+   "title": "도착 -> 해설 카드 -> 가이드 노트 -> 추가 질문 -> 더 짧게 (장면 ②)",
+   "screens": "14·16·17·18",
+   "exchanges": [
+    "note",
+    "memory_before",
+    "event_seen",
+    "chat_question",
+    "chat_shorter",
+    "memory_after",
+    "session_detail"
+   ]
+  },
+  {
+   "file": "f5_delay.json",
+   "flow": "F5",
+   "title": "지연 -> 선제 메시지 -> 제약 반영 -> 승인 (장면 ③)",
+   "screens": "14-S3·19·20·21-S1",
+   "exchanges": [
+    "delay_event",
+    "session_with_proactive",
+    "chat_keep_museum",
+    "old_proposal_superseded",
+    "accept_old_not_pending",
+    "accept_new",
+    "state_after"
+   ]
+  },
+  {
+   "file": "f6_safety.json",
+   "flow": "F6·F7",
+   "title": "안전 상승 -> 선제 메시지 -> 비교 -> 승인 (장면 ④) + 위험 구역 접근 경고",
+   "screens": "22·21·23·28",
+   "exchanges": [
+    "safety_raised_event",
+    "session_with_proactive",
+    "proposal",
+    "compare_before_safety",
+    "compare_after_safety",
+    "safety_alerts",
+    "accept_proactive",
+    "avoid_zones",
+    "detour_route"
+   ]
+  },
+  {
+   "file": "trip/scene2_arrival.json",
+   "flow": "trip",
+   "title": "장면 ② 도착 → 해설 카드",
+   "screens": "",
+   "exchanges": []
+  },
+  {
+   "file": "trip/scene3_delay.json",
+   "flow": "trip",
+   "title": "장면 ③ 지연 대응",
+   "screens": "",
+   "exchanges": []
+  },
+  {
+   "file": "trip/scene4_safety.json",
+   "flow": "trip",
+   "title": "장면 ④ DT 안전 대응",
+   "screens": "",
+   "exchanges": []
+  }
+ ]
+}

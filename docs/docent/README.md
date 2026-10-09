@@ -330,7 +330,7 @@ API·단계·설정 명세는 `docs/agent/README.md` §3.2·§5·§7·§11.3.1·
 ### 8.4 실제 OpenAI 로 확인하는 절차 (아직 하지 않음 — API 크레딧이 생기면)
 가짜 LLM 테스트만 끝난 상태다. 아래 명령은 **실제 OpenAI 를 부르고 비용이 든다** (예상: 장소 3곳 × 호출 2~4회, 내장 검색 3~9회).
 
-1. 준비: `backend/.env` 에 `AGENT_OPENAI_API_KEY=…` (기본 `AGENT_PROVIDER=openai`, `AGENT_OPENAI_API=responses`, `gpt-5.4-mini`).
+1. 준비: `backend/.env` 에 `AGENT_PROVIDER=openai`, `AGENT_OPENAI_API_KEY=…` (`AGENT_OPENAI_API=responses`, `gpt-5.4-mini`. 운영 기본은 `claude`).
    전체 스택(`docker compose up -d --build`)과 장소 데이터·임베딩(places-init)이 있어야 한다. 시간 측정을 위해 다른 작업은 돌리지 않는다.
 2. 계획과 메모리 (사용자 `seoyun`, 개발 모드 `X-User-Id`):
    ```bash
