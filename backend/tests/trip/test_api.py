@@ -1,0 +1,337 @@
+"""trip API 통합 테스트 (실제 DB + 가짜 planner·safety·agent + FixedClock).
+
+가짜 planner 의 기준 일정 (conftest.PLAN, 도보 = 직선 × 1.3 / 70m):
+    짬홍 12:30~13:30 -> 구룡포항 13:37~14:07 -> 가옥거리 14:16~15:16 -> 과메기문화관 15:21~16:21 -> 근대문화역사관 16:26~17:06(17:30 마감)
+가옥거리에 머물면: 15:40 이후 역사관이 17:30 을 넘고(outside_open_hours), 16:10 이후 18:00 을 넘는다(day_overflow).
+"""
+from app.db import SessionLocal
+from app.trip import service
+
+from .conftest import H, at, err, ok
+
+LUNCH, PORT, HOUSE, MUSEUM, HISTORY = "kto-2834330", "kto-2610501", "kto-1909659", "kto-2660046", "kto-2603493"
+
+
+def item_id(env, order: int) -> int:
+    return env.planner.item(env.plan_id, order)["id"]
+
+
+def visited_until_port(env) -> None:
+    """짬홍·구룡포항을 다녀온 것으로 planner 에 기록 (가옥거리로 가는 중)."""
+    for order, arrived, done in ((1, "12:30", "13:30"), (2, "13:37", "14:00")):
+        it = env.planner.item(env.plan_id, order)
+        it["status"], it["arrived_at"], it["done_at"] = "done", arrived, done
+
+
+def progress_calls(env) -> list[tuple]:
+    return [c[1:] for c in env.planner.calls if c[0] == "progress"]
+
+
+# ---------- 여행일 ----------
+
+def test_start_not_trip_day(env):
+    env.clock.when = at("12:00").replace(day=9)
+    d = err(env.c.post(env.url("/start"), headers=H), 409, "not_trip_day")
+    assert (d["start_date"], d["end_date"]) == ("2026-10-10", "2026-10-10")
+
+
+def test_start_plan_not_found(env):
+    err(env.c.post("/trip/plans/9999/start", headers=H), 404, "plan_not_found")
+    err(env.c.get("/trip/plans/9999/state", headers=H), 404, "plan_not_found")
+
+
+def test_start_is_idempotent(env):
+    before = env.state()
+    assert before["active"] is False and before["day"] is None and before["clock"] == "sim"
+    s = env.start("12:20")
+    assert (s["active"], s["day"], s["date"], s["current"]["state"]) == (True, 1, "2026-10-10", "idle")
+    assert s["session_id"] == f"sess-{env.plan_id}-0"  # 세션이 없어 agent 에 새로 만들었다
+    again = env.start("12:25")
+    assert again["started_at"] == s["started_at"] and again["session_id"] == s["session_id"]
+    assert env.types() == ["day_started"]
+
+
+def test_start_uses_given_or_latest_session(env):
+    env.agent.sessions[env.plan_id] = ["old", "recent"]
+    assert env.start()["session_id"] == "recent"
+    assert env.start(session_id="mine")["session_id"] == "mine"
+
+
+def test_start_resumes_planner_progress(env):
+    """planner 에 이미 머무는 항목이 기록돼 있으면 그곳에서 시작한다."""
+    it = env.planner.item(env.plan_id, 1)
+    it["status"], it["arrived_at"] = "visiting", "12:31"
+    s = env.start("12:40")
+    assert s["current"] == {"item_id": it["id"], "state": "visiting", "since": "12:31"}
+
+
+def test_end_and_restart_same_day(env):
+    env.start("12:20")
+    env.stay(LUNCH, "12:20", 2)
+    s = ok(env.c.post(env.url("/end"), headers=H))
+    assert (s["active"], s["ended_reason"]) == (False, "user")
+    err(env.c.post(env.url("/location"), json={"lat": 35.99, "lng": 129.55}, headers=H), 409, "trip_not_active")
+    # 같은 날 다시 시작하면 같은 여행일을 다시 연다 (이미 알린 도착은 다시 알리지 않는다)
+    assert env.start("12:30")["active"] is True
+    env.stay(LUNCH, "12:31", 2)
+    assert env.types().count("arrived") == 1
+    assert env.types() == ["day_started", "arrived", "day_ended", "day_started"]
+
+
+def test_location_without_trip(env):
+    err(env.c.post(env.url("/location"), json={"lat": 35.99, "lng": 129.55}, headers=H), 409, "trip_not_active")
+
+
+# ---------- 도착·출발 ----------
+
+def test_arrival_marks_planner_and_card(env):
+    env.start("12:20")
+    events = env.stay(LUNCH, "12:20", 2)
+    assert [e["type"] for e in events] == ["arrived"]
+    e = events[0]
+    assert (e["level"], e["status"], e["severity"]) == (2, "delivered", "info")
+    assert e["card"] == {"kind": "docent", "place_id": LUNCH, "item_id": item_id(env, 1)}
+    assert e["message"] == "짬홍에 도착했어요. 이야기 들어볼까요?" and e["payload"]["out_of_order"] is False
+    assert progress_calls(env) == [(item_id(env, 1), "visiting", "12:20")]  # 시각은 처음 들어온 때
+    s = env.state()
+    assert s["current"] == {"item_id": item_id(env, 1), "state": "visiting", "since": "12:20"}
+    assert s["location"]["source"] == "cli" and s["next"]["item_id"] == item_id(env, 2)
+    # after 로 이어 받기
+    assert [x["type"] for x in env.events(after=e["id"])] == []
+    assert [x["type"] for x in env.events(after=e["id"] - 1)] == ["arrived"]
+
+
+def test_departure_and_next_message(env):
+    env.start("12:20")
+    env.stay(LUNCH, "12:20", 60, every_sec=300)
+    mid = (35.9903, 129.5572)  # 짬홍과 구룡포항 사이
+    events = env.stay(mid, "13:21", 3)
+    dep = [e for e in events if e["type"] == "departed"]
+    assert len(dep) == 1 and dep[0]["level"] == 1
+    assert dep[0]["message"].startswith("짬홍을(를) 떠났어요. 다음은 구룡포항, 도보 약")
+    assert (item_id(env, 1), "done", "13:21") in progress_calls(env)
+    s = env.state()
+    assert s["current"]["state"] == "moving" and s["next"]["item_id"] == item_id(env, 2)
+    proj = [c[1] for c in env.planner.calls if c[0] == "projection"][-1]
+    assert proj["position"] == {"state": "moving", "lat": mid[0], "lng": mid[1]} and proj["now"] == "13:24"
+
+
+def test_ignored_points(env):
+    env.start("12:20")
+    lat, lng = env.coords(LUNCH)
+    body = {"points": [
+        {"lat": lat, "lng": lng, "accuracy": 10, "recorded_at": at("12:21").isoformat()},
+        {"lat": lat, "lng": lng, "accuracy": 150, "recorded_at": at("12:22").isoformat()},  # 부정확
+        {"lat": lat, "lng": lng, "accuracy": 10, "recorded_at": at("12:20").isoformat()},  # 순서 뒤바뀜
+        {"lat": lat, "lng": lng, "recorded_at": at("12:23").isoformat()},  # accuracy 없음 -> 30
+    ]}
+    r = ok(env.c.post(env.url("/location"), json=body, headers=H))
+    assert (r["accepted"], r["ignored"]) == (2, 2)
+    assert [e["type"] for e in r["events"]] == ["arrived"]
+    assert r["state"]["location"]["accuracy"] == 30
+    err(env.c.post(env.url("/location"), json={"lat": 91, "lng": 0}, headers=H), 422, "invalid_request")
+    err(env.c.post(env.url("/location"), json={"points": []}, headers=H), 422, "invalid_request")
+
+
+def test_planner_down_fails_location(env):
+    env.start("12:20")
+    env.planner.down = True
+    lat, lng = env.coords(LUNCH)
+    err(env.c.post(env.url("/location"), json={"lat": lat, "lng": lng}, headers=H), 503, "planner_unavailable")
+
+
+# ---------- 지연 ----------
+
+def test_delay_once_and_again_when_worse(env):
+    visited_until_port(env)
+    env.start("14:10")
+    events = env.stay(HOUSE, "14:10", 3)
+    assert [e["type"] for e in events] == ["arrived"] and events[0]["payload"]["out_of_order"] is False
+    # 가벼운 지연: 늦어져도 새 위반이 없으면 알리지 않는다
+    for t in ("15:00", "15:20", "15:35"):
+        r = env.loc(HOUSE, t)
+        assert r["events"] == []
+    assert r["state"]["delay_minutes"] > 0
+    # 역사관이 17:30 마감을 넘음 -> delay (단계 3, Agent 선제 턴)
+    r = env.loc(HOUSE, "15:45")
+    [d] = r["events"]
+    assert (d["type"], d["level"], d["status"]) == ("delay", 3, "queued")  # 응답 시점에는 큐에 있다
+    assert d["item_ids"] == [item_id(env, 5)] and "운영시간" in d["message"]
+    [sent] = env.agent.received
+    assert sent[1]["id"] == d["id"] and sent[2]["active"] is True  # {"event", "trip"}
+    delivered = env.events(after=d["id"] - 1)[0]
+    assert delivered["status"] == "delivered" and delivered["agent"]["proposal_id"] == 901
+    # 같은 지연은 다시 알리지 않는다
+    for t in ("15:50", "16:00", "16:05"):
+        assert env.loc(HOUSE, t)["events"] == []
+    # 더 나빠짐 (18:00 초과가 새로 생김) -> 다시
+    [d2] = env.loc(HOUSE, "16:15")["events"]
+    assert d2["type"] == "delay"
+    assert {v["code"] for v in d2["payload"]["new_violations"]} == {"outside_open_hours", "day_overflow"}
+    assert len(env.agent.received) == 2
+
+
+def test_delay_detected_by_tick_without_location(env):
+    visited_until_port(env)
+    env.start("14:10")
+    env.stay(HOUSE, "14:10", 3)
+    assert env.tick("15:30")["events"] == []
+    [d] = env.tick("15:45")["events"]
+    assert d["type"] == "delay"
+    assert env.tick("15:55")["events"] == []
+
+
+# ---------- 단계 3 큐 ----------
+
+def test_queue_one_at_a_time_priority_and_cooldown(env):
+    visited_until_port(env)
+    env.start("14:10")
+    env.stay(HOUSE, "14:10", 3)
+    env.agent.busy = True  # Agent 세션이 응답 중 (409 agent_busy)
+    [d] = env.loc(HOUSE, "15:45")["events"]
+    ev = env.events(after=d["id"] - 1)[0]
+    assert ev["status"] == "queued" and ev["attempts"] == 1 and "agent_busy" in ev["last_error"]
+    env.planner.add_alert(env.plan_id, "raised", [(item_id(env, 4), "safe", "caution")])
+    tick = env.tick("15:46")
+    assert [e["type"] for e in tick["events"]] == ["safety_raised"]
+    assert [e["status"] for e in env.events() if e["level"] == 3] == ["queued", "queued"]
+
+    # 보내는 도중에 다른 전송(틱)이 들어와도 두 번째 것을 같이 보내지 않는다
+    env.agent.busy = False
+    concurrent = []
+    env.agent.during_send = lambda: concurrent.append(service.dispatch(_trip_id(env), env.deps, env.clock))
+    env.tick("15:47")
+    assert concurrent == [0]
+    # 안전이 먼저, 지연은 쿨다운(10분) 동안 큐에 남는다
+    assert [r[1]["type"] for r in env.agent.received] == ["safety_raised"]
+    assert [e["status"] for e in env.events() if e["level"] == 3] == ["queued", "delivered"]
+    env.tick("15:52")
+    assert len(env.agent.received) == 1
+    env.tick("15:58")
+    assert [r[1]["type"] for r in env.agent.received] == ["safety_raised", "delay"]
+
+
+def test_newer_delay_suppresses_older_in_queue(env):
+    visited_until_port(env)
+    env.start("14:10")
+    env.stay(HOUSE, "14:10", 3)
+    env.agent.busy = True
+    env.loc(HOUSE, "15:45")
+    env.loc(HOUSE, "16:15")  # 더 나빠짐 -> 새 delay
+    env.agent.busy = False
+    env.tick("16:16")
+    delays = [e for e in env.events() if e["type"] == "delay"]
+    assert [e["status"] for e in delays] == ["suppressed", "delivered"]
+    assert len(env.agent.received) == 1
+
+
+def test_agent_unavailable_keeps_queued(env):
+    """agent 의 선제 턴 API 가 아직 없거나 실패하면 queued 로 두고 다음 틱에 다시 보낸다."""
+    visited_until_port(env)
+    env.start("14:10")
+    env.stay(HOUSE, "14:10", 3)
+    env.agent.missing = True
+    [d] = env.loc(HOUSE, "15:45")["events"]
+    env.tick("15:46")
+    ev = env.events(after=d["id"] - 1)[0]
+    assert ev["status"] == "queued" and ev["attempts"] == 2 and ev["agent"] is None
+    env.agent.missing = False
+    env.tick("15:47")
+    ev = env.events(after=d["id"] - 1)[0]
+    assert ev["status"] == "delivered" and ev["last_error"] is None
+    assert ev["agent"] == {"session_id": f"sess-{env.plan_id}-0", "message_id": 501, "proposal_id": 901}
+
+
+# ---------- 안전 ----------
+
+def test_safety_alerts_collected_by_tick(env):
+    env.start("12:20")
+    env.stay(LUNCH, "12:20", 2)
+    env.planner.on_scenario("storm")  # 짬홍 위험, 구룡포항·가옥거리 주의
+    [e] = env.tick("12:30")["events"]
+    assert (e["type"], e["level"], e["severity"]) == ("safety_raised", 3, "danger")
+    assert e["item_ids"] == [item_id(env, n) for n in (1, 2, 3)]
+    assert e["message"].startswith("남은 일정에 위험 신호가 생겼어요.") and "그 밖에 2건" in e["message"]
+    assert [c for c in env.planner.calls if c[0] == "seen"] == [("seen", 1)]
+    assert env.agent.received[0][1]["type"] == "safety_raised"
+    assert env.tick("12:31")["events"] == []  # 가져간 경고는 다시 보지 않는다
+    # 해제 -> 단계 1 알림
+    env.planner.add_alert(env.plan_id, "cleared", [(item_id(env, 2), "caution", "safe")])
+    [eased] = env.tick("12:40")["events"]
+    assert (eased["type"], eased["level"], eased["status"]) == ("safety_eased", 1, "delivered")
+    assert eased["message"] == "구룡포항의 위험 신호가 해제됐어요."
+
+
+def test_alerts_for_done_items_or_other_days_are_ignored(env):
+    env.start("12:20")
+    it = env.planner.item(env.plan_id, 1)
+    it["status"] = "done"
+    env.planner.add_alert(env.plan_id, "raised", [(it["id"], "safe", "danger")])
+    assert env.tick("12:30")["events"] == []
+    assert [c for c in env.planner.calls if c[0] == "seen"] == []  # 가져가지 않았다 (계획 화면 배지로 남는다)
+
+
+def test_near_hazard(env):
+    env.start("12:20")
+    env.safety.scenario = "storm"
+    near = (35.991235 - 100 / 111_320, 129.557327)  # 수협 맨홀 남쪽 100m (구역 경계 밖 약 20m)
+    [e] = env.loc(near, "12:21")["events"]
+    assert (e["type"], e["level"], e["severity"], e["status"]) == ("near_hazard", 1, "danger", "delivered")
+    assert e["message"] == "침수 감시 구역(구룡포수협_스마트맨홀 주변) 근처예요. 물이 고인 길은 피하세요."
+    assert env.loc(near, "12:22")["events"] == []  # 같은 구역은 다시 알리지 않는다
+    env.safety.scenario = "calm"
+    assert env.loc(near, "12:23")["events"] == []
+    assert env.agent.received == []  # LLM 없이
+
+
+# ---------- 종료·기타 ----------
+
+def test_end_suppresses_queued(env):
+    visited_until_port(env)
+    env.start("14:10")
+    env.stay(HOUSE, "14:10", 3)
+    env.agent.busy = True
+    [d] = env.loc(HOUSE, "15:45")["events"]
+    s = ok(env.c.post(env.url("/end"), headers=H))
+    assert s["active"] is False
+    events = env.events()
+    assert next(e for e in events if e["id"] == d["id"])["status"] == "suppressed"
+    assert events[-1]["type"] == "day_ended" and events[-1]["payload"] == {"reason": "user"}
+
+
+def test_auto_end_by_tick(env):
+    env.start("12:20")
+    assert env.tick("19:00")["state"]["active"] is True  # 마지막 일정 17:06 + 120분 = 19:06
+    r = env.tick("19:07")
+    assert r["state"]["active"] is False and r["state"]["ended_reason"] == "auto"
+    assert r["events"][-1]["type"] == "day_ended"
+
+
+def test_tick_all_runs_active_trips(env):
+    visited_until_port(env)
+    env.start("14:10")
+    env.stay(HOUSE, "14:10", 3)
+    env.clock.when = at("15:45")
+    assert service.tick_all(env.deps, env.clock, users=["test-trip-user"]) == 1
+    assert "delay" in env.types() and len(env.agent.received) == 1
+
+
+def test_seen(env):
+    env.start("12:20")
+    [e] = env.stay(LUNCH, "12:20", 2)
+    v = ok(env.c.post(env.url(f"/events/{e['id']}/seen"), headers=H))
+    assert v["status"] == "handled" and v["seen_at"]
+    err(env.c.post(env.url("/events/999999/seen"), headers=H), 404, "event_not_found")
+    err(env.c.post(env.url(f"/events/{e['id']}/seen"), headers={"X-User-Id": "test-trip-other"}), 404, "event_not_found")
+
+
+def test_delete_me(env):
+    env.start("12:20")
+    env.stay(LUNCH, "12:20", 2)
+    assert env.c.delete("/trip/me", headers=H).status_code == 204
+    assert env.state()["active"] is False and env.events() == []
+
+
+def _trip_id(env) -> int:
+    with SessionLocal() as db:
+        return service.latest_trip(db, "test-trip-user", env.plan_id).id
