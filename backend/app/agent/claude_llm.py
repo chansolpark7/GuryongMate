@@ -50,6 +50,13 @@ PAUSE_LIMIT = 4  # 서버 도구(웹 검색) 루프가 pause_turn 으로 멈췄�
 CACHE = {"type": "ephemeral"}
 
 
+def _billing(e: anthropic.APIStatusError) -> bool:
+    """크레딧·결제 문제: 402 billing_error, 또는 400 'credit balance is too low' (사용자에게는 llm_quota)."""
+    body = e.body if isinstance(e.body, dict) else {}
+    kind = getattr(e, "type", None) or (body.get("error") or {}).get("type")
+    return e.status_code == 402 or kind == "billing_error" or "credit balance" in str(e.message).lower()
+
+
 def _args(arguments: str) -> dict:
     try:
         value = json.loads(arguments or "{}")
@@ -207,11 +214,11 @@ class ClaudeProvider:
                 # 서버 도구 루프가 멈춤 -> 받은 내용을 붙여 다시 보내면 이어서 한다
                 params = {**params, "messages": [*params["messages"], {"role": "assistant", "content": contents[-1]}]}
         except anthropic.BadRequestError as e:
-            raise LLMError(f"{self.name} 요청 오류 400: {e.message}", retryable=False) from e
+            raise LLMError(f"{self.name} 요청 오류 400: {e.message}", retryable=False, quota=_billing(e)) from e
         except anthropic.RateLimitError as e:
             raise LLMError(f"{self.name} 사용량 한도 429: {e.message}", retryable=False) from e
         except anthropic.APIStatusError as e:
-            raise LLMError(f"{self.name} HTTP {e.status_code}: {e.message}", retryable=False) from e
+            raise LLMError(f"{self.name} HTTP {e.status_code}: {e.message}", retryable=False, quota=_billing(e)) from e
         except anthropic.APIConnectionError as e:
             raise LLMError(f"{self.name} 연결 실패: {e!r}", retryable=False) from e
         except anthropic.AnthropicError as e:  # 키 없음 등

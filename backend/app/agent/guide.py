@@ -21,7 +21,7 @@ from datetime import UTC, datetime
 
 from app.agent.api import ApiError, ServiceApi
 from app.agent.config import settings
-from app.agent.llm import Citation, Finish, LLMProvider, TextDelta, ToolCall, WebSearchCall, supports_web_search
+from app.agent.llm import Citation, Finish, LLMError, LLMProvider, TextDelta, ToolCall, WebSearchCall, supports_web_search
 from app.agent.tools import KTO_SOURCE_URL, PASSAGES_SPEC, WEB_SPECS, Draft, Toolbox
 
 log = logging.getLogger("app.agent")
@@ -178,7 +178,12 @@ async def _prepare_one(job: GuideJob, p: dict, llm: LLMProvider, api: ServiceApi
         p["status"], p["sources"] = "ready", len(body["sources"])
     except Exception as e:  # LLM 오류·서비스 오류·형식 오류 모두 이 장소만 실패
         p["status"] = "failed"
-        p["error"] = str(e) if isinstance(e, NoteFailed) else f"준비 중 오류: {type(e).__name__}: {e}"[:300]
+        if isinstance(e, NoteFailed):
+            p["error"] = str(e)
+        elif isinstance(e, LLMError):  # 공급자 원문(결제 URL 등)은 로그에만, 노트에는 고정 문구와 코드
+            p["error"] = f"{e.user_message} ({e.code})"
+        else:
+            p["error"] = f"준비 중 오류: {type(e).__name__}: {e}"[:300]
         if not isinstance(e, NoteFailed):
             log.warning("guide plan=%s place=%s 실패: %r", job.plan_id, p["place_id"], e)
         try:

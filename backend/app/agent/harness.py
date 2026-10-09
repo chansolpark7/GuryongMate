@@ -55,6 +55,8 @@ CHANGES_NOTE = ("[시스템] 지금 변경 제안 초안의 확정 변경 (답�
 NO_CHANGES_NOTE = ("[시스템] 지금 변경 제안 초안이 비어 있다 (제안 카드가 만들어지지 않는다). 일정을 바꾸려면 변경 도구를 "
                    "써야 한다. 도구로 바꾸지 않은 변경을 했다거나 제안한다고 말하지 말고, 권하고 싶은 변경은 선택지로만 말한다.")
 WEB_DONE_NOTE = "[시스템] 이번 턴의 웹 검색 한도({n}번)를 다 썼다. 더 검색하지 말고 지금까지 찾은 자료로 답하라."
+# 동행 모드 대화에서 이어받은 대기 제안을 고치지 않고 끝난 턴의 답변 끝에 붙인다 (제안은 그대로 남는다)
+PENDING_NOTICE = "아직 승인 대기 중인 변경안이 있어요."
 REVIEW_NOTE = ("[시스템] 방금 쓴 답변은 아직 사용자에게 보내지 않았다. 일정을 검토했더니 아래 문제가 남아 있다. "
                "must 는 반드시, should 는 가능하면 고친 뒤 review_plan 으로 다시 확인하라. 다 고친 뒤 최종 답변을 처음부터 "
                "다시 써라. 고칠 수 없는 문제는 최종 답변에서 이유를 짧게 말하라.\n")
@@ -170,13 +172,15 @@ async def active_trip(api: ServiceApi, plan_id: int) -> dict | None:
     return state if isinstance(state, dict) and state.get("active") else None
 
 
-async def memory_summary(api: ServiceApi, plan_id: int) -> str | None:
-    """docent 메모리 요약 (프롬프트용). docent 에 접근할 수 없으면 None (메모리 없이 턴은 계속)."""
+async def memory_summary(api: ServiceApi, plan_id: int) -> tuple[str | None, str | None]:
+    """docent 메모리 요약 (프롬프트용)과 해설 길이 선호 style_length (short | long | None).
+    docent 에 접근할 수 없으면 (None, None) (메모리 없이 턴은 계속)."""
     try:
-        return (await api.memory_summary(plan_id))["text"]
+        summary = await api.memory_summary(plan_id)
     except ApiError as e:
         log.warning("plan=%s 메모리 요약을 받지 못함: %s", plan_id, e)
-        return None
+        return None, None
+    return summary["text"], summary.get("style_length")
 
 
 async def latest_pending(api: ServiceApi, plan_id: int, session_id: str) -> dict | None:
@@ -243,10 +247,10 @@ async def run_turn(session_id: str, plan_id: int, user_text: str, llm: LLMProvid
     builtin_web = supports_web_search(llm)
     toolbox.web_limit = max(0, settings.web_search_per_turn) if docent else 0
     specs = tool_specs(review_on, proactive=hidden, guide=docent, web_functions=toolbox.web_limit > 0 and not builtin_web)
-    memory = await memory_summary(api, plan_id)
+    memory, style_length = await memory_summary(api, plan_id)
     rules, context = build_system_parts(plan_view, pending, dropped, repropose, review_on, now=now,
                                         simulated=simulated, trip=trip, plan=toolbox.last_plan, memory=memory,
-                                        docent=docent, web_searches=toolbox.web_limit)
+                                        docent=docent, web_searches=toolbox.web_limit, style_length=style_length)
     # 기록 편집 금지 공급자(Claude): 시스템 프롬프트는 고정 규칙만 두고(턴이 바뀌어도 같아 캐시된다), 턴마다 바뀌는
     # 맥락(현재 상황·메모리·지금 시각·현재 일정)은 이번 사용자 메시지 뒤 system 메시지로 둔다. 이후로는 덧붙이기만 한다
     append_only = getattr(llm, "append_only", False)
@@ -256,7 +260,8 @@ async def run_turn(session_id: str, plan_id: int, user_text: str, llm: LLMProvid
     else:
         messages = [{"role": "system", "content": build_system(
             plan_view, pending, dropped, repropose, review_on, now=now, simulated=simulated, trip=trip,
-            plan=toolbox.last_plan, memory=memory, docent=docent, web_searches=toolbox.web_limit)},
+            plan=toolbox.last_plan, memory=memory, docent=docent, web_searches=toolbox.web_limit,
+            style_length=style_length)},
             *history, {"role": "user", "content": user_text}]
     new_rows = [AgentMessage(session_id=session_id, role="user", content=user_text, hidden=hidden)]
     complete = 1  # new_rows[:complete] 는 저장해도 되는 완결된 기록 (도구 호출·결과 짝이 맞음)
@@ -279,10 +284,16 @@ async def run_turn(session_id: str, plan_id: int, user_text: str, llm: LLMProvid
         saved = True
         return await to_thread.run_sync(_save, session_id, closing_rows(note))
 
+    def edits_plan() -> bool:
+        """이번 턴이 일정을 고치는 턴인가: 도구로 초안을 실제로 바꿨거나 선제 턴(이벤트 자체가 변경 요청).
+        이어받은 대기 제안만 있는 턴(예: 동행 중 장소 질문)은 아니다 — 검토 관문·확정 변경 안내로 수정을 강요하지 않는다.
+        사용자가 말로 변경을 요청하면 LLM 이 변경 도구를 쓰므로 draft.changed 로 잡힌다."""
+        return draft.changed or hidden
+
     def changes_note() -> list[str]:
-        """답변이 실제 초안과 어긋나지 않게, 초안이 있거나 바뀐 턴(선제 턴은 항상)에는 매 호출에 확정 변경 목록을 준다.
+        """답변이 실제 초안과 어긋나지 않게, 일정을 고치는 턴에는 매 호출에 확정 변경 목록을 준다.
         기록에는 남기지 않는다."""
-        if toolbox.changes and draft.ops:
+        if edits_plan() and toolbox.changes and draft.ops:
             left = [v["message"] for v in toolbox.last_plan["violations"] if v["code"] not in SKIP_CODES]
             return [CHANGES_NOTE.format(changes="\n".join(f"- {c}" for c in toolbox.changes),
                                         left="\n".join(f"- {m}" for m in left) or "없음")]
@@ -317,7 +328,8 @@ async def run_turn(session_id: str, plan_id: int, user_text: str, llm: LLMProvid
                 extra = [FINAL_STEP_NOTE]
             # 일정을 바꾼 턴에서 검토 관문이 남아 있으면, 이 단계의 텍스트는 바로 내보내지 않고 보관한다.
             # 끝내려는 답변이 검토에서 되돌려지면 그 답변은 사용자에게 보이지 않은 채 버려진다.
-            gated = review_on and bool(draft.ops) and pushes_left > 0 and step_no < settings.max_steps - 2
+            gated = (review_on and edits_plan() and bool(draft.ops) and pushes_left > 0
+                     and step_no < settings.max_steps - 2)
             notes = changes_note() + extra
             if append_only:
                 # 웹 검색 도구는 턴 내내 그대로라(요청마다 max_uses = 턴 상한) 다 쓴 뒤로는 안내로 막는다
@@ -367,7 +379,8 @@ async def run_turn(session_id: str, plan_id: int, user_text: str, llm: LLMProvid
                     # 아직 답변 텍스트를 내보내지 않았으면 같은 단계를 다시 시도한다 (거절·SDK 가 이미 재시도한 오류는 제외).
                     log.warning("session=%s step=%d attempt=%d LLM 오류: %s", sid, step_no, attempt, e)
                     if not e.retryable or (text and not gated) or attempt == LLM_RETRIES:
-                        message = e.user_message or f"LLM 호출 실패: {e}"
+                        # 공급자 원문(결제 URL 등)은 위 로그에만. 사용자·기록에는 고정 문구와 코드만
+                        message = e.user_message
                         await save(message)
                         yield _error(e.code, message)
                         return
@@ -479,6 +492,12 @@ async def run_turn(session_id: str, plan_id: int, user_text: str, llm: LLMProvid
             yield _ev("text", delta=full_text)
             new_rows.append(AgentMessage(session_id=session_id, role="assistant", content=full_text))
             complete = len(new_rows)
+        if docent and pending and not draft.changed and PENDING_NOTICE not in full_text:
+            # 장소 질문 등으로 대기 제안을 건드리지 않은 동행 모드 턴: 제안이 아직 승인 대기 중임을 한 줄로 알린다
+            yield _ev("text", delta="\n\n" + PENDING_NOTICE)
+            full_text += "\n\n" + PENDING_NOTICE
+            last_row = new_rows[complete - 1]  # 이 턴의 마지막 답변 행 (도구 호출 없는 assistant)
+            last_row.content = (last_row.content.rstrip() + "\n\n" + PENDING_NOTICE).strip()
 
         # 카드 이벤트를 보내기 전에 기록부터 저장한다 (여기서 연결이 끊겨도 카드와 대화 기록이 어긋나지 않게)
         message_id = await save()

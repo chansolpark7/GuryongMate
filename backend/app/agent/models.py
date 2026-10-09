@@ -36,3 +36,15 @@ class AgentMessage(Base):
     steps: Mapped[list[dict] | None] = mapped_column(JSONB, nullable=True)
     cards: Mapped[list[dict] | None] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class AgentEventTurn(Base):
+    """선제 턴의 결과 (POST /sessions/{id}/events). trip 이 같은 이벤트를 다시 보내면 LLM 턴을 다시 돌리지 않고 이것을 돌려준다.
+    오류 없이 끝난 턴만 남긴다 (오류로 끝난 이벤트는 다시 보내면 다시 돈다)."""
+
+    __tablename__ = "agent_event_turn"
+
+    session_id: Mapped[str] = mapped_column(ForeignKey("agent_session.id", ondelete="CASCADE"), primary_key=True)
+    event_id: Mapped[int] = mapped_column(Integer, primary_key=True)  # trip 이벤트 id
+    result: Mapped[dict] = mapped_column(JSONB)  # ChatResult 그대로
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

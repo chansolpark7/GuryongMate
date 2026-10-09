@@ -289,3 +289,18 @@ def test_api_errors(status, text):
     with pytest.raises(LLMError, match=text) as e:
         run(provider(fake))
     assert not e.value.retryable  # SDK 가 이미 재시도한 오류는 하네스가 다시 시도하지 않는다
+
+
+@pytest.mark.parametrize("status, error, quota", [
+    (400, {"type": "invalid_request_error", "message": "Your credit balance is too low to access the Anthropic API."}, True),
+    (402, {"type": "billing_error", "message": "payment required"}, True),
+    (400, {"type": "invalid_request_error", "message": "bad"}, False),
+    (429, {"type": "rate_limit_error", "message": "slow down"}, False),
+])
+def test_billing_errors_are_quota(status, error, quota):
+    """크레딧·결제 오류는 llm_quota, 나머지는 llm_unavailable. 사용자 문구에는 공급자 원문이 없다."""
+    fake = Fake((status, {"type": "error", "error": error}))
+    with pytest.raises(LLMError) as e:
+        run(provider(fake))
+    assert e.value.code == ("llm_quota" if quota else "llm_unavailable")
+    assert error["message"] in str(e.value) and error["message"] not in e.value.user_message

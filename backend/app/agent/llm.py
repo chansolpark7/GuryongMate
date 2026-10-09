@@ -75,24 +75,35 @@ USER_LOCATION = {"type": "approximate", "country": "KR", "region": "Gyeongsangbu
 LLMEvent = TextDelta | ReasoningDelta | ToolCall | WebSearchCall | Citation | Finish
 
 
-class LLMError(RuntimeError):
-    """retryable: 하네스가 같은 단계를 다시 시도해도 되는지 (SDK 가 이미 재시도한 오류·거절은 False).
-    user_message: 사용자에게 보일 문구 (없으면 'LLM 호출 실패: …')."""
-    code = "llm_failed"
+LLM_UNAVAILABLE = "지금은 답할 수 없어요. 잠시 후 다시 시도해 주세요."
+LLM_QUOTA = "지금은 AI 사용 한도에 걸려 답할 수 없어요. 잠시 후 다시 시도해 주세요."
 
-    def __init__(self, message: str, *, retryable: bool = True, user_message: str | None = None):
+
+class LLMError(RuntimeError):
+    """message: 공급자 오류 원문 (서버 로그에만 남긴다. 결제 URL 등이 들어 있을 수 있다).
+    retryable: 하네스가 같은 단계를 다시 시도해도 되는지 (SDK 가 이미 재시도한 오류·거절은 False).
+    quota: 크레딧·결제 한도 부족 (code llm_quota). user_message: 사용자에게 보일 고정 문구 (원문을 넣지 않는다)."""
+
+    def __init__(self, message: str, *, retryable: bool = True, user_message: str | None = None,
+                 quota: bool = False):
         super().__init__(message)
         self.retryable = retryable
-        self.user_message = user_message
+        self.code = "llm_quota" if quota else "llm_unavailable"
+        self.user_message = user_message or (LLM_QUOTA if quota else LLM_UNAVAILABLE)
+
+
+def http_error(name: str, status: int, body: str) -> LLMError:
+    """OpenAI 호환·Ollama 의 HTTP 오류. 402 나 insufficient_quota(OpenAI 크레딧 부족)면 llm_quota."""
+    return LLMError(f"{name} HTTP {status}: {body[:500]}", quota=status == 402 or "insufficient_quota" in body)
 
 
 class LLMRefusal(LLMError):
     """모델(안전 분류기)이 요청을 거절함 (Claude stop_reason "refusal"). 같은 요청을 다시 보내도 같다."""
-    code = "llm_refused"
 
     def __init__(self, message: str, category: str | None = None):
         super().__init__(message, retryable=False, user_message=(
             "죄송해요, 이 요청은 처리할 수 없어요. 여행 일정과 관련해 다르게 말씀해 주시겠어요?"))
+        self.code = "llm_refused"
         self.category = category
 
 
@@ -140,7 +151,7 @@ class OpenAICompatProvider:
             async with httpx.AsyncClient(timeout=self._timeout) as client:
                 async with client.stream("POST", self._url, json=body, headers=self._headers) as resp:
                     if resp.status_code >= 400:
-                        raise LLMError(f"{self.name} HTTP {resp.status_code}: {(await resp.aread()).decode(errors='replace')[:500]}")
+                        raise http_error(self.name, resp.status_code, (await resp.aread()).decode(errors="replace"))
                     async for line in resp.aiter_lines():
                         if not line.startswith("data:"):
                             continue
@@ -149,7 +160,7 @@ class OpenAICompatProvider:
                             break
                         chunk = json.loads(data)
                         if chunk.get("error"):
-                            raise LLMError(f"{self.name}: {chunk['error']}")
+                            raise LLMError(f"{self.name}: {chunk['error']}", quota="insufficient_quota" in str(chunk["error"]))
                         for choice in chunk.get("choices", []):
                             delta = choice.get("delta") or {}
                             if delta.get("content"):
@@ -228,13 +239,13 @@ class OllamaProvider:
             async with httpx.AsyncClient(timeout=self._timeout) as client:
                 async with client.stream("POST", self._url, json=body) as resp:
                     if resp.status_code >= 400:
-                        raise LLMError(f"{self.name} HTTP {resp.status_code}: {(await resp.aread()).decode(errors='replace')[:500]}")
+                        raise http_error(self.name, resp.status_code, (await resp.aread()).decode(errors="replace"))
                     async for line in resp.aiter_lines():
                         if not line.strip():
                             continue
                         chunk = json.loads(line)
                         if chunk.get("error"):
-                            raise LLMError(f"{self.name}: {chunk['error']}")
+                            raise LLMError(f"{self.name}: {chunk['error']}", quota="insufficient_quota" in str(chunk["error"]))
                         msg = chunk.get("message") or {}
                         if msg.get("thinking"):
                             yield ReasoningDelta(msg["thinking"])
@@ -313,7 +324,7 @@ class OpenAIResponsesProvider:
             async with httpx.AsyncClient(timeout=self._timeout, transport=self._transport) as client:
                 async with client.stream("POST", self._url, json=body, headers=self._headers) as resp:
                     if resp.status_code >= 400:
-                        raise LLMError(f"{self.name} HTTP {resp.status_code}: {(await resp.aread()).decode(errors='replace')[:500]}")
+                        raise http_error(self.name, resp.status_code, (await resp.aread()).decode(errors="replace"))
                     async for line in resp.aiter_lines():
                         if not line.startswith("data:"):
                             continue
@@ -349,7 +360,7 @@ class OpenAIResponsesProvider:
                                          "reasoning": (u.get("output_tokens_details") or {}).get("reasoning_tokens", 0)}
                         elif kind in ("error", "response.failed"):
                             err = ev.get("error") or ev.get("response", {}).get("error")
-                            raise LLMError(f"{self.name}: {err}")
+                            raise LLMError(f"{self.name}: {err}", quota="insufficient_quota" in str(err))
         except httpx.HTTPError as e:
             raise LLMError(f"{self.name} 연결 실패: {e!r}") from e
         for c in calls:

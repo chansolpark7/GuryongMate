@@ -375,7 +375,8 @@ def test_prepare_llm_error_moves_to_next_place(client, up, user):  # noqa: F811
     finally:
         PASSAGES.pop("p-cafe")
     assert [(p["place_id"], p["status"]) for p in job["places"]] == [("p-house", "failed"), ("p-cafe", "ready")]
-    assert "LLMError" in job["places"][0]["error"] and len(th.llm.calls) == 2
+    error = job["places"][0]["error"]  # 공급자 원문은 로그에만
+    assert "(llm_unavailable)" in error and "HTTP 500" not in error and len(th.llm.calls) == 2
     assert note(client, user, pid, "p-house")["status"] == "failed"
     assert note(client, user, pid, "p-cafe")["sources"][0]["title"] == "한국관광공사 소개 · 카페"
 

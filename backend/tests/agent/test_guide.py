@@ -266,9 +266,11 @@ def test_answer_is_written_against_confirmed_changes(client, trip_plan, up):  # 
     assert "'카페' 체류 60분 → 30분" in note["content"] and "다른 방법으로" in note["content"]
     assert not any(m["content"].startswith("[시스템]") for m in th.llm.calls[0])  # 초안이 없던 첫 호출에는 없음
 
-    chat(client, sid, "고마워", [["네!"]])  # 이어받은 대기 제안이 있으면 첫 호출부터 그 변경이 기준
-    assert "'카페' 체류 60분 → 30분" in th.llm.calls[-1][-1]["content"]
-    assert not any(m["content"].startswith("[시스템]") for m in th.llm.calls[-1][1:-1])
+    # 이어받은 대기 제안만 있고 이번 턴에 바꾸지 않으면 확정 변경 안내를 붙이지 않는다 (제안은 맥락에 대기 제안으로만)
+    events = chat(client, sid, "고마워", [["네!"]])
+    assert not any(m["content"].startswith("[시스템]") for m in th.llm.calls[-1][1:])
+    assert "'카페' 체류 60분 → 30분" in system_of(len(th.llm.calls) - 1)
+    assert last(events, "done")["text"] == "네!\n\n아직 승인 대기 중인 변경안이 있어요."
 
 
 def test_event_turn_single_proposal_format(client, trip_plan, up):  # noqa: F811
@@ -303,3 +305,103 @@ def test_guide_view_and_changes_follow_live_progress(client, trip_plan, up, plan
     live_end = prop["before"]["days"][0]["end_at"]
     assert live_end != baseline["end_at"]
     assert f"1일차 종료: {live_end} → " in [c["message"] for c in prop["changes"] if c["kind"] == "day_end"][0]
+
+
+# ---------- 대기 제안이 있는 동행 모드의 장소 질문 (장면 ④ 뒤) ----------
+
+PENDING = "아직 승인 대기 중인 변경안이 있어요."
+
+
+@pytest.fixture()
+def pending_event(client, trip_plan, up, monkeypatch):  # noqa: F811
+    """선제 턴이 같은 날 중복(가옥거리 한 번 더, 검토 should)이 남은 제안을 만들어 승인 대기로 둔다. 이후 검토 관문 켬."""
+    from app.agent.config import settings
+    sid, pid, items = trip_plan
+    th.llm.script = [[("add_item", {"place_id": "p-house"})], ["가옥거리를 한 번 더 넣었어요."]]
+    res = ok(client.post(f"/agent/sessions/{sid}/events",
+                         json={"event": delay_event(pid, items), "trip": trip_state(pid, items)}, headers=H))
+    [card] = res["cards"]
+    monkeypatch.setattr(settings, "review_rounds", 2)
+    up.trip = trip_state(pid, items)
+    th.llm.calls.clear()
+    return sid, pid, items, card["proposal"]
+
+
+@pytest.mark.parametrize("question", ["구룡포항 도착했어. 여기 어떤 곳이야?", "왜 이름이 구룡포야?"])
+def test_place_question_does_not_reopen_pending_proposal(client, pending_event, question):  # noqa: F811
+    """장소 질문은 검토 관문·확정 변경 안내 없이 그 질문에 답하고, 대기 제안은 그대로 두고 답 끝에 한 줄로 알린다."""
+    sid, pid, _, prop = pending_event
+    events = chat(client, sid, question, [["아홉 마리 용이 승천했다는 이야기에서 온 이름이에요."]])  # 관문이 돌면 대본이 모자라 실패
+    assert len(th.llm.calls) == 1
+    assert not any(e == "step" and d["kind"] == "review" for e, d in events)
+    assert not any(m["role"] == "user" and m["content"].startswith("[시스템]") for m in th.llm.calls[0])
+    system = system_of(0)
+    assert f"## 승인 대기 중인 제안 #{prop['id']}" in system and "이 제안을 고치지 말고 질문에만 답한다" in system
+    assert "왜 이름이 구룡포야?" in system  # 현장 해설 규칙: 장소 질문은 일정을 고치지 않는다
+    done = last(events, "done")
+    assert done["text"] == f"아홉 마리 용이 승천했다는 이야기에서 온 이름이에요.\n\n{PENDING}"
+    assert done["cards"] == [] and "proposal" not in dict(events)
+    assert ok(client.get(f"/planner/plans/{pid}/proposals/{prop['id']}", headers=H))["status"] == "pending"
+    msgs = ok(client.get(f"/agent/sessions/{sid}", headers=H))["messages"]
+    assert msgs[-1]["content"].endswith(PENDING)
+
+
+def test_change_request_with_pending_still_goes_through_gate(client, pending_event):  # noqa: F811
+    """일정을 실제로 바꾼 턴은 이어받은 제안(같은 날 중복 should) 위에서 검토 관문이 돈다."""
+    sid, pid, items, prop = pending_event
+    events = chat(client, sid, "카페는 30분만", [
+        [("update_item", {"item_id": items["p-cafe"], "stay_minutes": 30})],   # 이어받은 초안을 실제로 바꿈
+        ["줄였어요"], ["줄였어요."], ["카페를 30분으로 줄였어요."],             # 관문이 중복(should)으로 두 번 되돌려 보냄
+    ])
+    assert [d["detail"] for e, d in events if e == "step" and d["kind"] == "review" and d["status"] == "done"][0] != "문제 없음"
+    assert len(th.llm.calls) == 4
+    done = last(events, "done")
+    assert done["text"] == "카페를 30분으로 줄였어요." and PENDING not in done["text"]
+    new = last(events, "proposal")
+    assert ok(client.get(f"/planner/plans/{pid}/proposals/{prop['id']}", headers=H))["status"] == "superseded"
+    assert new["status"] == "pending"
+
+
+def test_style_length_sets_answer_length(client, trip_plan, up):  # noqa: F811
+    """메모리 style_length 가 short 면 동행 모드 대화의 해설 답변을 1~2문장으로, 선제 턴에는 넣지 않는다."""
+    sid, pid, items = trip_plan
+    item = ok(client.post("/docent/memory", json={"scope": "user", "category": "style", "text": "해설은 핵심만 짧게",
+                                                  "source": "user_edit"}, headers=H), 201)
+    try:
+        up.trip = trip_state(pid, items)
+        chat(client, sid, "여기 어떤 곳이야?", [["가옥거리예요."]])
+        assert "## 해설 길이" in system_of(0) and "1~2문장" in system_of(0)
+        th.llm.script = [["늦어졌어요. 다른 방법으로 카페를 빼도 돼요."]]
+        ok(client.post(f"/agent/sessions/{sid}/events",
+                       json={"event": delay_event(pid, items), "trip": trip_state(pid, items)}, headers=H))
+        assert "## 해설 길이" not in system_of(1) and "짧은 세 문장" in th.llm.calls[1][-1]["content"]
+        ok(client.patch(f"/docent/memory/{item['id']}", json={"text": "해설은 자세히"}, headers=H))
+        chat(client, sid, "더 얘기해줘", [["네."]])
+        assert "4~6문장" in system_of(2)
+    finally:
+        client.delete(f"/docent/memory/{item['id']}", headers=H)
+
+
+# ---------- 선제 턴 중복 ----------
+
+def test_same_event_id_returns_previous_result(client, trip_plan, up):  # noqa: F811
+    """trip 이 같은 이벤트를 다시 보내면 LLM 턴을 다시 돌리지 않고 이전 결과(message_id·proposal)를 돌려준다."""
+    sid, pid, items = trip_plan
+    body = {"event": delay_event(pid, items), "trip": trip_state(pid, items)}
+    th.llm.script = [[("update_item", {"item_id": items["p-cafe"], "stay_minutes": 30})], ["카페를 줄였어요."]]
+    first = ok(client.post(f"/agent/sessions/{sid}/events", json=body, headers=H))
+    calls = len(th.llm.calls)
+    again = ok(client.post(f"/agent/sessions/{sid}/events", json=body, headers=H))
+    assert len(th.llm.calls) == calls
+    assert again["message_id"] == first["message_id"] and again["cards"][0]["proposal"]["id"] == first["cards"][0]["proposal"]["id"]
+    assert len(ok(client.get(f"/planner/plans/{pid}/proposals", headers=H))) == 1
+
+    # 다른 이벤트는 새 턴. 오류로 끝난 이벤트는 다시 보내면 다시 돈다
+    from app.agent.llm import LLMError
+    other = {**body, "event": {**body["event"], "id": 42}}
+    th.llm.script = [[LLMError("credit https://billing", retryable=False, quota=True)]]
+    failed = ok(client.post(f"/agent/sessions/{sid}/events", json=other, headers=H))
+    assert failed["error"]["code"] == "llm_quota" and "billing" not in failed["error"]["message"]
+    th.llm.script = [["다시 확인했어요."]]
+    retried = ok(client.post(f"/agent/sessions/{sid}/events", json=other, headers=H))
+    assert retried["error"] is None and retried["message_id"] != first["message_id"]
