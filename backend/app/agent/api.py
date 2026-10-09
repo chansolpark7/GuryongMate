@@ -1,4 +1,4 @@
-"""planner·places 서비스를 HTTP API 로 호출하는 비동기 클라이언트 (서비스 간 규칙: 내부 코드 import 금지).
+"""planner·places·routing·safety·trip 서비스를 HTTP API 로 호출하는 비동기 클라이언트 (서비스 간 규칙: 내부 코드 import 금지).
 
 Agent 는 앱·CLI 와 똑같은 공개 API 만 쓴다. 주소는 AGENT_API_BASE_URL (compose 에서는 게이트웨이).
 """
@@ -100,6 +100,14 @@ class ServiceApi:
 
     async def safety_outlook(self, day: str) -> dict:
         return await self._req("GET", "/safety/outlook", params={"date": day})
+
+    async def safety_sim(self) -> dict:
+        """가상 상황·시각 (SAFETY_SOURCE=mock 일 때만, 아니면 404 sim_disabled). 시계용이라 짧게 기다린다."""
+        return await self._req("GET", "/safety/sim", timeout=2)
+
+    # ----- trip (여행 중 상태) -----
+    async def trip_state(self, plan_id: int) -> dict:
+        return await self._req("GET", f"/trip/plans/{plan_id}/state", timeout=settings.trip_timeout_sec)
 
     # ----- planner: 제안 -----
     async def list_proposals(self, plan_id: int, status: str | None = None) -> list[dict]:

@@ -288,6 +288,10 @@ def _dump(obj) -> str:
     return json.dumps(obj, ensure_ascii=False)
 
 
+class Refused(Exception):
+    """동행 모드에서 하지 않는 변경 (완료 항목, 지난 시각 등). LLM 에 이유를 돌려준다."""
+
+
 class Toolbox:
     def __init__(self, api: ServiceApi, plan_id: int, draft: Draft, session_id: str):
         self.api = api
@@ -297,6 +301,25 @@ class Toolbox:
         self.last_plan: dict | None = None  # 가장 최근의 (초안 적용) 일정 — 단계 문구·이동시간 변화 계산용
         self.rev = 0  # 초안이 바뀔 때마다 +1
         self.reviewed_rev = 0  # 마지막으로 검토한 초안의 rev
+        self.trip: dict | None = None  # 동행 모드면 {"day": 오늘 n일차, "now": "HH:MM"} — 지난 일을 바꾸지 않게
+
+    def _guard(self, op: dict) -> None:
+        """동행 모드: 완료 항목·지난 시각·진행 상태는 바꾸지 않는다 (docs/agent/README.md §11.3)."""
+        if not self.trip or not self.last_plan or op["op"] not in ("update_item", "remove_item"):
+            return
+        item = next((i for d in self.last_plan["days"] for i in d["items"] if i["id"] == op["item_id"]), None)
+        if item and item["status"] == "done":
+            raise Refused("이미 다녀온(완료) 항목은 바꾸거나 지울 수 없습니다.")
+        if op["op"] == "remove_item":
+            return
+        if op.get("status") in ("visiting", "done"):
+            raise Refused("진행 상태(visiting·done)는 앱이 위치로 기록합니다. 직접 바꾸지 마세요.")
+        if item and item["status"] == "visiting" and set(op) - {"op", "item_id", "stay_minutes", "memo"}:
+            raise Refused("지금 머무는 곳은 체류 시간(stay_minutes)과 메모만 바꿀 수 있습니다.")
+        day = op.get("day") or (item["day"] if item else None)
+        start = op.get("start_time")
+        if start and day == self.trip["day"] and start < self.trip["now"]:
+            raise Refused(f"지난 시각({start})으로 고정할 수 없습니다. 지금은 {self.trip['now']}입니다.")
 
     async def current_view(self) -> dict:
         """초안이 있으면 초안 적용 결과, 없으면 확정 일정 (LLM 용 압축 표현). last_plan 도 갱신한다."""
@@ -325,6 +348,8 @@ class Toolbox:
             return ToolOutcome(False, _dump({"error": f"인자가 잘못됐습니다: {e}"}), "인자 오류")
         except ApiError as e:
             return ToolOutcome(False, _dump({"error": e.message, "code": e.code}), e.message[:60])
+        except Refused as e:
+            return ToolOutcome(False, _dump({"error": str(e), "code": "not_allowed_during_trip"}), str(e)[:60])
 
     # ----- 조회 -----
     async def _t_search_places(self, query: str = "", content_type: str = "", area: str = "", near_place_id: str = "",
@@ -518,6 +543,7 @@ class Toolbox:
         return ToolOutcome(True, _dump({"result": result, "issues": issues}), summarize(issues))
 
     async def _stage(self, op: dict, label: str, notice: str = "") -> ToolOutcome:
+        self._guard(op)
         candidate = [*self.draft.ops, op]
         r = await self.api.preview(self.plan_id, candidate)  # 적용 불가면 ApiError -> 초안에 넣지 않음
         before_travel = total_travel(self.last_plan) if self.last_plan else None

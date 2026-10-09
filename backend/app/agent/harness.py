@@ -4,6 +4,7 @@
 2. LLM 이 도구를 부르면 실행하고 결과를 넣어 다시 호출 (최대 max_steps). 진행 상황은 status·step 이벤트로
 3. recommend_places 는 추천 카드를 바로 보낸다
 4. 변경 도구로 쌓인 초안이 있으면 턴 끝에 planner 에 변경 제안으로 저장한다 (사용자가 승인해야 반영)
+5. 여행 중(trip 상태 active)이면 동행 모드: 현재 상황 블록을 넣고 지난 일은 바꾸지 않는다 (docs/agent/README.md §11)
 
 LLM 응답은 수 분이 걸릴 수 있으므로 DB 는 턴 시작(기록 읽기)과 끝(기록 저장)에만 짧게 쓰고,
 동기 DB 호출은 스레드에서 실행해 이벤트 루프를 막지 않는다.
@@ -15,6 +16,7 @@ from datetime import datetime, timezone
 from anyio import to_thread
 from sqlalchemy import select, update
 
+from app.agent import clock
 from app.agent.api import ApiError, ServiceApi
 from app.agent.config import settings
 from app.agent.llm import Finish, LLMError, LLMProvider, ReasoningDelta, TextDelta, ToolCall
@@ -116,16 +118,30 @@ def _load_history(session_id: str, limit: int) -> list[dict]:
     return out
 
 
-def _save(session_id: str, rows: list[AgentMessage]) -> None:
+def _save(session_id: str, rows: list[AgentMessage]) -> int | None:
+    """저장하고 마지막 행의 id 를 돌려준다."""
     with SessionLocal.begin() as db:
         db.add_all(rows)
         db.execute(update(AgentSession).where(AgentSession.id == session_id)
                    .values(updated_at=datetime.now(timezone.utc)))
+        db.flush()
+        return rows[-1].id if rows else None
 
 
 def add_note(session_id: str, text: str) -> None:
     """앱에서 일어난 일(카드 동작 등)을 다음 턴의 LLM 이 알 수 있게 숨김 메시지로 남긴다."""
     _save(session_id, [AgentMessage(session_id=session_id, role="user", content=f"[알림] {text}", hidden=True)])
+
+
+async def active_trip(api: ServiceApi, plan_id: int) -> dict | None:
+    """진행 중인 여행일의 TripState. 여행 중이 아니거나 trip 에 접근할 수 없으면 None (계획 모드로 동작)."""
+    try:
+        state = await api.trip_state(plan_id)
+    except ApiError as e:
+        if e.status != 404:  # 404: trip 이 없거나(아직 배포 전) 계획을 모름
+            log.warning("plan=%s trip 상태를 받지 못해 계획 모드로: %s", plan_id, e)
+        return None
+    return state if isinstance(state, dict) and state.get("active") else None
 
 
 async def latest_pending(api: ServiceApi, plan_id: int, session_id: str) -> dict | None:
@@ -139,8 +155,11 @@ async def latest_pending(api: ServiceApi, plan_id: int, session_id: str) -> dict
 # ---------- 턴 ----------
 
 async def run_turn(session_id: str, plan_id: int, user_text: str, llm: LLMProvider, api: ServiceApi, *,
-                   repropose: dict | None = None) -> AsyncIterator[Event]:
+                   repropose: dict | None = None, trip: dict | None = None, fetch_trip: bool = True,
+                   hidden: bool = False) -> AsyncIterator[Event]:
     """repropose: 다시 만들 제안 (ProposalDetail). 빈 초안에서 시작하고, 새 제안이 그것을 대체한다.
+    trip: 여행 상태 (TripState). fetch_trip 이면 trip 에서 조회한다. active 면 동행 모드.
+    hidden: 사용자 메시지를 화면에 보이지 않게 저장 (선제 턴의 '[이벤트] …').
 
     대화 기록은 턴이 끝날 때 한 번 저장한다. 오류로 끝나거나 연결이 끊겨도 그때까지의 완결된 기록
     (도구 호출과 결과의 짝이 맞는 부분)과 이미 만든 카드는 저장한다.
@@ -168,13 +187,26 @@ async def run_turn(session_id: str, plan_id: int, user_text: str, llm: LLMProvid
     plan_view = await toolbox.current_view()
     base_version = toolbox.last_plan["version"]
 
+    # 여행 중이면 동행 모드. '지금'은 trip 의 now (trip 도 safety 시각을 따른다), 아니면 safety 시계
+    if fetch_trip:
+        trip = await active_trip(api, plan_id)
+    elif trip is not None and not trip.get("active"):
+        trip = None
+    if trip and (trip_now := clock.parse(trip.get("now"))):
+        now, simulated = trip_now, trip.get("clock") == "sim"
+    else:
+        now, simulated = await clock.now(api)
+    if trip:
+        toolbox.trip = {"day": trip.get("day"), "now": f"{now:%H:%M}"}
+
     history = await to_thread.run_sync(_load_history, session_id, settings.history_messages)
     review_on = settings.review_rounds > 0
     pushes_left = settings.review_rounds
     specs = tool_specs(review_on)
-    messages = [{"role": "system", "content": build_system(plan_view, pending, dropped, repropose, review_on)},
-                *history, {"role": "user", "content": user_text}]
-    new_rows = [AgentMessage(session_id=session_id, role="user", content=user_text)]
+    system = build_system(plan_view, pending, dropped, repropose, review_on, now=now, simulated=simulated,
+                          trip=trip, plan=toolbox.last_plan)
+    messages = [{"role": "system", "content": system}, *history, {"role": "user", "content": user_text}]
+    new_rows = [AgentMessage(session_id=session_id, role="user", content=user_text, hidden=hidden)]
     complete = 1  # new_rows[:complete] 는 저장해도 되는 완결된 기록 (도구 호출·결과 짝이 맞음)
     said: list[str] = []  # 이번 턴에 사용자에게 보인 말 (도구 호출 전 말 포함)
     steps = Steps()
@@ -190,10 +222,10 @@ async def run_turn(session_id: str, plan_id: int, user_text: str, llm: LLMProvid
         rows[-1].cards = cards or None
         return rows
 
-    async def save(note: str | None = None) -> None:
+    async def save(note: str | None = None) -> int | None:
         nonlocal saved
         saved = True
-        await to_thread.run_sync(_save, session_id, closing_rows(note))
+        return await to_thread.run_sync(_save, session_id, closing_rows(note))
 
     usage = {"input": 0, "cached": 0, "output": 0, "reasoning": 0, "calls": 0}  # 이 턴의 LLM 토큰 사용량
     nudged = False
@@ -340,13 +372,14 @@ async def run_turn(session_id: str, plan_id: int, user_text: str, llm: LLMProvid
             complete = len(new_rows)
 
         # 카드 이벤트를 보내기 전에 기록부터 저장한다 (여기서 연결이 끊겨도 카드와 대화 기록이 어긋나지 않게)
-        await save()
+        message_id = await save()
         if proposal:
             yield _ev("proposal", **proposal)
         if steps.summary:
             yield _ev("steps_done", count=len(steps.items), summary=steps.summary)
-        log.info("session=%s usage %s", sid, usage)
-        yield _ev("done", text=full_text, cards=cards, usage=usage)
+        log.info("session=%s mode=%s usage %s", sid, "guide" if trip else "plan", usage)
+        yield _ev("done", text=full_text, cards=cards, usage=usage, message_id=message_id,
+                  mode="guide" if trip else "plan")
     finally:
         if not saved:
             # 연결 끊김(취소)이나 예상 못 한 예외: 여기서는 await 할 수 없어 짧게 동기로 저장한다
