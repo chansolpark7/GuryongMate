@@ -193,7 +193,7 @@ def cmd_replay(c, a):
         if prev is not None and a.speed > 0:
             _time.sleep(max(0.0, (act.at - prev).total_seconds() / a.speed))
         prev = act.at
-        if act.kind in ("sim", "loc") and sim_ok:  # 가상 시각을 재생 시각에 맞춘다
+        if sim_ok:  # 가상 시각을 재생 시각에 맞춘다 (--speed 0 이어도 모든 동작마다)
             try:
                 c.set_sim(scenario=act.data.get("scenario") if act.kind == "sim" else None, now=act.at.isoformat())
             except Exception as e:
@@ -207,7 +207,7 @@ def cmd_replay(c, a):
                 print_state(c.trip_start(plan))
                 started = True
             else:
-                _tick(c, plan, act.at)
+                _tick(c, plan, act.at, wait=sim_ok and a.speed == 0)
         elif act.kind == "loc":
             r = c.trip_location(plan, [_point(act.lat, act.lng, act.at, 10, "replay")])
             if a.verbose:
@@ -215,20 +215,25 @@ def cmd_replay(c, a):
             for e in r["events"]:
                 print_event(e)
         elif act.kind == "tick":
-            _tick(c, plan, act.at)
+            _tick(c, plan, act.at, wait=sim_ok and a.speed == 0)
         elif act.kind == "expect":
             if a.speed > 0:
                 _time.sleep(0.5)  # 응답 뒤 선제 턴 전송(백그라운드)을 조금 기다린다
             ok = matches(act.data, c.trip_events(plan, 0, 200))
             passed, failed = passed + ok, failed + (not ok)
             print(f"{act.at:%H:%M:%S} 기대 {act.data}: {GREEN + '통과' if ok else RED + '실패'}{RESET}")
+    if sim_ok and prev is not None and a.speed == 0:
+        _wait_clock(c, plan, prev)  # 끝난 뒤 상태와 이어서 하는 `trip tick` 이 재생 마지막 시각을 보게
     print()
     print_state(c.trip_state(plan))
     print(f"\n기대 {passed + failed}개 중 {passed}개 통과" + (f", {RED}{failed}개 실패{RESET}" if failed else ""))
 
 
-def _tick(c, plan: int, at: datetime) -> None:
-    """planner 안전 점검(개발 모드)을 바로 돌리고 재생 시각으로 trip 틱. 운영 모드면 점검은 planner 주기(60초)에 맡긴다."""
+def _tick(c, plan: int, at: datetime, wait: bool = False) -> None:
+    """planner 안전 점검(개발 모드)을 바로 돌리고 재생 시각으로 trip 틱. 운영 모드면 점검은 planner 주기(60초)에 맡긴다.
+    wait: 틱이 보내는 선제 턴은 trip·planner 의 지금을 쓰므로, 기다리지 않는 재생(--speed 0)이면 시계가 따라올 때까지 기다린다."""
+    if wait:
+        _wait_clock(c, plan, at)
     try:
         c.safety_scan()
     except Exception:
@@ -238,13 +243,15 @@ def _tick(c, plan: int, at: datetime) -> None:
 
 def _wait_clock(c, plan: int, target: datetime, limit_sec: float = 10) -> None:
     """trip·planner 는 가상 시각을 몇 초씩 기억한다(TRIP_CLOCK_CACHE_SEC). 가상 시각을 크게 옮긴 직후 시작하면
-    '여행일이 아님'이 될 수 있어, trip 의 지금이 재생 시각에 가까워질 때까지 기다린다."""
+    '여행일이 아님'이 될 수 있어, trip 의 지금이 재생 시각에 가까워질 때까지 기다린다.
+    (planner 도 같은 길이로 캐시하므로 trip 이 따라오면 planner 도 곧 따라온다)"""
     end = _time.monotonic() + limit_sec
     while _time.monotonic() < end:
         now = datetime.fromisoformat(c.trip_state(plan)["now"])
-        if abs((now - target).total_seconds()) < 120:
+        if abs((now - target).total_seconds()) < 60:
             return
         _time.sleep(1)
+    print(f"{YELLOW}trip 의 지금이 재생 시각({target:%H:%M})을 따라오지 않았습니다 (TRIP_CLOCK=safety 인지 확인).{RESET}")
 
 
 # ---------- sim ----------

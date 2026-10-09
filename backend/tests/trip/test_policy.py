@@ -67,3 +67,17 @@ def test_cooldown_holds_delay_but_not_safety():
 
 def test_empty_queue():
     assert pick_next([], None, T0, COOL) == (None, [])
+
+
+def test_proactive_state_now_not_before_event():
+    """선제 턴의 TripState.now 는 이벤트 판정 시각보다 이르지 않다 (가상 시각을 크게 옮긴 직후 trip 시계 캐시가 늦을 때)."""
+    from datetime import datetime, timedelta, timezone
+
+    from app.trip.clock import FixedClock
+    from app.trip.service import state_view
+
+    kst = timezone(timedelta(hours=9))
+    stale, event_at = datetime(2026, 10, 10, 13, 0, tzinfo=kst), datetime(2026, 10, 10, 15, 5, tzinfo=kst)
+    assert state_view(None, 1, FixedClock(stale), at_least=event_at).now == event_at
+    assert state_view(None, 1, FixedClock(event_at), at_least=stale).now == event_at
+    assert state_view(None, 1, FixedClock(stale)).now == stale

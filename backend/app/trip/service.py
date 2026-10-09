@@ -48,8 +48,12 @@ def _planner_error(e: UpstreamError) -> TripError:
 
 # ---------- 보기 ----------
 
-def state_view(td: TripDay | None, plan_id: int, clock: Clock) -> TripState:
+def state_view(td: TripDay | None, plan_id: int, clock: Clock, at_least: datetime | None = None) -> TripState:
+    """at_least: 지금이 이 시각보다 이르면 이 시각으로 본다 (선제 턴: 이벤트 판정 시각. 가상 시각을 크게 옮긴 직후
+    trip 의 시계가 캐시 때문에 몇 초 늦을 때도 Agent 가 이벤트보다 이른 '지금'을 보지 않게)."""
     now = clock.now()
+    if at_least is not None and at_least > now:
+        now = at_least
     if td is None:
         return TripState(plan_id=plan_id, active=False, day=None, date=None, started_at=None, ended_at=None,
                          ended_reason=None, now=now, clock=clock.kind, location=None, current=None, next=None,
@@ -487,7 +491,7 @@ def dispatch(trip_id: int, clients: Clients, clock: Clock) -> int:
                     ev.last_error = "agent 세션을 정하지 못함"
                     return sent
                 session_id, event_json = td.session_id, event_view(ev).model_dump(mode="json")
-                trip_json = state_view(td, td.plan_id, clock).model_dump(mode="json")
+                trip_json = state_view(td, td.plan_id, clock, at_least=_kst(ev.now)).model_dump(mode="json")
 
             try:  # LLM 응답을 기다리는 동안 DB 연결·잠금을 잡지 않는다
                 result = clients.agent.send_event(session_id, event_json, trip_json, auth)
