@@ -1,0 +1,8 @@
+# export 단계(빌드 때만). 런타임 이미지에는 들어가지 않는다
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.5.1+cpu
+transformers==4.46.3
+huggingface_hub==0.26.5
+onnx==1.17.0
+onnxruntime==1.20.1
+numpy==2.1.3
