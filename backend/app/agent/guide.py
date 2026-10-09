@@ -65,8 +65,11 @@ PREP_SYSTEM = """너는 포항 구룡포 여행 앱 "구룡메이트"의 현장 
 PREP_WEB = ("근거가 부족하면(역사·배경·볼거리) 웹 검색을 한다 (최대 {n}번). 결과는 공식·언론 출처를 우선한다. "
             "검색 결과로 쓴 내용은 그 source_id 를 sources 에 넣는다 (내장 검색의 인용은 자동으로 출처가 된다).")
 PREP_NO_WEB = "웹 검색은 쓸 수 없다. 근거 자료에 있는 것만으로 쓴다."
+# 검색 결과를 알려 주는 내장 검색(Claude): 결과에 source_id 가 없고, JSON 답에는 인용이 붙지 않는다
+PREP_WEB_URLS = " 웹 검색 결과에는 source_id 가 없으니, 노트에 쓴 검색 결과는 그 URL 을 sources 에 넣는다."
 JSON_NOTE = "[시스템] 노트를 위 형식의 JSON 객체 하나로만 답하라. 설명이나 코드블록 없이 {로 시작해 }로 끝나야 한다."
 FINAL_NOTE = "[시스템] 더는 도구를 쓸 수 없다. 지금까지 찾은 자료로 노트를 위 형식의 JSON 객체 하나로만 답하라."
+WEB_DONE_NOTE = "[시스템] 이 장소의 웹 검색 한도({n}번)를 다 썼다. 더 검색하지 말고 지금까지 찾은 자료로 쓴다."
 
 
 @dataclass
@@ -186,7 +189,7 @@ async def _prepare_one(job: GuideJob, p: dict, llm: LLMProvider, api: ServiceApi
         p["seconds"] = round(time.monotonic() - started, 1)
         p["usage"] = usage
         for k, v in usage.items():
-            job.usage[k] += v
+            job.usage[k] = job.usage.get(k, 0) + v
         log.info("guide plan=%s place=%s status=%s sec=%s web=%d sources=%d usage=%s", job.plan_id, p["place_id"],
                  p["status"], p["seconds"], p["web_searches"], p["sources"], usage)
 
@@ -214,37 +217,54 @@ async def write_note(llm: LLMProvider, api: ServiceApi, toolbox: Toolbox, place_
     web_on = toolbox.web_limit > 0
     specs = [PASSAGES_SPEC] + (WEB_SPECS if web_on and not builtin else [])
     allowed = {s["function"]["name"] for s in specs}
-    system = PREP_SYSTEM.replace("<<WEB>>", PREP_WEB.format(n=toolbox.web_limit) if web_on else PREP_NO_WEB)
+    append_only = getattr(llm, "append_only", False)
+    web_rule = PREP_WEB.format(n=toolbox.web_limit) + (PREP_WEB_URLS if builtin and append_only else "")
+    system = PREP_SYSTEM.replace("<<WEB>>", web_rule if web_on else PREP_NO_WEB)
     user = (f"## 장소 (place_id {place_id})\n{json.dumps(_place_brief(place), ensure_ascii=False)}\n\n"
             f"## 사용자에 대해 기억하는 것\n{memory or '(아직 없음)'}\n\n"
             f"## 근거 자료 (search_passages 결과)\n{first.content}")
     messages: list[dict] = [{"role": "system", "content": system}, {"role": "user", "content": user}]
-    extra: list[dict] = []
+    # 기록 편집 금지 공급자(Claude, docs/agent/README.md §7.1): 도구 목록(웹 검색 도구와 그 상한 포함)은 장소 내내 같게 두고
+    # (마지막 단계는 tool_choice none), 안내는 메시지 끝에 덧붙이기만 한다. 같은 장소 안의 응답은 원본 블록(native)으로 이어 간다
+    extra: list[str] = []  # 이번 호출에 붙이는 안내
     retried = False
     for step in range(max(1, settings.guide_max_steps)):
         final = step == settings.guide_max_steps - 1
         tools = [] if final else specs
-        web = {"web_search": toolbox.web_left} if builtin and not final and toolbox.web_left else {}
         if final and step > 0:
-            extra = [{"role": "user", "content": FINAL_NOTE}]
-        text, calls = "", []
-        async for ev in llm.stream(messages + extra, tools, **web):
+            extra = [FINAL_NOTE]
+        if append_only:
+            notes = extra + ([WEB_DONE_NOTE.format(n=toolbox.web_limit)] if builtin and web_on and not toolbox.web_left
+                             else [])
+            if notes and messages[-1]["role"] in ("user", "tool"):  # system 메시지는 user(도구 결과) 뒤에만
+                messages.append({"role": "system", "content": "\n\n".join(notes), "clear_at": "next_user_message"})
+            web = {"web_search": toolbox.web_limit} if builtin and web_on else {}
+            stream = llm.stream(messages, specs, allow_tools=not final, **web)
+        else:
+            web = {"web_search": toolbox.web_left} if builtin and not final and toolbox.web_left else {}
+            stream = llm.stream(messages + [{"role": "user", "content": n} for n in extra], tools, **web)
+        text, calls, native = "", [], None
+        async for ev in stream:
             match ev:
                 case TextDelta(text=t):
                     text += t
                 case ToolCall():
                     calls.append(ev)
-                case WebSearchCall():
+                case WebSearchCall(results=found):
                     toolbox.web_used += 1
+                    for r in found:  # 검색 결과를 본 자료로 (URL 로 sources 에 고를 수 있다)
+                        toolbox.add_source("W", r["title"], r["url"])
                 case Citation(url=u, title=t):
                     toolbox.cite(u, t)
                 case Finish(usage=u):
+                    native = ev.native
                     usage["calls"] += 1
                     for k, v in (u or {}).items():
-                        usage[k] += v or 0
+                        usage[k] = usage.get(k, 0) + (v or 0)
         extra = []
+        keep = {"native": native} if native else {}  # 공급자 원본 블록 (thinking·서버 도구 블록 그대로)
         if calls and not final:
-            messages.append({"role": "assistant", "content": text, "tool_calls": [
+            messages.append({"role": "assistant", "content": text, **keep, "tool_calls": [
                 {"id": c.id, "type": "function", "function": {"name": c.name, "arguments": c.arguments}} for c in calls]})
             for c in calls:
                 if c.name in allowed:
@@ -259,8 +279,11 @@ async def write_note(llm: LLMProvider, api: ServiceApi, toolbox: Toolbox, place_
         if retried or final:
             return None, "노트 형식(JSON)을 받지 못했습니다."
         retried = True
-        messages.append({"role": "assistant", "content": text})
-        extra = [{"role": "user", "content": JSON_NOTE}]
+        messages.append({"role": "assistant", "content": text, **keep})
+        if append_only:  # 답 뒤에 user 메시지로 덧붙인다 (system 메시지는 assistant 바로 뒤에 올 수 없다)
+            messages.append({"role": "user", "content": JSON_NOTE})
+        else:
+            extra = [JSON_NOTE]
     return None, "노트 형식(JSON)을 받지 못했습니다."
 
 

@@ -782,3 +782,158 @@ def test_safety_outlook_tool(client, session, safety_on):
     assert out["horizon"] == "long_range" and "signals" not in out and out["tides"]
     assert [d["detail"] for e, d in far if e == "step" and d["status"] == "done"][0] == "11-20 예보 전 (만조·계절 경향만)"
     assert not [d for e, d in events if e == "proposal"]  # 조회만 하면 제안 없음
+
+
+# ---------- 기록 편집 금지 공급자 (append_only, Claude) ----------
+
+class AppendOnlyLLM(ScriptedLLM):
+    """Claude 처럼 기록을 덧붙이기만 받는 가짜. 호출마다 메시지를 깊은 복사로 남기고, 응답마다 원본 블록(native)을 준다."""
+
+    name = "fake-append"
+    append_only = True
+
+    def __init__(self):
+        super().__init__()
+        self.allow: list[bool] = []
+
+    async def stream(self, messages, tools, allow_tools=True):
+        self.allow.append(allow_tools)
+        n = len(self.calls)
+        text, calls = "", []
+        async for ev in super().stream(messages, tools):
+            if isinstance(ev, Finish):
+                break
+            text += ev.text if isinstance(ev, TextDelta) else ""
+            calls += [ev] if isinstance(ev, ToolCall) else []
+            yield ev
+        self.calls[-1] = json.loads(json.dumps(messages))  # 이후 변경과 무관한 스냅샷
+        blocks = [{"type": "thinking", "thinking": "", "signature": f"sig{n}"}]
+        blocks += [{"type": "text", "text": text}] if text else []
+        blocks += [{"type": "tool_use", "id": c.id, "name": c.name, "input": json.loads(c.arguments or "{}")}
+                   for c in calls]
+        yield Finish("end_turn", {"input": 10, "cached": 4, "cache_write": 2, "output": 3},
+                     {"model": "fake-append", "content": [blocks]})
+
+
+allm = AppendOnlyLLM()
+
+
+@pytest.fixture()
+def append_only(client):
+    allm.script, allm.calls, allm.tools_seen, allm.allow = [], [], [], []
+    app.dependency_overrides[get_llm] = lambda: allm
+    yield allm
+    app.dependency_overrides[get_llm] = lambda: llm
+
+
+def achat(client, sid, message, script):
+    allm.script = script
+    return sse(client.post(f"/agent/sessions/{sid}/chat", json={"message": message}, headers=H))
+
+
+def assert_append_only(calls: list[list[dict]]):
+    """한 턴 안의 호출: 앞 호출의 메시지가 그대로 다음 호출의 앞부분이다 (고치거나 지우지 않는다)."""
+    for prev, cur in zip(calls, calls[1:]):
+        assert cur[:len(prev)] == prev
+
+
+def assert_claude_shape(messages: list[dict]):
+    """Claude 로 변환한 메시지가 배치 규칙을 지킨다: 중간 system 은 user 뒤, 그 다음은 assistant 이거나 끝.
+    user·assistant 가 번갈아 오고, 같은 턴의 thinking 블록은 받은 그대로 다시 간다."""
+    from app.agent.claude_llm import ClaudeProvider
+    system, out = ClaudeProvider("fake-append").convert(messages)
+    assert system[0]["cache_control"] == {"type": "ephemeral"} and "## 현재 일정" not in system[0]["text"]
+    convo = [m for m in out if m["role"] != "system"]
+    assert convo[0]["role"] == "user"
+    assert all(a["role"] != b["role"] for a, b in zip(convo, convo[1:]))
+    for n, m in enumerate(out):
+        if m["role"] == "system":
+            assert out[n - 1]["role"] == "user" and (n == len(out) - 1 or out[n + 1]["role"] == "assistant")
+    return out
+
+
+def test_append_only_turn_keeps_history_and_tools(client, session, append_only):
+    sid, pid = session
+    events = achat(client, sid, "점심 넣어줘", [
+        ["알아볼게요", ("search_places", {"query": "물회"})],
+        [("add_item", {"place_id": "p-food", "stay_minutes": 50})],
+        ["물회집을 넣었어요."],
+    ])
+    assert last(events, "proposal")["status"] == "pending"
+    assert last(events, "done")["text"] == "알아볼게요\n\n물회집을 넣었어요."
+    calls = allm.calls
+    assert_append_only(calls)
+    assert all(t == allm.tools_seen[0] for t in allm.tools_seen) and allm.allow == [True, True, True]
+    first = calls[0]
+    # 시스템 프롬프트는 고정 규칙만, 바뀌는 맥락(현재 일정·시각)은 이번 사용자 메시지 뒤 system 메시지
+    assert "## 현재 일정" not in first[0]["content"] and "## 일하는 방식" in first[0]["content"]
+    assert first[-2] == {"role": "user", "content": "점심 넣어줘"}
+    assert first[-1]["role"] == "system" and "## 현재 일정" in first[-1]["content"] and "clear_at" not in first[-1]
+    # 같은 턴의 응답은 원본 블록(thinking 서명 포함)으로 다시 보낸다
+    out = assert_claude_shape(calls[2])
+    assert [b["signature"] for m in out if m["role"] == "assistant" for b in m["content"]
+            if b["type"] == "thinking"] == ["sig0", "sig1"]
+    # 초안이 생긴 뒤의 '확정 변경' 안내는 다음 사용자 메시지에서 지워지는 system 메시지로 덧붙인다
+    assert calls[2][-1]["role"] == "system" and calls[2][-1]["clear_at"] == "next_user_message"
+    assert calls[2][-1]["content"].startswith("[시스템] 지금 변경 제안 초안") and calls[2][-2]["role"] == "tool"
+    assert last(events, "done")["usage"] == {"input": 30, "cached": 12, "cache_write": 6, "output": 9,
+                                             "reasoning": 0, "calls": 3}
+    # 다음 턴: 고정 규칙은 그대로라 캐시되고, 지난 턴은 DB 기록(텍스트·도구 호출)으로 thinking 없이 간다
+    achat(client, sid, "고마워", [["천만에요"]])
+    nxt = allm.calls[-1]
+    assert nxt[0] == first[0] and not any("native" in m for m in nxt)
+    assert_claude_shape(nxt)
+
+
+def test_append_only_review_gate_appends_rejected_answer(client, session, append_only, review_on):
+    sid, _ = session
+    events = achat(client, sid, "가옥거리 또 넣어줘", [
+        [("add_item", {"place_id": "p-house"})],      # 같은 날 중복 -> should
+        ["넣었어요"],                                    # 관문이 되돌려 보냄
+        [("remove_item", {"item_id": -1}), ("add_item", {"place_id": "p-food"})],
+        ["물회집으로 바꿨어요"],
+    ])
+    calls = allm.calls
+    assert_append_only(calls)
+    # 되돌린 답변은 assistant 로 남기고(사용자에게는 보내지 않음) 검토 결과를 user 메시지로 덧붙인다
+    gate = calls[2]
+    rejected = next(m for m in gate if m["role"] == "assistant" and m["content"] == "넣었어요")
+    assert rejected["native"]["content"][0][0]["signature"] == "sig1"
+    push = next(m for m in gate if m["role"] == "user" and m["content"].startswith("[시스템] 방금 쓴 답변은 아직"))
+    assert gate.index(push) == gate.index(rejected) + 1
+    assert "두 번" in push["content"]
+    assert_claude_shape(calls[-1])
+    assert last(events, "done")["text"] == "물회집으로 바꿨어요"
+    assert "".join(d["delta"] for e, d in events if e == "text") == "물회집으로 바꿨어요"
+
+
+def test_append_only_final_step_keeps_tools(client, session, append_only, monkeypatch):
+    from app.agent.config import settings
+    monkeypatch.setattr(settings, "max_steps", 2)
+    sid, _ = session
+    achat(client, sid, "a", [[("view_plan", {})], ["끝"]])
+    assert allm.tools_seen[1] == allm.tools_seen[0] and allm.allow == [True, False]  # 목록은 그대로, 쓰지 못하게만
+    note = allm.calls[1][-1]
+    assert note["role"] == "system" and note["clear_at"] == "next_user_message" and "도구 호출 한도" in note["content"]
+    assert_append_only(allm.calls)
+    assert_claude_shape(allm.calls[1])
+
+
+def test_append_only_empty_reply_retries_without_editing(client, session, append_only):
+    sid, _ = session
+    events = achat(client, sid, "일정 짜줘", [[("view_plan", {})], [""], ["볼게요"]])
+    assert last(events, "done")["text"] == "볼게요"
+    calls = allm.calls
+    assert_append_only(calls)
+    # 빈 응답은 기록에 넣지 않고, 도구 결과 뒤라 되묻기 안내를 system 메시지로 덧붙인다
+    assert calls[2][-1]["role"] == "system" and "방금 응답이 비어" in calls[2][-1]["content"]
+    assert_claude_shape(calls[2])
+
+
+def test_llm_refusal_ends_turn_without_retry(client, session):
+    from app.agent.llm import LLMRefusal
+    sid, _ = session
+    events = chat(client, sid, "a", [[LLMRefusal("거절", "general_harms")], [LLMRefusal("거절")]])
+    assert events[-1][0] == "error" and events[-1][1]["code"] == "llm_refused" and len(llm.calls) == 1
+    msgs = ok(client.get(f"/agent/sessions/{sid}", headers=H))["messages"]
+    assert [m["role"] for m in msgs] == ["user", "assistant"] and "처리할 수 없어요" in msgs[1]["content"]

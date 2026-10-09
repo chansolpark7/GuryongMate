@@ -6,7 +6,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class AgentSettings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_prefix="AGENT_", extra="ignore")
 
-    provider: str = Field("openai", description="openai (기본, gpt-5.4-mini) | local (Ollama 등)")
+    provider: str = Field("openai", description="openai (기본, gpt-5.4-mini) | local (Ollama 등) | claude (Claude API)")
 
     # 로컬 LLM. 컨테이너에서 호스트의 Ollama 로 접속.
     #   local_api=ollama : Ollama 네이티브 API (컨텍스트 길이 지정 가능, 권장)
@@ -24,6 +24,16 @@ class AgentSettings(BaseSettings):
     openai_model: str = "gpt-5.4-mini"
     openai_api_key: str = Field("", validation_alias=AliasChoices("AGENT_OPENAI_API_KEY", "OPENAI_API_KEY", "LLM_API_KEY"))
     openai_reasoning_effort: str | None = "low"
+
+    # Claude API (anthropic SDK). docs/agent/README.md §7.1
+    claude_api_key: str = Field("", validation_alias=AliasChoices("AGENT_CLAUDE_API_KEY", "ANTHROPIC_API_KEY"))
+    claude_model: str = Field("claude-sonnet-5-5", description="claude-sonnet-5-5 | claude-haiku-5-5")
+    # 한 턴이 도구를 여러 번 쓰는 작업(찾기 -> 초안 -> 검토 -> 수정)이라 두 모델 모두 medium 에서 시작한다.
+    # (Sonnet 5.5: 기본 high, 도구를 여러 번 쓰는 작업은 medium 권장 / Haiku 5.5: 기본·권장 모두 medium)
+    claude_effort: str = Field("medium", description="low | medium | high | xhigh | max (항상 명시적으로 보낸다)")
+    claude_max_tokens: int = Field(64000, description="응답 하나의 최대 토큰 (thinking 포함). 스트리밍이라 넉넉히")
+    claude_thinking_mismatch: str = Field("drop_block", description="기록이 바뀌어 thinking 블록이 무효일 때: "
+                                                                   "drop_block (버리고 계속, 로그) | error (400)")
 
     temperature: float | None = None
     request_timeout_sec: float = 300

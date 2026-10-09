@@ -32,7 +32,7 @@ from app.agent.llm import (
     supports_web_search,
 )
 from app.agent.models import AgentMessage, AgentSession
-from app.agent.prompts import build_system
+from app.agent.prompts import build_system, build_system_parts
 from app.agent.review import SKIP_CODES, summarize
 from app.agent.tools import STEP_KIND, Draft, Toolbox, tool_specs
 from app.db import SessionLocal
@@ -40,7 +40,8 @@ from app.db import SessionLocal
 Event = dict  # {"event": 이름, "data": dict}
 LLM_RETRIES = 2
 
-# 이번 LLM 호출에만 덧붙이는 안내 (대화 기록에는 남기지 않는다)
+# LLM 호출에 덧붙이는 안내 (DB 대화 기록에는 남기지 않는다). 보통은 그 호출에만 붙였다 떼고,
+# 기록 편집 금지 공급자(append_only)에게는 그 턴의 메시지 끝에 덧붙이기만 한다 (docs/agent/README.md §7.1)
 EMPTY_REPLY_NOTE = ("[시스템] 방금 응답이 비어 있었다. 필요한 도구를 호출해 요청을 끝까지 처리하거나, "
                     "사용자에게 할 말을 답하라.")
 FINAL_STEP_NOTE = ("[시스템] 이번 턴의 도구 호출 한도에 도달해 더는 도구를 쓸 수 없다. 지금까지 도구로 실제로 한 변경만 "
@@ -53,6 +54,7 @@ CHANGES_NOTE = ("[시스템] 지금 변경 제안 초안의 확정 변경 (답�
                 "싶으면 도구로 초안에 넣거나, 넣지 않을 거면 '다른 방법으로 …도 할 수 있어요'처럼 선택지로만 한 줄 말한다.")
 NO_CHANGES_NOTE = ("[시스템] 지금 변경 제안 초안이 비어 있다 (제안 카드가 만들어지지 않는다). 일정을 바꾸려면 변경 도구를 "
                    "써야 한다. 도구로 바꾸지 않은 변경을 했다거나 제안한다고 말하지 말고, 권하고 싶은 변경은 선택지로만 말한다.")
+WEB_DONE_NOTE = "[시스템] 이번 턴의 웹 검색 한도({n}번)를 다 썼다. 더 검색하지 말고 지금까지 찾은 자료로 답하라."
 REVIEW_NOTE = ("[시스템] 방금 쓴 답변은 아직 사용자에게 보내지 않았다. 일정을 검토했더니 아래 문제가 남아 있다. "
                "must 는 반드시, should 는 가능하면 고친 뒤 review_plan 으로 다시 확인하라. 다 고친 뒤 최종 답변을 처음부터 "
                "다시 써라. 고칠 수 없는 문제는 최종 답변에서 이유를 짧게 말하라.\n")
@@ -242,10 +244,20 @@ async def run_turn(session_id: str, plan_id: int, user_text: str, llm: LLMProvid
     toolbox.web_limit = max(0, settings.web_search_per_turn) if docent else 0
     specs = tool_specs(review_on, proactive=hidden, guide=docent, web_functions=toolbox.web_limit > 0 and not builtin_web)
     memory = await memory_summary(api, plan_id)
-    system = build_system(plan_view, pending, dropped, repropose, review_on, now=now, simulated=simulated,
-                          trip=trip, plan=toolbox.last_plan, memory=memory, docent=docent,
-                          web_searches=toolbox.web_limit)
-    messages = [{"role": "system", "content": system}, *history, {"role": "user", "content": user_text}]
+    rules, context = build_system_parts(plan_view, pending, dropped, repropose, review_on, now=now,
+                                        simulated=simulated, trip=trip, plan=toolbox.last_plan, memory=memory,
+                                        docent=docent, web_searches=toolbox.web_limit)
+    # 기록 편집 금지 공급자(Claude): 시스템 프롬프트는 고정 규칙만 두고(턴이 바뀌어도 같아 캐시된다), 턴마다 바뀌는
+    # 맥락(현재 상황·메모리·지금 시각·현재 일정)은 이번 사용자 메시지 뒤 system 메시지로 둔다. 이후로는 덧붙이기만 한다
+    append_only = getattr(llm, "append_only", False)
+    if append_only:
+        messages = [{"role": "system", "content": rules}, *history, {"role": "user", "content": user_text},
+                    {"role": "system", "content": context}]
+    else:
+        messages = [{"role": "system", "content": build_system(
+            plan_view, pending, dropped, repropose, review_on, now=now, simulated=simulated, trip=trip,
+            plan=toolbox.last_plan, memory=memory, docent=docent, web_searches=toolbox.web_limit)},
+            *history, {"role": "user", "content": user_text}]
     new_rows = [AgentMessage(session_id=session_id, role="user", content=user_text, hidden=hidden)]
     complete = 1  # new_rows[:complete] 는 저장해도 되는 완결된 기록 (도구 호출·결과 짝이 맞음)
     said: list[str] = []  # 이번 턴에 사용자에게 보인 말 (도구 호출 전 말 포함)
@@ -267,36 +279,64 @@ async def run_turn(session_id: str, plan_id: int, user_text: str, llm: LLMProvid
         saved = True
         return await to_thread.run_sync(_save, session_id, closing_rows(note))
 
-    def changes_note() -> list[dict]:
+    def changes_note() -> list[str]:
         """답변이 실제 초안과 어긋나지 않게, 초안이 있거나 바뀐 턴(선제 턴은 항상)에는 매 호출에 확정 변경 목록을 준다.
         기록에는 남기지 않는다."""
         if toolbox.changes and draft.ops:
             left = [v["message"] for v in toolbox.last_plan["violations"] if v["code"] not in SKIP_CODES]
-            return [{"role": "user", "content": CHANGES_NOTE.format(
-                changes="\n".join(f"- {c}" for c in toolbox.changes),
-                left="\n".join(f"- {m}" for m in left) or "없음")}]
+            return [CHANGES_NOTE.format(changes="\n".join(f"- {c}" for c in toolbox.changes),
+                                        left="\n".join(f"- {m}" for m in left) or "없음")]
         if draft.changed or (hidden and step_no > 0):
-            return [{"role": "user", "content": NO_CHANGES_NOTE}]
+            return [NO_CHANGES_NOTE]
         return []
+
+    sent = False  # append_only: 첫 호출을 보냈는지
+
+    def append_notes(notes: list[str]) -> None:
+        """append_only: 이번 호출의 안내를 메시지 끝에 덧붙인다. 다음 사용자(도구 결과) 메시지가 오면 지워지는
+        turn-scoped system 메시지라 모델은 가장 최근 것만 본다. 보낸 메시지는 고치지 않는다.
+        system 메시지는 user 메시지 뒤에만 올 수 있어, 그 밖의 자리(빈 응답 뒤 다시 묻기)면 안내 없이 다시 보낸다."""
+        if not notes:
+            return
+        text = "\n\n".join(notes)
+        if messages[-1]["role"] in ("user", "tool"):
+            messages.append({"role": "system", "content": text, "clear_at": "next_user_message"})
+        elif not sent:  # 첫 호출 전: 아직 보내지 않은 맥락 메시지에 합친다
+            messages[-1]["content"] += "\n\n" + text
+        else:
+            log.info("session=%s 안내를 붙일 자리가 없어 안내 없이 다시 호출", sid)
 
     usage = {"input": 0, "cached": 0, "output": 0, "reasoning": 0, "calls": 0}  # 이 턴의 LLM 토큰 사용량
     nudged = False
-    extra: list[dict] = []  # 이번 호출에만 붙이는 안내 (기록에는 남기지 않음)
+    extra: list[str] = []  # 이번 호출에만 붙이는 안내 (기록에는 남기지 않음)
     try:
         for step_no in range(settings.max_steps):
             # 마지막 단계에서는 도구 없이 호출해 반드시 답변으로 끝나게 한다
             tools = specs if step_no < settings.max_steps - 1 else []
             if not tools and step_no > 0:
-                extra = [{"role": "user", "content": FINAL_STEP_NOTE}]
+                extra = [FINAL_STEP_NOTE]
             # 일정을 바꾼 턴에서 검토 관문이 남아 있으면, 이 단계의 텍스트는 바로 내보내지 않고 보관한다.
             # 끝내려는 답변이 검토에서 되돌려지면 그 답변은 사용자에게 보이지 않은 채 버려진다.
             gated = review_on and bool(draft.ops) and pushes_left > 0 and step_no < settings.max_steps - 2
+            notes = changes_note() + extra
+            if append_only:
+                # 웹 검색 도구는 턴 내내 그대로라(요청마다 max_uses = 턴 상한) 다 쓴 뒤로는 안내로 막는다
+                if builtin_web and toolbox.web_limit and not toolbox.web_left:
+                    notes.append(WEB_DONE_NOTE.format(n=toolbox.web_limit))
+                append_notes(notes)
             for attempt in range(LLM_RETRIES + 1):
-                text, calls, finish, reasoning_len = "", [], "", 0
-                # 공급자 내장 웹 검색: 남은 횟수만큼 (도구를 줄 때만)
-                web = {"web_search": toolbox.web_left} if builtin_web and tools and toolbox.web_left else {}
+                text, calls, finish, reasoning_len, native = "", [], "", 0, None
+                if append_only:
+                    # 도구 목록(내장 웹 검색 도구와 그 상한 포함)은 턴 내내 같게, 마지막 단계는 도구를 못 쓰게만 한다
+                    web = {"web_search": toolbox.web_limit} if builtin_web and toolbox.web_limit else {}
+                    stream = llm.stream(messages, specs, allow_tools=bool(tools), **web)
+                else:
+                    # 공급자 내장 웹 검색: 남은 횟수만큼 (도구를 줄 때만)
+                    web = {"web_search": toolbox.web_left} if builtin_web and tools and toolbox.web_left else {}
+                    stream = llm.stream(messages + [{"role": "user", "content": n} for n in notes], tools, **web)
+                sent = True
                 try:
-                    async for ev in llm.stream(messages + changes_note() + extra, tools, **web):
+                    async for ev in stream:
                         match ev:
                             case TextDelta(text=t):
                                 text += t
@@ -305,8 +345,10 @@ async def run_turn(session_id: str, plan_id: int, user_text: str, llm: LLMProvid
                             case ReasoningDelta(text=t):
                                 reasoning_len += len(t)
                                 yield _ev("thinking", delta=t)
-                            case WebSearchCall(query=q):
+                            case WebSearchCall(query=q, results=found):
                                 toolbox.web_used += 1
+                                for r in found:  # 결과를 본 자료로 (Claude: 인용이 없는 답에서도 출처로 고를 수 있게)
+                                    toolbox.add_source("W", r["title"], r["url"])
                                 for e in steps.start("research"):
                                     yield e
                                 yield steps.finish(True, f"웹 검색 · {q}"[:60] if q else "웹 검색")
@@ -315,19 +357,19 @@ async def run_turn(session_id: str, plan_id: int, user_text: str, llm: LLMProvid
                             case ToolCall():
                                 calls.append(ev)
                             case Finish(reason=r, usage=u):
-                                finish = r
+                                finish, native = r, ev.native
                                 usage["calls"] += 1
                                 for k, v in (u or {}).items():
-                                    usage[k] += v or 0
+                                    usage[k] = usage.get(k, 0) + (v or 0)
                     break
                 except LLMError as e:
                     # 로컬 모델은 가끔 형식이 깨진 도구 호출을 내서 서버 파서가 실패한다.
-                    # 아직 답변 텍스트를 내보내지 않았으면 같은 단계를 다시 시도한다.
+                    # 아직 답변 텍스트를 내보내지 않았으면 같은 단계를 다시 시도한다 (거절·SDK 가 이미 재시도한 오류는 제외).
                     log.warning("session=%s step=%d attempt=%d LLM 오류: %s", sid, step_no, attempt, e)
-                    if (text and not gated) or attempt == LLM_RETRIES:
-                        message = f"LLM 호출 실패: {e}"
+                    if not e.retryable or (text and not gated) or attempt == LLM_RETRIES:
+                        message = e.user_message or f"LLM 호출 실패: {e}"
                         await save(message)
-                        yield _error("llm_failed", message)
+                        yield _error(e.code, message)
                         return
 
             log.info("session=%s step=%d finish=%s text=%d reasoning=%d tools=%s", sid, step_no, finish,
@@ -336,9 +378,9 @@ async def run_turn(session_id: str, plan_id: int, user_text: str, llm: LLMProvid
             if not tools:  # 도구를 주지 않았는데도 도구 호출을 내는 모델이 있다 -> 무시하고 답변으로 끝낸다
                 calls = []
             if not text.strip() and not calls and tools and not nudged:
-                # 생각만 하고 아무것도 내지 않고 끝나는 경우가 있다 -> 한 번만 되묻는다
+                # 생각만 하고 아무것도 내지 않고 끝나는 경우가 있다 -> 한 번만 되묻는다 (빈 응답은 기록에 넣지 않는다)
                 nudged = True
-                extra = [{"role": "user", "content": EMPTY_REPLY_NOTE}]
+                extra = [EMPTY_REPLY_NOTE]
                 continue
             if gated and not calls:
                 # 검토 관문: 일정을 바꾼 턴을 끝내기 전에 검토하고, 문제가 남았으면 답변을 보내지 않고 다시 고치게 한다
@@ -350,7 +392,12 @@ async def run_turn(session_id: str, plan_id: int, user_text: str, llm: LLMProvid
                 if blocking:
                     pushes_left -= 1
                     listing = "\n".join(f"- [{i['level']}] {i['message']}" for i in blocking)
-                    extra = [{"role": "user", "content": REVIEW_NOTE + listing}]
+                    if append_only:
+                        # 되돌린 답변도 (사용자에게는 보내지 않은 채) 그대로 이어 두고, 검토 결과를 덧붙인다
+                        messages.append({"role": "assistant", "content": text, **({"native": native} if native else {})})
+                        messages.append({"role": "user", "content": REVIEW_NOTE + listing})
+                    else:
+                        extra = [REVIEW_NOTE + listing]
                     continue
             if gated and text:  # 보관했던 텍스트를 이제 내보낸다
                 yield _ev("text", delta=text)
@@ -359,7 +406,8 @@ async def run_turn(session_id: str, plan_id: int, user_text: str, llm: LLMProvid
             tool_calls = [{"id": c.id, "type": "function", "function": {"name": c.name, "arguments": c.arguments}}
                           for c in calls]
             messages.append({"role": "assistant", "content": text,
-                             **({"tool_calls": tool_calls} if tool_calls else {})})
+                             **({"tool_calls": tool_calls} if tool_calls else {}),
+                             **({"native": native} if native else {})})  # 공급자 원본 블록 (같은 턴에 그대로 다시 보낸다)
             new_rows.append(AgentMessage(session_id=session_id, role="assistant", content=text,
                                          tool_calls=tool_calls or None, hidden=bool(tool_calls) and not text.strip()))
             if not calls:

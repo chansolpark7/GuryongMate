@@ -224,35 +224,57 @@ def build_system(plan_view: dict, pending: dict | None, dropped: dict | None = N
     """trip: 진행 중인 여행일의 TripState 면 동행 모드 (계획 규칙 + 동행 섹션 + 현재 상황). plan: 현재 일정 PlanDetail.
     memory: docent 메모리 요약 (None 이면 받지 못함). docent: 현장 해설 규칙을 넣는다 (동행 모드 대화).
     web_searches: 이번 턴에 쓸 수 있는 웹 검색 수."""
+    return "\n\n".join(text for _, text in _sections(plan_view, pending, dropped, repropose, review, now, simulated,
+                                                     trip, plan, memory, docent, web_searches))
+
+
+def build_system_parts(plan_view: dict, pending: dict | None, dropped: dict | None = None,
+                       repropose: dict | None = None, review: bool = False, now: datetime | None = None,
+                       simulated: bool = False, trip: dict | None = None, plan: dict | None = None,
+                       memory: str | None = None, docent: bool = False, web_searches: int = 0) -> tuple[str, str]:
+    """build_system 의 섹션을 (고정 규칙, 이번 턴의 맥락)으로 나눈다 (기록 편집 금지 공급자용, docs/agent/README.md §7.1).
+    고정 규칙은 모드(계획·동행·현장 해설)와 설정으로만 정해져 턴이 바뀌어도 같다 (프롬프트 캐시 앞부분).
+    맥락은 현재 상황·메모리 요약·지금 시각·현재 일정·대기 제안처럼 턴마다 바뀐다."""
+    sections = _sections(plan_view, pending, dropped, repropose, review, now, simulated, trip, plan, memory, docent,
+                         web_searches)
+    return ("\n\n".join(text for fixed, text in sections if fixed),
+            "\n\n".join(text for fixed, text in sections if not fixed))
+
+
+def _sections(plan_view: dict, pending: dict | None, dropped: dict | None, repropose: dict | None, review: bool,
+              now: datetime | None, simulated: bool, trip: dict | None, plan: dict | None, memory: str | None,
+              docent: bool, web_searches: int) -> list[tuple[bool, str]]:
+    """시스템 프롬프트 섹션 [(고정 규칙인지, 본문)] (build_system 의 순서)."""
     now = now or datetime.now(KST)
     system = SYSTEM.replace("<<WORKFLOW>>", WORKFLOW_REVIEW if review else WORKFLOW_SIMPLE)
     clock = f"{now:%Y-%m-%d %H:%M} (KST, {'월화수목금토일'[now.weekday()]}요일" + (", 시뮬레이션 시각)" if simulated else ")")
-    parts = [system]
+    parts = [(True, system)]
     if trip:
-        parts += [GUIDE, situation(trip, plan, now, simulated)]
+        parts += [(True, GUIDE), (False, situation(trip, plan, now, simulated))]
         if docent:
-            parts.append(GUIDE_DOCENT.replace("<<WEB>>", GUIDE_WEB.format(n=web_searches) if web_searches else GUIDE_NO_WEB))
+            parts.append((True, GUIDE_DOCENT.replace(
+                "<<WEB>>", GUIDE_WEB.format(n=web_searches) if web_searches else GUIDE_NO_WEB)))
     if memory is not None:
-        parts.append("## 사용자에 대해 기억하는 것 (메모리 요약)\n" + (memory or "(아직 없음)"))
-    parts.append(f"## 현재 시각\n{clock}")
-    parts.append("## 현재 일정" + (" (승인 대기 중인 제안이 적용된 상태)" if pending else "")
-                 + "\n" + json.dumps(plan_view, ensure_ascii=False))
+        parts.append((False, "## 사용자에 대해 기억하는 것 (메모리 요약)\n" + (memory or "(아직 없음)")))
+    parts.append((False, f"## 현재 시각\n{clock}"))
+    parts.append((False, "## 현재 일정" + (" (승인 대기 중인 제안이 적용된 상태)" if pending else "")
+                  + "\n" + json.dumps(plan_view, ensure_ascii=False)))
     if pending:
-        parts.append(f"## 승인 대기 중인 제안 #{pending['id']}\n"
-                     + "\n".join(f"- {c['message']}" for c in pending.get("changes", [])))
+        parts.append((False, f"## 승인 대기 중인 제안 #{pending['id']}\n"
+                      + "\n".join(f"- {c['message']}" for c in pending.get("changes", []))))
     if dropped:
         why = ("그 제안이 바꾸는 곳을 그사이 다녀왔다(완료)" if dropped.get("progress_changed")
                else "그 뒤로 일정이 바뀌어 지금 일정과 기준이 다르다")
-        parts.append(f"## 참고\n이전에 만든 제안 #{dropped['id']} 은 {why}. 그대로는 승인할 수 없다. "
-                     "이번에 새 변경 제안을 만들면 그 제안을 대체한다. 필요하면 현재 일정을 기준으로 다시 제안한다.\n"
-                     "당시 제안한 변경:\n" + "\n".join(f"- {c['message']}" for c in dropped.get("changes", [])))
+        parts.append((False, f"## 참고\n이전에 만든 제안 #{dropped['id']} 은 {why}. 그대로는 승인할 수 없다. "
+                      "이번에 새 변경 제안을 만들면 그 제안을 대체한다. 필요하면 현재 일정을 기준으로 다시 제안한다.\n"
+                      "당시 제안한 변경:\n" + "\n".join(f"- {c['message']}" for c in dropped.get("changes", []))))
     if repropose:
-        parts.append(f"## 다시 제안 요청\n사용자가 제안 #{repropose['id']} 을 현재 일정에 맞춰 다시 만들어 달라고 했다.\n"
-                     f"원래 요청: {repropose.get('request') or '(기록 없음)'}\n당시 제안한 변경:\n"
-                     + "\n".join(f"- {c['message']}" for c in repropose.get("changes", []))
-                     + ("\n그사이 다녀온(완료) 곳을 바꾸는 변경이 있어 그대로 승인할 수 없었다. 다녀온 곳은 바꾸지 않는다."
-                        if repropose.get("progress_changed") else "")
-                     + "\n같은 의도를 지금 일정에 맞게 변경 도구로 다시 만든다."
-                     + ("\n원래 요청에 적힌 시각·문제는 그때 기준이다. 지금 문제는 현재 일정의 시각과 violations 로만 판단한다. "
-                        "원래 문제가 지금은 없으면 변경을 만들지 말고 그렇다고 짧게 말한다." if trip else ""))
-    return "\n\n".join(parts)
+        parts.append((False, f"## 다시 제안 요청\n사용자가 제안 #{repropose['id']} 을 현재 일정에 맞춰 다시 만들어 달라고 했다.\n"
+                      f"원래 요청: {repropose.get('request') or '(기록 없음)'}\n당시 제안한 변경:\n"
+                      + "\n".join(f"- {c['message']}" for c in repropose.get("changes", []))
+                      + ("\n그사이 다녀온(완료) 곳을 바꾸는 변경이 있어 그대로 승인할 수 없었다. 다녀온 곳은 바꾸지 않는다."
+                         if repropose.get("progress_changed") else "")
+                      + "\n같은 의도를 지금 일정에 맞게 변경 도구로 다시 만든다."
+                      + ("\n원래 요청에 적힌 시각·문제는 그때 기준이다. 지금 문제는 현재 일정의 시각과 violations 로만 판단한다. "
+                         "원래 문제가 지금은 없으면 변경을 만들지 말고 그렇다고 짧게 말한다." if trip else "")))
+    return parts

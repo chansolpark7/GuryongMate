@@ -3,15 +3,22 @@
 - OllamaProvider: Ollama 네이티브 /api/chat (요청마다 컨텍스트 길이 지정). 로컬 기본값
 - OpenAIResponsesProvider: OpenAI Responses API. ChatGPT 기본값 (GPT-5.x 의 추론 + 도구)
 - OpenAICompatProvider: OpenAI 호환 Chat Completions. LM Studio, vLLM 등 (ChatGPT 도 추론 없이 가능)
+- ClaudeProvider (claude_llm.py): Claude API (anthropic SDK). 기록을 추가만 하는 공급자 (append_only)
 하네스는 LLMProvider 인터페이스만 알고, 어떤 모델인지는 설정(config.py)에서만 정해진다.
 공급자가 내장 웹 검색을 지원하면 builtin_web_search = True 이고, stream(..., web_search=n) 으로 이번 호출에서
-최대 n 번 검색하게 한다 (OpenAI Responses 의 web_search 도구). 검색 호출은 WebSearchCall, 답변의 인용은 Citation 으로 낸다.
-다른 형식의 API(예: Responses API, Anthropic)를 붙이려면 같은 이벤트를 내는 Provider 를 하나 더 만들면 된다.
+최대 n 번 검색하게 한다 (OpenAI Responses 의 web_search 도구, Claude 의 웹 검색 서버 도구). 검색 호출은 WebSearchCall,
+답변의 인용은 Citation 으로 낸다.
+다른 형식의 API 를 붙이려면 같은 이벤트를 내는 Provider 를 하나 더 만들면 된다.
+
+하네스 내부 메시지 형식은 OpenAI Chat Completions 식(role/content/tool_calls/tool)이다. 덧붙는 자리:
+- assistant 의 "native": {"model", "content": [공급자 원본 블록]} — 그 공급자만 같은 턴 안에서 그대로 다시 보낸다
+  (Claude 의 thinking·서버 도구 블록). 다른 공급자는 무시한다.
+- append_only 공급자에게만: 중간 {"role": "system", "content", "clear_at"?} 메시지 (docs/agent/README.md §7.1)
 """
 import json
 import uuid
 from collections.abc import AsyncIterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import Protocol
 
@@ -41,6 +48,8 @@ class ToolCall:
 class WebSearchCall:
     """공급자 내장 웹 검색을 한 번 했다 (검색 수 상한·처리 단계 표시용)."""
     query: str
+    # 검색 결과 [{"url", "title"}] (공급자가 알려줄 때만, Claude). 본 자료로 등록해 노트 출처로 고를 수 있게 한다
+    results: list[dict] = field(default_factory=list)
 
 
 @dataclass
@@ -53,15 +62,38 @@ class Citation:
 @dataclass
 class Finish:
     reason: str
-    # 토큰 사용량 {"input", "cached", "output", "reasoning"} (공급자가 알려줄 때만)
+    # 토큰 사용량 {"input", "cached", "output", "reasoning"} (공급자가 알려줄 때만). input 은 cached 를 포함한 전체
     usage: dict | None = None
+    # 이 응답의 공급자 원본 블록. 하네스가 assistant 메시지의 "native" 에 담아 같은 턴의 다음 호출에 돌려준다
+    native: dict | None = None
 
+
+# 내장 웹 검색의 사용자 위치 (OpenAI·Claude 공통 형식)
+USER_LOCATION = {"type": "approximate", "country": "KR", "region": "Gyeongsangbuk-do", "city": "Pohang",
+                 "timezone": "Asia/Seoul"}
 
 LLMEvent = TextDelta | ReasoningDelta | ToolCall | WebSearchCall | Citation | Finish
 
 
 class LLMError(RuntimeError):
-    pass
+    """retryable: 하네스가 같은 단계를 다시 시도해도 되는지 (SDK 가 이미 재시도한 오류·거절은 False).
+    user_message: 사용자에게 보일 문구 (없으면 'LLM 호출 실패: …')."""
+    code = "llm_failed"
+
+    def __init__(self, message: str, *, retryable: bool = True, user_message: str | None = None):
+        super().__init__(message)
+        self.retryable = retryable
+        self.user_message = user_message
+
+
+class LLMRefusal(LLMError):
+    """모델(안전 분류기)이 요청을 거절함 (Claude stop_reason "refusal"). 같은 요청을 다시 보내도 같다."""
+    code = "llm_refused"
+
+    def __init__(self, message: str, category: str | None = None):
+        super().__init__(message, retryable=False, user_message=(
+            "죄송해요, 이 요청은 처리할 수 없어요. 여행 일정과 관련해 다르게 말씀해 주시겠어요?"))
+        self.category = category
 
 
 class LLMProvider(Protocol):
@@ -69,7 +101,10 @@ class LLMProvider(Protocol):
 
     def stream(self, messages: list[dict], tools: list[dict]) -> AsyncIterator[LLMEvent]:
         """텍스트·추론 조각은 오는 대로, ToolCall 은 완성된 뒤, 마지막에 Finish 를 낸다.
-        builtin_web_search 인 공급자는 web_search=n 키워드도 받는다 (n 번까지 내장 웹 검색)."""
+        builtin_web_search 인 공급자는 web_search=n 키워드도 받는다 (n 번까지 내장 웹 검색).
+
+        append_only = True 인 공급자(기록 편집 금지)는 stream(messages, tools, allow_tools=..., web_search=n) 로 불린다:
+        도구 목록(웹 검색 도구와 그 n 포함)은 턴 내내 같게 주고, 도구를 못 쓰게 할 때는 allow_tools=False 로 알린다."""
         ...
 
 
@@ -259,8 +294,7 @@ class OpenAIResponsesProvider:
     @staticmethod
     def web_search_tool() -> dict:
         return {"type": "web_search", "search_context_size": settings.web_search_context,
-                "user_location": {"type": "approximate", "country": "KR", "region": "Gyeongsangbuk-do",
-                                  "city": "Pohang", "timezone": "Asia/Seoul"}}
+                "user_location": dict(USER_LOCATION)}
 
     async def stream(self, messages: list[dict], tools: list[dict], web_search: int = 0) -> AsyncIterator[LLMEvent]:
         usage = None
@@ -339,4 +373,9 @@ def get_llm() -> LLMProvider:
     if s.provider == "local":
         return OpenAICompatProvider(f"local:{s.local_model}", s.local_base_url, s.local_api_key, s.local_model,
                                     None, s.temperature, s.request_timeout_sec)
+    if s.provider == "claude":
+        from app.agent.claude_llm import ClaudeProvider  # anthropic SDK 는 이 공급자를 쓸 때만 읽는다
+
+        return ClaudeProvider(s.claude_model, api_key=s.claude_api_key or None, effort=s.claude_effort,
+                              max_tokens=s.claude_max_tokens, thinking_mismatch=s.claude_thinking_mismatch, timeout=s.request_timeout_sec)
     raise ValueError(f"알 수 없는 AGENT_PROVIDER: {s.provider}")
