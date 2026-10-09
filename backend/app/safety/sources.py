@@ -9,7 +9,7 @@
 import json
 import threading
 import time as _time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Callable, Generic, Protocol, TypeVar
 from urllib.parse import quote, urlencode
@@ -476,7 +476,112 @@ class MockSources:
                         TideEvent(base + shift + timedelta(hours=10), "low", 15.0)])
 
 
+# ---------- 실제 ↔ 가상 전환 (SAFETY_SIM_ENABLED, 발표 데모용) ----------
+
+def _whole_hours(d: timedelta) -> timedelta:
+    return timedelta(hours=round(d.total_seconds() / 3600))
+
+
+class ShiftedLive:
+    """실제 데이터를 가상 시각으로 옮겨 보여준다. 가상 시각이 실제와 다르면(예: 발표일에 계획일 10/10 으로 맞춤)
+    실제 데이터의 시각이 판단 기준 시각과 맞지 않아 예보·CCTV 를 쓸 수 없다. 그래서 '지금 실제 관측·예보'를
+    '가상 시각의 관측·예보'로 본다: 모든 시각을 offset(시간 단위로 반올림, 예보 시각이 정시라서)만큼 옮긴다."""
+
+    def __init__(self, live: "LiveSources", offset: timedelta, clock: Callable[[], datetime]):
+        self.live, self.offset, self._clock = live, offset, clock
+        self.shift = _whole_hours(offset)
+
+    @property
+    def data_note(self) -> str | None:
+        return "실제 데이터 (가상 시각에 맞춰 시각을 옮김)" if self.shift else None
+
+    def now(self) -> datetime:
+        return self._clock() + self.offset
+
+    def _f(self, f: Fetched, value) -> Fetched:
+        return Fetched(value if f.ok else f.value, f.fetched_at and f.fetched_at + self.shift, f.error)
+
+    def _day(self, d: date, sign: int) -> date:
+        return (datetime.combine(d, time(12)) + sign * self.shift).date()
+
+    def sensors(self) -> Fetched[list[SensorReading]]:
+        f = self.live.sensors()
+        return self._f(f, f.value)
+
+    def breakwater(self) -> Fetched[list[BreakwaterHour]]:
+        f = self.live.breakwater()
+        return self._f(f, f.value and [replace(b, hour=b.hour + self.shift) for b in f.value])
+
+    def uv(self) -> Fetched[UvReading]:
+        f = self.live.uv()
+        return self._f(f, f.value and replace(f.value, at=f.value.at + self.shift))
+
+    def forecast(self, now: datetime) -> Fetched[Forecast]:
+        f = self.live.forecast(now - self.shift)
+        if not f.value:
+            return self._f(f, None)
+        v = f.value
+        return self._f(f, Forecast(base=v.base + self.shift,
+                                   hours={t + self.shift: replace(h, time=h.time + self.shift) for t, h in v.hours.items()},
+                                   tmin={self._day(d, 1): x for d, x in v.tmin.items()},
+                                   tmax={self._day(d, 1): x for d, x in v.tmax.items()}))
+
+    def warnings(self) -> Fetched[Warnings]:
+        f = self.live.warnings()
+        return self._f(f, f.value and replace(
+            f.value, issued_at=f.value.issued_at and f.value.issued_at + self.shift))
+
+    def tide(self, day: date) -> Fetched[list[TideEvent]]:
+        f = self.live.tide(self._day(day, -1))
+        return self._f(f, f.value and [replace(e, time=e.time + self.shift) for e in f.value])
+
+
+class SimSources:
+    """실제(live) 와 가상 상황(mock) 을 실행 중에 바꾼다 (PUT /safety/sim 의 source). 가상 시각은 두 모드 모두 쓴다.
+    발표에서 '실제 DT 데이터 화면 -> 가상 악천후' 를 이어서 보여주기 위한 것이다.
+    가상 시각·시나리오는 mock 이 갖고, 요청마다 snapshot() 으로 지금 모드의 소스 하나를 꺼내 쓴다 (요청 도중 모드가 바뀌어도 섞이지 않게)."""
+
+    def __init__(self, live: "LiveSources", mock: MockSources, mode: str = "live"):
+        self.live, self.mock = live, mock
+        self.mode = mode  # live | sim
+
+    @property
+    def scenario(self) -> str:
+        return self.mock.scenario
+
+    @property
+    def offset(self) -> timedelta:
+        return self.mock.offset
+
+    def _clock(self) -> datetime:
+        return self.mock._clock()
+
+    def now(self) -> datetime:
+        return self.mock.now()
+
+    def set(self, scenario: str, offset: timedelta, mode: str | None = None) -> None:
+        with _SIM_LOCK:
+            self.mock.scenario, self.mock.offset = scenario, offset
+            if mode is not None:
+                self.mode = mode
+
+    def snapshot(self) -> "MockSources | ShiftedLive":
+        with _SIM_LOCK:
+            if self.mode == "sim":
+                return self.mock
+            return ShiftedLive(self.live, self.mock.offset, self.mock._clock)
+
+    # Sources 로도 쓸 수 있게 (보통은 snapshot() 을 쓴다)
+    def __getattr__(self, name):
+        if name in ("sensors", "breakwater", "uv", "forecast", "warnings", "tide"):
+            return getattr(self.snapshot(), name)
+        raise AttributeError(name)
+
+
 def build_sources(cfg: SafetySettings) -> Sources:
+    if cfg.sim_enabled:
+        return SimSources(LiveSources(cfg), MockSources(cfg.mock_scenario),
+                          mode="sim" if cfg.source == "mock" else "live")
     if cfg.source == "mock":
         return MockSources(cfg.mock_scenario)
     return LiveSources(cfg)

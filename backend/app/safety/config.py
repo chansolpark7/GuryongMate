@@ -9,6 +9,8 @@ class SafetySettings(BaseSettings):
     # live: 실제 API 호출 / mock: 키 없이 가짜 데이터 (시나리오는 PUT /safety/sim 으로 실행 중에도 바꿀 수 있다)
     source: str = "live"
     mock_scenario: str = Field("calm", description="시작 시나리오: calm | rain | wind_tomorrow | flood | storm")
+    # true 면 실행 중에 live <-> mock 을 바꿀 수 있다 (PUT /safety/sim 의 source, 발표 데모용). source 는 시작 모드가 된다
+    sim_enabled: bool = False
 
     # E-UM 디지털트윈 포항 인증키. URL 인코딩된 값 그대로 (디코딩하면 40102)
     dt_service_key: str = Field("", validation_alias=AliasChoices("SAFETY_DT_SERVICE_KEY", "DT_SERVICE_KEY"))

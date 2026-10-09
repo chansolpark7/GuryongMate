@@ -11,16 +11,18 @@ from app.safety.schemas import (
     Level, Outlook, SafeWindow, SensorView, Situation, SituationHour, SourceStatus, Status, TideView, TimeWindow,
     UvView, VisitAssessment, ZoneStatus,
 )
-from app.safety.sources import KST, ActiveWarning, Fetched, Forecast, MockSources, Sources
+from app.safety.sources import KST, ActiveWarning, Fetched, Forecast, MockSources, SimSources, Sources
 
 SOURCE_LABEL = {"sensors": "침수 센서", "breakwater": "방파제 CCTV", "uv": "자외선", "forecast": "기상 예보",
                 "warnings": "기상특보", "tide": "조위", "places": "장소 좌표"}
 MAX_BETTER_TIMES = 3
 
 
-def _status(f: Fetched, mock: bool) -> SourceStatus:
-    return SourceStatus(ok=f.ok, fetched_at=f.fetched_at, error=f.error,
-                        note="mock 데이터 (실제 관측·예보 아님)" if mock else None)
+MOCK_NOTE = "mock 데이터 (실제 관측·예보 아님)"
+
+
+def _status(f: Fetched, note: str | None) -> SourceStatus:
+    return SourceStatus(ok=f.ok, fetched_at=f.fetched_at, error=f.error, note=note)
 
 
 def _overall(risks: list[Level | None]) -> Level | None:
@@ -42,9 +44,11 @@ def _scoped(hazards: list[Hazard]) -> list[Hazard]:
 
 class SafetyService:
     def __init__(self, sources: Sources, places: PlaceLookup):
-        self.src = sources
+        # 실제 <-> 가상 전환 중이면 이 요청 동안 쓸 소스 하나를 꺼낸다 (요청 도중 모드가 바뀌어도 섞이지 않게)
+        self.src = sources.snapshot() if isinstance(sources, SimSources) else sources
         self.places = places
-        self.mock = isinstance(sources, MockSources)
+        self.mock = isinstance(self.src, MockSources)
+        self.note = MOCK_NOTE if self.mock else getattr(self.src, "data_note", None)
 
     def _now(self, now: datetime | None) -> datetime:
         """기준 시각. 주지 않으면 소스의 시각 (mock 시뮬레이션 중이면 가상 시각)."""
@@ -167,7 +171,8 @@ class SafetyService:
             preliminary_warnings=warns.value.preliminary if warns.ok and warns.value else [],
             next_hours=_scoped(risk.forecast_hazards(self._hours(fc, now, now + timedelta(hours=12)),
                                                      {"breakwater", "flood"})),
-            guidance=guidance, data_status={k: _status(f, self.mock) for k, f in data.items()},
+            guidance=guidance, data_status={k: _status(f, self.note) for k, f in data.items()},
+            mode="sim" if self.mock else "live", scenario=self.src.scenario if self.mock else None,
         )
 
     # ---------- 길찾기 우회 구역 ----------
@@ -274,7 +279,7 @@ class SafetyService:
             tides=tides, warnings=warnings,
             seasonal_notes=risk.seasonal_notes(day) if t.horizon in ("medium_range", "long_range") else [],
             guidance=guidance, recheck_from=t.recheck_from,
-            data_status={k: _status(f, self.mock) for k, f in data.items()},
+            data_status={k: _status(f, self.note) for k, f in data.items()},
         )
 
     # ---------- 일정 항목 평가 ----------
@@ -407,7 +412,7 @@ class SafetyService:
             data["tide"] = next(iter(tides.values())) if len(tides) == 1 else min(
                 tides.values(), key=lambda f: f.ok)  # 하나라도 실패했으면 그것을 보여준다
 
-        status = {k: (f if isinstance(f, SourceStatus) else _status(f, self.mock)) for k, f in data.items()}
+        status = {k: (f if isinstance(f, SourceStatus) else _status(f, self.note)) for k, f in data.items()}
         future = [r for r in results if r.horizon != "past"]
         rechecks = [r.recheck_from for r in results if r.recheck_from]
         return AssessResult(
