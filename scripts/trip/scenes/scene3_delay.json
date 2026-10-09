@@ -1,0 +1,84 @@
+{
+  "name": "장면 ③ 지연 대응",
+  "description": "일본인 가옥거리에서 30분 더 머묾. 처음 1시간은 예정대로라 알리지 않고, 카페 종료가 18:00 을 넘게 되면(day_overflow·end_before) delay(단계 3, Agent 선제 턴)가 한 번 나온다. 계획: 일본인 가옥거리 12:30 → 구룡포항(점심) 13:40 → 과메기문화관 14:47 → 구룡포해수욕장 16:01 → 카페파도 16:54(차량) → 17:39 종료, 규칙 end_before 18:00 (hard). docs/app/README.md §6.1",
+  "plan_fixture": "seoyun_mom_1010",
+  "plan": {
+    "title": "엄마랑 구룡포",
+    "start_date": "2026-10-10",
+    "day_start": "12:30",
+    "day_end": "18:00",
+    "items": [
+      {
+        "place_id": "kto-1909659",
+        "stay_minutes": 60
+      },
+      {
+        "place_id": "kto-2610501",
+        "stay_minutes": 50
+      },
+      {
+        "place_id": "kto-2660046",
+        "stay_minutes": 60
+      },
+      {
+        "place_id": "kto-127214",
+        "stay_minutes": 40
+      },
+      {
+        "place_id": "kto-2834344",
+        "stay_minutes": 45,
+        "travel_mode": "car"
+      }
+    ],
+    "constraints": [
+      {
+        "type": "end_before",
+        "params": {
+          "time": "18:00"
+        },
+        "hard": true,
+        "note": "18시 전에 끝내기"
+      }
+    ]
+  },
+  "start": "2026-10-10T12:25:00+09:00",
+  "scenario": "calm",
+  "steps": [
+    {
+      "at": "12:30",
+      "goto": "kto-1909659",
+      "stay": 60
+    },
+    {
+      "expect": {
+        "type": "arrived",
+        "place_id": "kto-1909659"
+      }
+    },
+    {
+      "expect": {
+        "type": "delay",
+        "not": true
+      }
+    },
+    {
+      "stay": 30
+    },
+    {
+      "expect": {
+        "type": "delay",
+        "level": 3
+      }
+    },
+    {
+      "walk_to": "kto-2610501",
+      "stay": 5
+    },
+    {
+      "expect": {
+        "type": "arrived",
+        "place_id": "kto-2610501"
+      }
+    }
+  ]
+}

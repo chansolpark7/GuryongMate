@@ -1,7 +1,7 @@
 # trip — 여행 중 상태·이벤트 API 명세
 
-> 상태: **구현됨** (§10 의 2~6, 8). 남은 것: agent 쪽 선제 턴 `POST /agent/sessions/{sid}/events` 와 동행 모드 프롬프트(§4.2, §4.4).
-> 그 전까지 단계 3 이벤트는 `queued` 로 남고 틱마다 다시 보낸다.
+> 상태: **구현됨** (§10). agent 쪽 선제 턴 `POST /agent/sessions/{sid}/events` 와 동행 모드 프롬프트(§4.2, §4.4)도 연결됐다.
+> 선제 턴 전송이 실패하면 간격을 늘려 다시 보내고, `TRIP_PROACTIVE_MAX_ATTEMPTS`(3)번 실패하면 이벤트를 `failed` 로 남긴다 (§4.1).
 > planner 쪽 기반(§6.1 진행 상태, §6.2 현재 기준 재계산, §5 planner 시계)은 `docs/planner/README.md` §8.
 
 여행 당일의 **실행 상태**(지금 몇 일차를 여행 중인지, 어디에 있는지, 어떤 일정을 하고 있는지)를 관리하고,
@@ -161,12 +161,14 @@
  "item_ids": [13, 14],                                               // 영향받는 항목
  "message": "과메기문화관 도착이 18:10으로 예상돼 운영시간(18:00) 이후예요.",   // 사람이 읽는 한 줄 (고정 문구)
  "payload": {"new_violations": [Violation, …], "delay_minutes": 35},          // 타입별 근거
- "status": "delivered",                       // queued | delivered | suppressed | handled
+ "status": "delivered",                       // queued | delivered | suppressed | handled | failed
  "agent": {"session_id": "…", "message_id": 102, "proposal_id": 57},          // 단계 3: Agent 결과. 아니면 null
  "card": {"kind": "docent", "place_id": "kto-…", "item_id": 12},             // 단계 2: 카드 정보. 아니면 null
- "seen_at": null, "attempts": 1, "last_error": null}                          // 확인 시각 / 단계 3 전송 시도 수·마지막 실패 사유
+ "seen_at": null, "attempts": 1, "last_error": null}                          // 확인 시각 / 단계 3 전송 시도 수(agent_busy 는 세지 않음)·마지막 실패 사유
 ```
 - `status`: 단계 0~2 는 만들 때 `delivered` (앱이 폴링으로 가져간다). 단계 3 은 `queued` 로 만들고 Agent 에 보내면 `delivered`. `seen` 을 부르면 `handled`.
+  단계 3 전송이 `TRIP_PROACTIVE_MAX_ATTEMPTS` 번 실패하면 `failed` (더 보내지 않는다, `last_error` 에 사유). 앱은 이벤트 목록에서 보고 "Agent 에 전하지 못했어요" 같이 알릴 수 있다.
+  `failed` 에 `seen` 을 불러도 `failed` 그대로다 (`seen_at` 만 남는다).
 - `payload`: `arrived` {item_id, place_id, title, out_of_order} / `departed` {item_id, title, stayed_minutes} /
   `delay` {new_violations, delay_minutes, next} / `near_hazard` {zones: [{id, name, kind, risk, reason, distance_m}]} /
   `safety_raised` {alert_id, situation, changes} / `safety_eased` {alert_id, changes} / `day_ended` {reason}
@@ -185,7 +187,11 @@
 - **단계 3은 한 번에 하나.** 진행 중인 선제 턴이 있거나 Agent 세션이 응답 중(409 `agent_busy`)이면 `queued` 로 두고 끝난 뒤 보낸다. 큐에서는 우선순위 높은 것부터, 같은 원인의 오래된 것은 `suppressed`.
   - 같은 원인 묶음: `delay` 는 하나 (새 이벤트가 그날 일정의 지금 위반 전체를 담는다), `safety_raised` 는 같은 항목 묶음끼리.
   - 보내는 때: 위치·틱 요청의 응답 뒤(백그라운드, LLM 응답을 기다리지 않게)와 백그라운드 틱마다. 한 여행일의 전송은 한 번에 하나만 돈다 (프로세스 안 잠금).
-  - Agent 가 실패하면(409 `agent_busy`, 엔드포인트가 아직 없는 404, 접근 불가) `queued` 로 두고 `attempts`·`last_error` 를 남긴 뒤 다음 틱에 다시 보낸다.
+  - Agent 가 응답 중(409 `agent_busy`)이면 `queued` 로 두고 `last_error` 만 남긴 뒤 다음 틱에 다시 보낸다 (실패로 세지 않는다 — 대화가 길어져도 버리지 않게).
+  - 그 밖의 실패(접근 불가, 5xx, 404, 세션을 정하지 못함)는 `attempts`·`last_error` 를 남기고 **간격을 늘려** 다시 보낸다:
+    `TRIP_PROACTIVE_RETRY_SEC`(30초) × 2^(실패 수 − 1) 뒤 (30초 → 60초 …, trip 의 지금 기준). `TRIP_PROACTIVE_MAX_ATTEMPTS`(3)번 실패하면 `failed` 로 남기고
+    큐의 다음 이벤트로 넘어간다. 기다리는 시각은 프로세스 메모리에만 둔다 (다시 시작하면 한 번 바로 보내 볼 뿐, 실패 수는 DB 에 있어 상한은 지킨다).
+    가상 시각을 되돌리면(실패 시각보다 이름) 기다리지 않는다.
     404 `session_not_found` 면 세션을 비우고 다음에 다시 정한다.
 - **중복 억제**: 같은 원인 키로는 다시 알리지 않는다. 사용자가 그 이벤트로 나온 제안을 **거절**하면, 상황이 더 나빠질 때(새 위반, 단계 상승)만 다시 알린다.
   거절을 따로 추적하지 않고 원인 키로 처리한다: 거절해도 같은 원인 키만 남아 조용하고, 나빠지면 새 원인 키가 생긴다. 원인 키는 여행일마다 따로다.
@@ -332,44 +338,68 @@ planner 테이블을 참조하지 않는다 (`plan_id` 는 숫자일 뿐). 시�
 ## 8. CLI·재생기·테스트
 
 `scripts/planner/cli.py` 에 trip·sim 명령을 등록한다 (명령 구현: `scripts/trip/trip_cli.py`, 같은 `GURYONG_API_URL`, 로그인).
+planner 의 진행 상태·재계산(`progress`·`projection`)과 safety·routing·docent 명령은 `docs/planner/README.md` §11.
 
 ```text
 trip start 3 [--session SID]          여행일 시작 / trip end 3 / trip state 3 [--json]
 trip loc 3 35.987 129.558 [--acc 10] [--at 14:20]     위치 한 점
 trip goto 3 kto-2660046 [--wait 120]  그 장소 좌표로 30초마다 점을 보내고, 가상 시각을 머무름 시간만큼 진행 (도착 판정 확인용)
 trip replay 3 scene3_delay [--speed 10] [-v]   경로 재생 (plan 자리에 new: 재생 파일의 계획을 새로 만듦)
-trip events 3 [--after N] [--follow]  이벤트 보기 (--follow: 3초마다 폴링)
+trip events 3 [--after N] [--follow]  이벤트 보기 (--follow: 3초마다 폴링. failed: 선제 턴 전송 실패, 시도 수·사유 표시)
+trip events 3 --seen 41               이벤트 확인 표시 (delivered -> handled)
 trip tick 3 [--at 15:45]              틱을 지금 한 번 (지연·안전 경고·자동 종료·선제 턴 전송)
 sim / sim scenario storm / sim now 2026-10-10T14:00 (또는 14:00) / sim reset   safety 가상 상황·시각 (PUT /safety/sim)
 ```
 
 ```bash
 export GURYONG_API_URL=http://127.0.0.1:8000     # backend/.env 에 SAFETY_SOURCE=mock, AUTH_REQUIRED=false
+python scripts/planner/cli.py trip replay new scene2_arrival --speed 0   # 장면 ② 도착 → 해설 카드 (LLM 없음)
 python scripts/planner/cli.py trip replay new scene3_delay --speed 0     # 장면 ③ (기다리지 않고)
 python scripts/planner/cli.py trip replay new scene4_safety --speed 60   # 장면 ④ (60배속)
+python scripts/planner/cli.py trip end 7      # 재생이 끝나도 여행일은 진행 중이다. 끝내지 않으면 백그라운드 틱이 계속 판정한다
 ```
 
 **재생 파일** (`scripts/trip/scenes/*.json`): 데모 장면과 테스트를 같은 파일로 만든다. 펼침(시간순 동작 목록)은 `scripts/trip/scene.py` 하나를 CLI 와 pytest 가 같이 쓴다.
+세 파일 모두 데모 데이터(`docs/app/README.md` §6.1)의 계획이다: 가옥거리 12:30 → 구룡포항 13:40 → 과메기문화관 14:47 → 구룡포해수욕장 16:01 → 카페파도 16:54(차량) → 17:39 종료, `end_before 18:00`.
+
+| 파일 | 장면 | 기대 이벤트 |
+|---|---|---|
+| `scene2_arrival.json` | ② 12:30 가옥거리 도착 | `arrived`(단계 2) + 해설 카드(`card.kind=docent`), 지연 없음 |
+| `scene3_delay.json` | ③ 가옥거리에서 30분 더 머묾 | 처음 60분은 `delay` 없음 → 카페 종료가 18:00 을 넘으면 `delay`(단계 3) 한 번 → 구룡포항 도착 |
+| `scene4_safety.json` | ④ 15:20 과메기문화관에서 storm | `safety_raised`(단계 3) → 15:47 해수욕장을 일정에서 빼고 차로 카페로 → 구룡포수협 주변 `near_hazard`(단계 1) → 카페 도착 |
+
 ```jsonc
 {"name": "장면 ③ 지연 대응", "description": "…",
  "plan_fixture": "seoyun_mom_1010",          // 이름표 (계획은 아래 plan 으로 만든다)
  "plan": {"title": "엄마랑 구룡포", "start_date": "2026-10-10", "day_start": "12:30", "day_end": "18:00",
-          "items": [{"place_id": "kto-2834330", "stay_minutes": 60}, …]},   // replay new·pytest 가 이 계획을 만든다
- "start": "2026-10-10T12:20:00+09:00", "scenario": "calm",
+          "items": [{"place_id": "kto-1909659", "stay_minutes": 60}, …,
+                    {"place_id": "kto-2834344", "stay_minutes": 45, "travel_mode": "car"}],   // travel_mode: 직전 장소에서 오는 수단
+          "constraints": [{"type": "end_before", "params": {"time": "18:00"}, "hard": true}]},  // replay new·pytest 가 이 계획을 만든다
+ "start": "2026-10-10T12:25:00+09:00", "scenario": "calm",
  "steps": [
-   {"goto": "kto-2834330", "stay": 65},                       // 장소로 가서 65분 머묾 (처음 3분은 30초마다, 그 뒤 5분마다 점)
-   {"walk_to": "kto-2610501"},                                // routing 경로선을 따라 걸음 (70m/분, 점 간격 30초. 경로선이 없으면 직선)
+   {"at": "12:30", "goto": "kto-1909659", "stay": 60},        // 12:30 에 장소로 가서 60분 머묾 (처음 3분은 30초마다, 그 뒤 5분마다 점)
+   {"walk_to": "kto-2610501"},                                // routing 도보 경로선을 따라 걸음 (70m/분, 점 간격 30초. 경로선이 없으면 직선)
+   {"drive_to": [35.9912, 129.5572]},                         // 차량 경로선을 따라 감 (400m/분, 점 간격 10초). 장소 자리에 [lat, lng] (경유 지점)도 된다
    {"at": "+95", "sim": {"scenario": "storm"}, "tick": true}, // 시작 +95분(또는 "HH:MM")까지 그 자리에서 기다린 뒤 안전 상황 변경, 틱
+   {"skip": "kto-127214"},                                    // 그 장소 항목을 건너뜀으로 (사용자가 일정에서 뺌, PATCH status=skipped)
    {"expect": {"type": "delay", "level": 3}},                 // 지금까지 이런 이벤트가 있어야 함. 키가 이벤트에 없으면 payload 에서 찾음 (place_id 등)
+   {"expect": {"card": {"kind": "docent"}}},                  // 값이 dict 면 그 키만 비교
    {"expect": {"type": "delay", "not": true}}]}               // "not": 없어야 함
 ```
-- 한 단계 안에서는 at → sim → goto → walk_to → stay → tick → expect 순서다.
+- 한 단계 안에서는 at → sim → skip → goto → walk_to → drive_to → stay → tick → expect 순서다.
+- `skip` 은 보내는 중인 선제 턴(단계 3 `queued`)이 끝난 뒤에 한다 (CLI). 사용자는 Agent 의 말을 보고 일정을 바꾸므로,
+  `--speed 0` 에서 일정 변경이 응답 도중에 끼어들면 agent 가 "응답을 만드는 동안 일정이 바뀌어" 제안을 버리기 때문이다.
 - `--speed` 는 시뮬레이션 시각이 흐르는 배속이다 (0 이면 기다리지 않음). 배속과 상관없이 동작(위치·틱·기대 확인)마다 safety sim 의 `now` 를 재생 시각으로 옮기고,
   `sim` 단계 뒤에는 planner 안전 점검(`POST /planner/safety/scan`, 개발 모드)과 trip 틱(`now` = 재생 시각)을 바로 부른다.
 - pytest(`backend/tests/trip/test_scenes.py`)는 같은 파일을 서버 없이 재생한다: 이벤트 판정 함수는 **순수 함수**(`judge.py`, 입력: 오늘 일정·마지막 상태·위치·now → 출력: 새 상태·감지)와
   Event Policy(`policy.py`)로 두고, planner·safety·agent 는 가짜 클라이언트(`tests/trip/fakes.py`)로 바꾼다. 가짜 planner 는 planner 시간 모델을 단순하게 흉내 낸다 (도보 = 직선 × 1.3 / 70m).
   컨테이너에서 재생 파일을 읽도록 compose 가 `./scripts` 를 `/scripts` 로 마운트한다.
-- 실제 서비스로 확인한 결과 (2026-10-09, `SAFETY_SOURCE=mock`, `--speed 0`): 장면 ③ 기대 4개, 장면 ④ 기대 3개 모두 통과.
+- 데모 데이터로 바꾼 재생 파일을 실제 서비스로 확인 (2026-10-09, `SAFETY_SOURCE=mock`, `--speed 0`, Claude Haiku 5.5): 장면 ② 3개, ③ 4개, ④ 5개 기대 모두 통과.
+  - ③: 13:53 에 delay (`day_overflow` 18:02 + `end_before`) 한 번. 선제 턴은 "구룡포항 50분 → 30분, 17:46 종료" 제안.
+  - ④: 15:20 safety_raised (해수욕장·가는 길 주의, 카페 가는 차량 구간 위험 — 구룡포수협 맨홀 등급 3). 선제 턴은 "해수욕장 대신 근대문화역사관(실내)" 제안.
+    차로 카페에 가는 길에 near_hazard 가 구역마다 하나씩 3번 나온다 (구룡포수협 맨홀 15:49, 파출소 지표면 15:50, 구룡포교 하천 15:51 — 원인 키가 구역별이라).
+  - 재생이 끝나도 여행일은 진행 중이라, 끝내지 않은 재생 계획에 백그라운드 틱이 delay·safety_raised 선제 턴을 더 보냈다. 재생 뒤에는 `trip end` 를 부른다.
+- 이전 재생 파일(짬홍 → 구룡포항 → 가옥거리 → 과메기문화관 → 근대문화역사관)로 확인한 결과 (2026-10-09): 장면 ③ 기대 4개, 장면 ④ 기대 3개 모두 통과.
   장면 ③ 에서 실제 planner 는 15:37 에 역사관 운영시간(`outside_open_hours`), 16:07 에 하루 초과(`day_overflow`, 더 나빠짐)로 delay 를 두 번 냈고,
   agent 선제 턴 API 가 아직 없어 앞의 것은 `suppressed`, 뒤의 것은 `queued` 로 남아 틱마다 다시 시도했다.
 - 선제 턴까지 확인 (2026-10-09, `--speed 0`, gpt-5.4-mini): 장면 ③ 은 delay 선제 턴이 근거 + 추천안 1개(역사관 빼기) + "다른 방법" 한 줄로 답했고,
@@ -384,7 +414,8 @@ python scripts/planner/cli.py trip replay new scene4_safety --speed 60   # 장�
 - 단계 3이 동시에 두 개 나가지 않는다 (큐).
 - 여행일이 아니면 시작이 409 `not_trip_day`.
 - 가벼운 지연(새 위반 없음)은 이벤트가 없다.
-- 장면 ③·④ 재생 파일이 기대 이벤트를 낸다.
+- 장면 ②·③·④ 재생 파일이 기대 이벤트를 낸다.
+- 선제 턴 전송이 실패하면 간격을 늘려 다시 보내고, 상한에 닿으면 `failed` (agent_busy 는 세지 않음).
 
 모두 `backend/tests/trip/` 에 있다: `test_judge.py`·`test_policy.py` (순수 함수, DB 없음), `test_api.py` (API + 실제 DB + 가짜 서비스), `test_scenes.py` (재생 파일).
 ```bash
@@ -409,6 +440,8 @@ docker compose run --rm trip pytest tests/trip
 | `TRIP_HAZARD_NEAR_M` | 50 | 위험 구역 접근 거리 |
 | `TRIP_HAZARD_CACHE_SEC` | 5 | safety 상황(fingerprint)을 다시 묻지 않는 시간 |
 | `TRIP_PROACTIVE_COOLDOWN_MIN` | 10 | 단계 3 쿨다운 (안전 제외) |
+| `TRIP_PROACTIVE_MAX_ATTEMPTS` | 3 | 선제 턴 전송이 이만큼 실패하면 `failed` (agent_busy 는 세지 않음, §4.1) |
+| `TRIP_PROACTIVE_RETRY_SEC` | 30 | 실패 뒤 다시 보내기까지 기다림. 실패마다 두 배 |
 | `TRIP_AUTO_END_MIN` | 120 | 마지막 일정 후 자동 종료 |
 | `TRIP_PLANNER_BASE_URL`·`TRIP_SAFETY_BASE_URL`·`TRIP_AGENT_BASE_URL` | `http://127.0.0.1:8000` (compose `http://gateway`) | 다른 서비스 주소 |
 | `TRIP_TIMEOUT_SEC` / `TRIP_AGENT_TIMEOUT_SEC` | 15 / 300 | 다른 서비스 호출 제한 시간 (선제 턴은 LLM 응답을 기다린다) |
@@ -423,7 +456,7 @@ docker compose run --rm trip pytest tests/trip
 4. ~~지연 판정 (projection) + 백그라운드 틱~~ — 구현됨
 5. ~~planner 안전 경고 수집 + `near_hazard`~~ — 구현됨
 6. ~~Event Policy (큐·중복 억제·쿨다운)~~ — 구현됨
-7. agent: `POST /agent/sessions/{sid}/events`, 동행 모드 프롬프트·현재 상황 블록 (agent 담당). 응답 `ChatResult` 에 `message_id` 를 넣어 줄 것 (§4.2)
+7. ~~agent: `POST /agent/sessions/{sid}/events`, 동행 모드 프롬프트·현재 상황 블록 (agent 담당). 응답 `ChatResult` 에 `message_id` 를 넣어 줄 것 (§4.2)~~ — 구현됨 (`docs/agent/README.md` §11)
 8. ~~CLI·재생기, 장면 ③·④ 재생 파일과 테스트~~ — 구현됨
 
 ## 11. 구조

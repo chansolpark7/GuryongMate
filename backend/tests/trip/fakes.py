@@ -1,7 +1,7 @@
 """trip 테스트용 가짜 planner·safety·agent (trip 은 HTTP 로만 부르므로 같은 메서드를 가진 객체로 바꾼다).
 
 가짜 planner 는 실제 planner 의 시간 모델(docs/planner/README.md §2.1, §8.2)을 단순하게 흉내 낸다:
-도보 이동시간 = 직선거리 × 1.3 / 70m (분 올림), 운영시간 밖·하루 초과·고정 시각 놓침만 본다.
+도보 이동시간 = 직선거리 × 1.3 / 70m, 차량 = 직선거리 × 1.3 / 400m + 주차 5분 (분 올림), 운영시간 밖·하루 초과·고정 시각 놓침만 본다.
 """
 import math
 from copy import deepcopy
@@ -16,6 +16,9 @@ PLACES = {
     "kto-1909659": {"title": "구룡포 일본인 가옥거리", "lat": 35.9906209551, "lng": 129.5604550366, "outdoor": True},
     "kto-2660046": {"title": "구룡포과메기문화관", "lat": 35.9927402978, "lng": 129.5617992377, "open": ("09:00", "18:00")},
     "kto-2603493": {"title": "구룡포 근대문화역사관", "lat": 35.9905, "lng": 129.5616, "open": ("10:00", "17:30")},
+    "kto-127214": {"title": "구룡포해수욕장", "lat": 35.9968322529, "lng": 129.5662849025, "open": ("08:00", "20:00"),
+                   "outdoor": True},
+    "kto-2834344": {"title": "카페파도", "lat": 35.9768342269, "lng": 129.5514895569, "open": ("10:00", "21:00")},
 }
 
 # safety mock 의 침수 센서 (구룡포수협 스마트맨홀, 구룡포파출소 지표면 수위계)
@@ -34,6 +37,12 @@ def fmt(m: int) -> str:
 
 def walk_min(a: dict, b: dict) -> int:
     return math.ceil(distance_m(a["lat"], a["lng"], b["lat"], b["lng"]) * 1.3 / 70)
+
+
+def leg_min(a: dict, b: dict, mode: str | None) -> int:
+    if mode == "car":
+        return math.ceil(distance_m(a["lat"], a["lng"], b["lat"], b["lng"]) * 1.3 / 400) + 5
+    return walk_min(a, b)
 
 
 def circle(lat: float, lng: float, r: float, n: int = 16) -> list[list[float]]:
@@ -60,7 +69,8 @@ class FakePlanner:
         items = []
         for n, it in enumerate(plan["items"], start=1):
             items.append({"id": pid * 100 + n, "order": n, "place_id": it["place_id"], "stay": it.get("stay_minutes", 60),
-                          "start_time": it.get("start_time"), "status": "planned", "arrived_at": None, "done_at": None})
+                          "start_time": it.get("start_time"), "mode": it.get("travel_mode"), "status": "planned",
+                          "arrived_at": None, "done_at": None})
         self.plans[pid] = {"id": pid, "user": user, "title": plan["title"], "start_date": plan["start_date"],
                            "end_date": plan.get("end_date", plan["start_date"]), "day_start": plan["day_start"],
                            "day_end": plan["day_end"], "items": items}
@@ -68,6 +78,11 @@ class FakePlanner:
 
     def item(self, plan_id: int, order: int) -> dict:
         return self.plans[plan_id]["items"][order - 1]
+
+    def skip(self, plan_id: int, place_id: str) -> None:
+        """사용자가 그 장소 항목을 건너뜀으로 바꿈 (PATCH status=skipped)."""
+        it = next(i for i in self.plans[plan_id]["items"] if i["place_id"] == place_id and i["status"] == "planned")
+        it["status"] = "skipped"
 
     def add_alert(self, plan_id: int, kind: str, changes: list[tuple[int, str, str]]) -> dict:
         """changes: (item_id, from_risk, to_risk)."""
@@ -120,29 +135,32 @@ class FakePlanner:
             else:
                 last = max((i["order"] for i in items if i["status"] in ("done", "visiting")), default=0)
                 pivot = next((i["order"] for i in items if i["order"] > last and i["status"] == "planned"), None)
+        prev = None  # 직전에 다녀오는(건너뛰지 않은) 장소
         for it in items:
             place = PLACES[it["place_id"]]
-            prev = PLACES[items[it["order"] - 2]["place_id"]] if it["order"] > 1 else None
+            if it["status"] == "skipped":  # 시간을 쓰지 않는다
+                rows.append({"id": it["id"], "arrive": t, "start": t, "end": t})
+                continue
             past = actual is not None and pivot is not None and it["order"] < pivot
             if past:
-                arrive = hm(it["arrived_at"]) if it["arrived_at"] else t + (walk_min(prev, place) if prev else 0)
+                arrive = hm(it["arrived_at"]) if it["arrived_at"] else t + (leg_min(prev, place, it["mode"]) if prev else 0)
                 end = hm(it["done_at"]) if it["done_at"] else arrive + it["stay"]
                 rows.append({"id": it["id"], "arrive": arrive, "start": arrive, "end": end})
-                t = end
+                t, prev = end, place
                 continue
             if actual and it["order"] == pivot and anchor is not None:
                 arrive = actual["arrived"]
                 end = max(arrive + it["stay"], now)
                 rows.append({"id": it["id"], "arrive": arrive, "start": arrive, "end": end})
                 self._check_open(place, it, arrive, end, vs)
-                t = end
+                t, prev = end, place
                 continue
             if actual and it["order"] == pivot and moving is not None:
-                arrive = now + walk_min({"lat": moving[0], "lng": moving[1]}, place)
+                arrive = now + leg_min({"lat": moving[0], "lng": moving[1]}, place, it["mode"])
             else:
                 if actual and pivot is not None and it["order"] == pivot:
                     t = max(t, now)
-                arrive = t + (walk_min(prev, place) if prev else 0)
+                arrive = t + (leg_min(prev, place, it["mode"]) if prev else 0)
             start = max(arrive, hm(it["start_time"])) if it["start_time"] else arrive
             if it["start_time"] and arrive > hm(it["start_time"]):
                 vs.append({"code": "fixed_time_missed", "severity": "error", "day": 1, "item_id": it["id"],
@@ -150,7 +168,7 @@ class FakePlanner:
             end = start + it["stay"]
             rows.append({"id": it["id"], "arrive": arrive, "start": start, "end": end})
             self._check_open(place, it, start, end, vs)
-            t = end
+            t, prev = end, place
         if rows and rows[-1]["end"] > hm(p["day_end"]):
             vs.append({"code": "day_overflow", "severity": "error", "day": 1, "item_id": rows[-1]["id"],
                        "constraint_id": None, "message": f"일정이 {fmt(rows[-1]['end'])}에 끝나 종료 목표 {p['day_end']}를 넘어요."})
@@ -171,7 +189,7 @@ class FakePlanner:
             items.append({"id": it["id"], "day": 1, "order": it["order"], "place_id": it["place_id"],
                           "place": {"id": it["place_id"], "title": place["title"], "lat": place["lat"], "lng": place["lng"]},
                           "stay_minutes": it["stay"], "start_time": it["start_time"], "status": it["status"],
-                          "leg_mode": "walk" if it["order"] > 1 else None, "arrive_at": fmt(r["arrive"]),
+                          "leg_mode": (it["mode"] or "walk") if it["order"] > 1 else None, "arrive_at": fmt(r["arrive"]),
                           "start_at": fmt(r["start"]), "end_at": fmt(r["end"]), "arrived_at": it["arrived_at"],
                           "done_at": it["done_at"]})
         return {"id": p["id"], "title": p["title"], "start_date": p["start_date"], "end_date": p["end_date"],
