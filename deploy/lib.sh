@@ -4,7 +4,7 @@ set -euo pipefail
 export MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*'   # Git Bash 가 docker -v /path 를 Windows 경로로 바꾸지 않게
 
 DEPLOY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT="$(cd "$DEPLOY_DIR/.." && pwd)"
+ROOT="$(cd "$DEPLOY_DIR/.." && { pwd -W 2>/dev/null || pwd; })"   # Git Bash: C:/... (git·docker 가 Windows 프로그램)
 [[ -f "$DEPLOY_DIR/deploy.conf" ]] && source "$DEPLOY_DIR/deploy.conf"
 VM="${VM:-}"                    # user@host
 VM_DIR="${VM_DIR:-guryongmate}" # VM 홈 아래 폴더
