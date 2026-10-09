@@ -3,27 +3,37 @@ import 'dart:convert';
 
 import 'package:http/http.dart' as http;
 
-/// 게이트웨이(기본 :8000) 하나로 places · planner · agent 를 호출한다.
-/// 로그인 서비스(account)가 생기기 전까지 사용자 구분은 `X-User-Id` 헤더로 한다.
+/// 서버 오류. 서비스 공통 형식 `{"detail": {"code", "message", …}}` 의 code·추가 필드를 그대로 들고 있다.
 class ApiException implements Exception {
-  ApiException(this.status, this.message);
+  ApiException(this.status, this.message, {this.code, this.detail = const {}});
   final int status; // 0 = 네트워크 오류
   final String message;
+  final String? code;
+  final Map<String, dynamic> detail;
 
   bool get isConflict => status == 409;
+  bool get isNetwork => status == 0;
 
   @override
   String toString() => message;
 }
 
+/// 로그인 토큰을 가진 쪽(AppSession). 401 이면 [refresh] 를 한 번 부르고 다시 보낸다.
+abstract class AuthHandler {
+  String? get accessToken;
+
+  /// 새 토큰 쌍을 받으면 true. 실패하면 false (이미 로그아웃 처리됨).
+  Future<bool> refresh();
+}
+
+/// 게이트웨이(기본 :8000) 하나로 모든 서비스를 호출한다. 인증은 `Authorization: Bearer <access>` (account §2).
 class ApiClient {
-  ApiClient({required this.baseUrl, required this.userId, http.Client Function()? clientFactory})
-      : _newClient = clientFactory ?? http.Client.new {
+  ApiClient({required this.baseUrl, this.auth, http.Client Function()? clientFactory}) : _newClient = clientFactory ?? http.Client.new {
     _http = _newClient();
   }
 
   final String baseUrl;
-  final String userId;
+  final AuthHandler? auth;
 
   /// 테스트에서 가짜 서버를 끼우기 위한 것. SSE 는 요청마다 새 클라이언트를 만들어 끊을 때 닫는다.
   final http.Client Function() _newClient;
@@ -32,7 +42,7 @@ class ApiClient {
   static const _timeout = Duration(seconds: 30);
 
   Map<String, String> get headers => {
-        'X-User-Id': userId,
+        if (auth?.accessToken != null) 'Authorization': 'Bearer ${auth!.accessToken}',
         'Content-Type': 'application/json',
         'Accept': 'application/json',
       };
@@ -46,58 +56,84 @@ class ApiClient {
     return Uri.parse('$baseUrl$path').replace(queryParameters: q.isEmpty ? null : q);
   }
 
-  Future<dynamic> get(String path, [Map<String, dynamic>? query]) => _send(() => _http.get(uri(path, query), headers: headers));
+  Future<dynamic> get(String path, [Map<String, dynamic>? query]) => _send(path, () => _http.get(uri(path, query), headers: headers));
 
   Future<dynamic> post(String path, [Object? body, Map<String, dynamic>? query]) =>
-      _send(() => _http.post(uri(path, query), headers: headers, body: body == null ? null : jsonEncode(body)));
+      _send(path, () => _http.post(uri(path, query), headers: headers, body: body == null ? null : jsonEncode(body)));
 
-  Future<dynamic> patch(String path, Object body) =>
-      _send(() => _http.patch(uri(path), headers: headers, body: jsonEncode(body)));
+  Future<dynamic> put(String path, Object body) => _send(path, () => _http.put(uri(path), headers: headers, body: jsonEncode(body)));
 
-  Future<dynamic> delete(String path) => _send(() => _http.delete(uri(path), headers: headers));
+  Future<dynamic> patch(String path, Object body) => _send(path, () => _http.patch(uri(path), headers: headers, body: jsonEncode(body)));
 
-  Future<dynamic> _send(Future<http.Response> Function() call) async {
-    final http.Response res;
-    try {
-      res = await call().timeout(_timeout);
-    } on TimeoutException {
-      throw ApiException(0, '서버 응답이 없습니다. 잠시 후 다시 시도하세요.');
-    } catch (e) {
-      throw ApiException(0, '서버에 연결할 수 없습니다 ($baseUrl)');
+  Future<dynamic> delete(String path) => _send(path, () => _http.delete(uri(path), headers: headers));
+
+  /// `/auth/*` 는 토큰을 새로 받는 경로라 401 이어도 refresh 하지 않는다.
+  bool _canRefresh(String path) => auth != null && !path.startsWith('/auth/');
+
+  Future<dynamic> _send(String path, Future<http.Response> Function() call) async {
+    var res = await _call(call);
+    if (res.statusCode == 401 && _canRefresh(path) && await auth!.refresh()) {
+      res = await _call(call);
     }
     final text = utf8.decode(res.bodyBytes);
-    if (res.statusCode >= 400) throw ApiException(res.statusCode, errorMessage(text, res.statusCode));
+    if (res.statusCode >= 400) throw parseError(text, res.statusCode);
     if (text.isEmpty) return null;
     return jsonDecode(text);
   }
 
-  /// FastAPI 오류 응답({"detail": str | [{msg}]})에서 사람이 읽을 메시지를 뽑는다.
-  static String errorMessage(String body, int status) {
+  Future<http.Response> _call(Future<http.Response> Function() call) async {
     try {
-      final detail = (jsonDecode(body) as Map)['detail'];
-      if (detail is String) return detail;
-      if (detail is List && detail.isNotEmpty) {
-        return detail.map((e) => e is Map ? e['msg'] ?? '$e' : '$e').join('\n');
-      }
-    } catch (_) {}
-    return '요청을 처리하지 못했습니다 ($status)';
+      return await call().timeout(_timeout);
+    } on TimeoutException {
+      throw ApiException(0, '서버 응답이 없어요. 잠시 후 다시 시도해 주세요.', code: 'timeout');
+    } catch (e) {
+      throw ApiException(0, '서버에 연결하지 못했어요 ($baseUrl)', code: 'network');
+    }
   }
 
-  /// SSE 요청. 스트림을 취소하면 연결을 끊는다(서버는 턴을 정리한다).
-  Stream<SseEvent> postSse(String path, Object body) {
+  /// 오류 응답 → ApiException. `detail` 이 문자열·검증 오류 목록(FastAPI 기본)이어도 읽는다.
+  static ApiException parseError(String body, int status) {
+    try {
+      final detail = (jsonDecode(body) as Map)['detail'];
+      if (detail is Map) {
+        final d = Map<String, dynamic>.from(detail);
+        return ApiException(status, '${d['message'] ?? '요청을 처리하지 못했어요 ($status)'}', code: d['code'] as String?, detail: d);
+      }
+      if (detail is String) return ApiException(status, detail);
+      if (detail is List && detail.isNotEmpty) {
+        return ApiException(status, detail.map((e) => e is Map ? e['msg'] ?? '$e' : '$e').join('\n'), code: 'invalid_request');
+      }
+    } catch (_) {}
+    if (status == 502 || status == 503) return ApiException(status, '서버에 연결하지 못했어요', code: 'upstream_unavailable');
+    return ApiException(status, '요청을 처리하지 못했어요 ($status)');
+  }
+
+  /// SSE 요청. 스트림을 취소하면 연결을 끊는다(서버는 턴을 중단하고 그때까지 기록을 남긴다).
+  /// 스트림 시작 전 401 이면 refresh 한 번 뒤 다시 연다 (스트림 중 401 은 없다고 본다, 34 §토큰).
+  Stream<SseEvent> postSse(String path, [Object? body]) {
     late StreamController<SseEvent> out;
-    final client = _newClient();
+    http.Client? client;
     StreamSubscription<String>? sub;
 
-    Future<void> start() async {
+    Future<http.StreamedResponse> open() {
+      client?.close();
+      client = _newClient();
       final req = http.Request('POST', uri(path))
         ..headers.addAll({...headers, 'Accept': 'text/event-stream'})
-        ..body = jsonEncode(body);
+        ..body = body == null ? '' : jsonEncode(body);
+      return client!.send(req);
+    }
+
+    Future<void> start() async {
       try {
-        final res = await client.send(req);
+        var res = await open();
+        if (res.statusCode == 401 && _canRefresh(path)) {
+          await res.stream.drain<void>();
+          if (await auth!.refresh()) res = await open();
+        }
         if (res.statusCode >= 400) {
           final text = await res.stream.bytesToString();
-          out.addError(ApiException(res.statusCode, errorMessage(text, res.statusCode)));
+          out.addError(parseError(text, res.statusCode));
           await out.close();
           return;
         }
@@ -108,12 +144,12 @@ class ApiClient {
               out.add(ev);
             }
           },
-          onError: (Object e) => out.addError(ApiException(0, '응답 스트림이 끊겼습니다.')),
+          onError: (Object e) => out.addError(ApiException(0, '응답이 끊겼어요.', code: 'network')),
           onDone: () => out.close(),
         );
-      } catch (_) {
+      } catch (e) {
         if (!out.isClosed) {
-          out.addError(ApiException(0, '서버에 연결할 수 없습니다 ($baseUrl)'));
+          out.addError(e is ApiException ? e : ApiException(0, '서버에 연결하지 못했어요 ($baseUrl)', code: 'network'));
           await out.close();
         }
       }
@@ -123,7 +159,7 @@ class ApiClient {
       onListen: start,
       onCancel: () async {
         await sub?.cancel();
-        client.close();
+        client?.close();
       },
     );
     return out.stream;

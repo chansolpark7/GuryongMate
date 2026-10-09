@@ -1,13 +1,66 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:google_sign_in/google_sign_in.dart';
 import 'package:provider/provider.dart';
 
+import '../../core/api/api_client.dart';
 import '../../core/app_session.dart';
+import '../../core/format.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/common.dart';
+import '../settings/settings_screen.dart';
 
-/// 01_Login. account 서비스가 아직 없어 이메일(사용자 ID)만 정해 X-User-Id 로 쓴다.
-class LoginScreen extends StatelessWidget {
+/// Google OAuth Web 클라이언트 ID (account §3.2 serverClientId). 빌드 때 `--dart-define=GOOGLE_SERVER_CLIENT_ID=…`.
+const _googleServerClientId = String.fromEnvironment('GOOGLE_SERVER_CLIENT_ID');
+
+/// 01_Login (Figma 21:1964). Google / 아이디 로그인, 하단 "서버 설정".
+class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
+
+  @override
+  State<LoginScreen> createState() => _LoginScreenState();
+}
+
+class _LoginScreenState extends State<LoginScreen> {
+  bool _google = false;
+
+  @override
+  void initState() {
+    super.initState();
+    // refresh 실패(refresh_token_reused 등)로 돌아왔으면 이유를 한 번 알린다.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final s = context.read<AppSession>();
+      final notice = s.signOutNotice;
+      if (notice != null && mounted) {
+        s.signOutNotice = null;
+        showInfo(context, notice);
+      }
+    });
+  }
+
+  Future<void> _googleSignIn() async {
+    final session = context.read<AppSession>();
+    setState(() => _google = true);
+    try {
+      final g = GoogleSignIn.instance;
+      await g.initialize(serverClientId: _googleServerClientId.isEmpty ? null : _googleServerClientId);
+      if (!g.supportsAuthenticate()) throw UnsupportedError('google');
+      final account = await g.authenticate();
+      final idToken = account.authentication.idToken;
+      if (idToken == null) throw StateError('no id_token');
+      await session.signInWith(await session.api.googleLogin(idToken));
+    } on ApiException catch (e) {
+      if (mounted) showInfo(context, e.code == 'google_unavailable' ? 'Google 로그인을 잠시 쓸 수 없어요. 잠시 후 다시 시도해 주세요.' : 'Google 로그인에 실패했어요');
+    } on GoogleSignInException catch (e) {
+      if (mounted && e.code != GoogleSignInExceptionCode.canceled) showInfo(context, 'Google 로그인에 실패했어요');
+    } catch (_) {
+      // Windows 데스크톱 등 Google Sign-In 을 지원하지 않는 기기
+      if (mounted) showInfo(context, '이 기기에서는 Google 로그인을 쓸 수 없어요. 아이디로 계속해 주세요.', margin: const EdgeInsets.fromLTRB(16, 0, 16, 180));
+    } finally {
+      if (mounted) setState(() => _google = false);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -20,29 +73,28 @@ class LoginScreen extends StatelessWidget {
             const Spacer(flex: 5),
             const Center(child: AppLogo()),
             const SizedBox(height: 20),
-            Text('Planit', style: AppText.display, textAlign: TextAlign.center),
+            Text('구룡메이트', style: AppText.display, textAlign: TextAlign.center),
             const SizedBox(height: 6),
-            Text('Plan smarter with AI', style: AppText.label.copyWith(fontSize: 16, color: AppColors.text2), textAlign: TextAlign.center),
+            Text('여행을 함께 걷는 AI', style: AppText.label.copyWith(fontSize: 16, color: AppColors.text2), textAlign: TextAlign.center),
             const SizedBox(height: 4),
-            Text('AI가 함께 편집하는 여행 플래너', style: AppText.meta.copyWith(fontSize: 14, color: AppColors.text3), textAlign: TextAlign.center),
+            Text('구룡포 여행 계획부터 현장 안내까지', style: AppText.meta.copyWith(fontSize: 14, color: AppColors.text3), textAlign: TextAlign.center),
             const Spacer(flex: 6),
-            AppButton(
-              label: 'Google로 계속하기',
-              kind: ButtonKind.secondary,
-              leading: const _GoogleMark(),
-              // 로그인 버튼 위에 띄워 "이메일로 계속하기"를 가리지 않게 한다
-              onPressed: () => showInfo(context, 'Google 로그인은 계정 서비스가 준비되면 연결돼요. 이메일로 계속해 주세요.',
-                  margin: const EdgeInsets.fromLTRB(16, 0, 16, 180)),
-            ),
+            AppButton(label: 'Google로 계속하기', kind: ButtonKind.secondary, leading: const _GoogleMark(), loading: _google, onPressed: _googleSignIn),
             const SizedBox(height: 12),
             AppButton(
-              label: '이메일로 계속하기',
+              label: '아이디로 계속하기',
               icon: Icons.mail_outline,
-              onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const EmailLoginScreen())),
+              onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const LoginIdScreen())),
             ),
             const SizedBox(height: 16),
             Text('계속하면 이용약관 및 개인정보처리방침에 동의하게 됩니다', style: AppText.caption, textAlign: TextAlign.center),
-            const SizedBox(height: 24),
+            Center(
+              child: TextButton(
+                onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const SettingsScreen(serverOnly: true))),
+                child: Text('서버 설정', style: AppText.caption.copyWith(color: AppColors.text2, decoration: TextDecoration.underline)),
+              ),
+            ),
+            const SizedBox(height: 8),
           ]),
         ),
       ),
@@ -82,92 +134,348 @@ class _GoogleMark extends StatelessWidget {
       );
 }
 
-/// 이메일 입력 화면. 서버 주소도 여기서 바꾼다 (에뮬레이터·실기기 테스트용).
-class EmailLoginScreen extends StatefulWidget {
-  const EmailLoginScreen({super.key});
+/// 34·35 공통 입력 필드: 라벨 14 Bold + 입력 52 r12 #F3F4F6, 오류면 1.5px Danger 테두리 + alert 아이콘 문구.
+class AuthField extends StatelessWidget {
+  const AuthField({
+    super.key,
+    required this.label,
+    required this.controller,
+    this.hint,
+    this.error,
+    this.help,
+    this.obscure = false,
+    this.onToggleObscure,
+    this.onSubmitted,
+    this.autofocus = false,
+  });
+
+  final String label;
+  final TextEditingController controller;
+  final String? hint;
+  final String? error;
+  final String? help;
+  final bool obscure;
+  final VoidCallback? onToggleObscure;
+  final ValueChanged<String>? onSubmitted;
+  final bool autofocus;
 
   @override
-  State<EmailLoginScreen> createState() => _EmailLoginScreenState();
+  Widget build(BuildContext context) {
+    final errBorder = OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: AppColors.danger, width: 1.5));
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Text(label, style: AppText.label.copyWith(fontWeight: FontWeight.w700)),
+      const SizedBox(height: 8),
+      TextField(
+        controller: controller,
+        obscureText: obscure,
+        autofocus: autofocus,
+        autocorrect: false,
+        enableSuggestions: !obscure,
+        onSubmitted: onSubmitted,
+        style: AppText.body,
+        decoration: InputDecoration(
+          hintText: hint,
+          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 15),
+          enabledBorder: error == null ? null : errBorder,
+          focusedBorder: error == null ? null : errBorder,
+          suffixIcon: onToggleObscure == null
+              ? null
+              : IconButton(
+                  tooltip: obscure ? '비밀번호 보기' : '비밀번호 숨기기',
+                  icon: Icon(obscure ? Icons.visibility_outlined : Icons.visibility_off_outlined, color: AppColors.text3, size: 20),
+                  onPressed: onToggleObscure,
+                ),
+        ),
+      ),
+      if (error != null)
+        Padding(
+          padding: const EdgeInsets.only(top: 6),
+          child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Icon(Icons.warning_amber_rounded, size: 14, color: AppColors.danger),
+            const SizedBox(width: 4),
+            Expanded(child: Text(error!, style: AppText.caption.copyWith(color: AppColors.danger))),
+          ]),
+        )
+      else if (help != null)
+        Padding(padding: const EdgeInsets.only(top: 6), child: Text(help!, style: AppText.caption)),
+    ]);
+  }
 }
 
-class _EmailLoginScreenState extends State<EmailLoginScreen> {
-  final _email = TextEditingController();
-  late final TextEditingController _server;
-  bool _checking = false;
+/// `errors[].loc` 에서 필드 이름을 찾는다 (422 invalid_request).
+String? fieldOf(ApiException e) {
+  final errs = e.detail['errors'];
+  if (errs is List && errs.isNotEmpty) {
+    final loc = (errs.first as Map)['loc'];
+    if (loc is List && loc.isNotEmpty) return '${loc.last}';
+  }
+  return null;
+}
+
+/// 34_Login_ID (Figma 73:6084, 잠김 34-S1 73:8131).
+class LoginIdScreen extends StatefulWidget {
+  const LoginIdScreen({super.key});
+
+  @override
+  State<LoginIdScreen> createState() => _LoginIdScreenState();
+}
+
+class _LoginIdScreenState extends State<LoginIdScreen> {
+  final _id = TextEditingController();
+  final _pw = TextEditingController();
+  bool _obscure = true;
+  bool _busy = false;
+  String? _idError;
+  String? _pwError;
+  DateTime? _lockedUntil;
+  Timer? _tick;
 
   @override
   void initState() {
     super.initState();
-    _server = TextEditingController(text: context.read<AppSession>().baseUrl);
-    _email.addListener(() => setState(() {}));
+    _id.addListener(() => setState(() {}));
+    _pw.addListener(() => setState(() {}));
   }
 
   @override
   void dispose() {
-    _email.dispose();
-    _server.dispose();
+    _tick?.cancel();
+    _id.dispose();
+    _pw.dispose();
     super.dispose();
   }
 
-  bool get _valid => _email.text.trim().isNotEmpty && _email.text.trim().length <= 64;
+  Duration? get _remaining {
+    final u = _lockedUntil;
+    if (u == null) return null;
+    final r = u.difference(DateTime.now());
+    return r.isNegative ? null : r;
+  }
+
+  void _lock(int seconds) {
+    _lockedUntil = DateTime.now().add(Duration(seconds: seconds));
+    _tick?.cancel();
+    _tick = Timer.periodic(const Duration(seconds: 1), (t) {
+      if (!mounted) return t.cancel();
+      if (_remaining == null) {
+        t.cancel();
+        _lockedUntil = null;
+      }
+      setState(() {});
+    });
+  }
+
+  bool get _valid => _id.text.trim().isNotEmpty && _pw.text.isNotEmpty && _remaining == null;
 
   Future<void> _submit() async {
+    if (!_valid || _busy) return;
     final session = context.read<AppSession>();
-    setState(() => _checking = true);
+    setState(() {
+      _busy = true;
+      _idError = _pwError = null;
+    });
     try {
-      await session.setBaseUrl(_server.text);
-      await session.signIn(_email.text);
-      // 연결 확인 (실패해도 로그인은 유지하고 안내만 한다)
-      await session.api.plans();
-      if (mounted) Navigator.of(context).popUntil((r) => r.isFirst);
-    } catch (e) {
-      if (mounted) {
-        showError(context, e);
-        Navigator.of(context).popUntil((r) => r.isFirst);
+      await session.signInWith(await session.api.login(_id.text, _pw.text));
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      switch (e.code) {
+        case 'invalid_credentials':
+          _pwError = '아이디 또는 비밀번호가 맞지 않아요';
+          _pw.clear();
+        case 'too_many_attempts':
+          _lock((e.detail['retry_after'] as num?)?.toInt() ?? 900);
+        case 'invalid_request':
+          final f = fieldOf(e);
+          if (f == 'password') {
+            _pwError = '비밀번호를 확인해 주세요';
+          } else {
+            _idError = '아이디를 확인해 주세요';
+          }
+        default:
+          showInfo(context, '서버에 연결하지 못했어요');
       }
     } finally {
-      if (mounted) setState(() => _checking = false);
+      if (mounted) setState(() => _busy = false);
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    final remaining = _remaining;
+    final until = _lockedUntil;
     return Scaffold(
       backgroundColor: AppColors.surface,
-      appBar: AppBar(backgroundColor: AppColors.surface, title: Text('이메일로 계속하기', style: AppText.headline), centerTitle: true),
+      appBar: AppBar(backgroundColor: AppColors.surface, leading: const BackButton()),
       body: SafeArea(
-        child: ListView(padding: const EdgeInsets.all(20), children: [
-          Text('이메일', style: AppText.label.copyWith(fontWeight: FontWeight.w700)),
-          const SizedBox(height: 8),
-          TextField(
-            controller: _email,
-            keyboardType: TextInputType.emailAddress,
-            autofocus: true,
-            decoration: const InputDecoration(hintText: 'seoyun@example.com'),
-            onSubmitted: (_) => _valid ? _submit() : null,
-          ),
-          const SizedBox(height: 8),
-          Text('같은 이메일로 들어오면 내 여행 계획을 이어서 볼 수 있어요.', style: AppText.caption),
+        child: ListView(padding: const EdgeInsets.fromLTRB(20, 8, 20, 24), children: [
+          Text('아이디로 로그인', style: AppText.title),
+          const SizedBox(height: 4),
+          Text('구룡메이트 계정으로 계속해요', style: AppText.meta.copyWith(fontSize: 14)),
           const SizedBox(height: 28),
-          Theme(
-            data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
-            child: ExpansionTile(
-              tilePadding: EdgeInsets.zero,
-              title: Text('서버 설정', style: AppText.label.copyWith(color: AppColors.text2)),
-              children: [
-                TextField(controller: _server, decoration: const InputDecoration(hintText: 'http://127.0.0.1:8000')),
-                const SizedBox(height: 6),
-                Text('Android 에뮬레이터는 http://10.0.2.2:8000, 실기기는 PC 의 IP 주소를 넣으세요.', style: AppText.caption),
-              ],
-            ),
+          AuthField(label: '아이디', controller: _id, hint: '아이디', error: _idError, autofocus: true),
+          const SizedBox(height: 20),
+          AuthField(
+            label: '비밀번호',
+            controller: _pw,
+            hint: '비밀번호',
+            error: _pwError,
+            obscure: _obscure,
+            onToggleObscure: () => setState(() => _obscure = !_obscure),
+            onSubmitted: (_) => _submit(),
           ),
+          if (remaining != null && until != null) ...[
+            const SizedBox(height: 16),
+            Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(color: AppColors.dangerSoft, borderRadius: BorderRadius.circular(12)),
+              child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                const Icon(Icons.lock_outline, size: 18, color: AppColors.danger),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text('로그인을 여러 번 실패해 잠겼어요 · ${two(until.hour)}:${two(until.minute)}에 다시 시도할 수 있어요',
+                      style: AppText.meta.copyWith(color: AppColors.danger)),
+                ),
+              ]),
+            ),
+          ],
+          const SizedBox(height: 28),
+          AppButton(
+            label: remaining == null ? '로그인' : '로그인 (${two(remaining.inMinutes)}:${two(remaining.inSeconds % 60)} 남음)',
+            loading: _busy,
+            onPressed: _valid ? _submit : null,
+          ),
+          const SizedBox(height: 16),
+          Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+            Text('처음이신가요? ', style: AppText.meta.copyWith(fontSize: 14)),
+            InkWell(
+              onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const SignupScreen())),
+              child: Text('가입하기', style: AppText.label.copyWith(color: AppColors.primary, fontWeight: FontWeight.w700)),
+            ),
+          ]),
         ]),
       ),
-      bottomNavigationBar: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(20, 12, 20, 16),
-          child: AppButton(label: '계속하기', loading: _checking, onPressed: _valid ? _submit : null),
-        ),
+    );
+  }
+}
+
+/// 35_Signup (Figma 73:6173). 입력 중 규칙 확인 (account §3.1).
+class SignupScreen extends StatefulWidget {
+  const SignupScreen({super.key});
+
+  @override
+  State<SignupScreen> createState() => _SignupScreenState();
+}
+
+class _SignupScreenState extends State<SignupScreen> {
+  final _id = TextEditingController();
+  final _pw = TextEditingController();
+  final _name = TextEditingController();
+  bool _obscure = true;
+  bool _busy = false;
+  String? _idServer;
+  String? _pwServer;
+  String? _nameServer;
+
+  static final _idRe = RegExp(r'^[a-z0-9][a-z0-9._-]{3,31}$');
+
+  @override
+  void initState() {
+    super.initState();
+    for (final c in [_id, _pw, _name]) {
+      c.addListener(() => setState(() {
+            _idServer = _pwServer = _nameServer = null;
+          }));
+    }
+  }
+
+  @override
+  void dispose() {
+    _id.dispose();
+    _pw.dispose();
+    _name.dispose();
+    super.dispose();
+  }
+
+  String get _idv => _id.text.trim().toLowerCase();
+  bool get _idOk => _idRe.hasMatch(_idv);
+  bool get _pwOk =>
+      _pw.text.length >= 8 && _pw.text.length <= 128 && RegExp('[A-Za-z]').hasMatch(_pw.text) && RegExp('[0-9]').hasMatch(_pw.text) && _pw.text.toLowerCase() != _idv;
+  bool get _nameOk => _name.text.trim().length <= 30;
+
+  Future<void> _submit() async {
+    if (!(_idOk && _pwOk && _nameOk) || _busy) return;
+    final session = context.read<AppSession>();
+    setState(() => _busy = true);
+    try {
+      await session.signInWith(await session.api.signup(_idv, _pw.text, displayName: _name.text));
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        switch (e.code) {
+          case 'login_id_taken':
+            _idServer = '이미 쓰는 아이디예요';
+          case 'weak_password':
+            _pwServer = '8자 이상, 영문과 숫자를 함께 써 주세요';
+          case 'invalid_request':
+            final f = fieldOf(e);
+            if (f == 'password') {
+              _pwServer = '8자 이상, 영문과 숫자를 함께 써 주세요';
+            } else if (f == 'display_name') {
+              _nameServer = '이름은 30자까지 쓸 수 있어요';
+            } else {
+              _idServer = '영문 소문자·숫자 4~32자';
+            }
+          default:
+            showInfo(context, '서버에 연결하지 못했어요');
+        }
+      });
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final idTyped = _id.text.isNotEmpty, pwTyped = _pw.text.isNotEmpty;
+    return Scaffold(
+      backgroundColor: AppColors.surface,
+      appBar: AppBar(backgroundColor: AppColors.surface, leading: const BackButton()),
+      body: SafeArea(
+        child: ListView(padding: const EdgeInsets.fromLTRB(20, 8, 20, 24), children: [
+          Text('가입하기', style: AppText.title),
+          const SizedBox(height: 4),
+          Text('아이디와 비밀번호만 있으면 돼요', style: AppText.meta.copyWith(fontSize: 14)),
+          const SizedBox(height: 28),
+          AuthField(
+            label: '아이디',
+            controller: _id,
+            hint: '아이디',
+            autofocus: true,
+            error: _idServer ?? (idTyped && !_idOk ? '영문 소문자·숫자 4~32자' : null),
+            help: '영문 소문자·숫자 4~32자',
+          ),
+          const SizedBox(height: 20),
+          AuthField(
+            label: '비밀번호',
+            controller: _pw,
+            hint: '비밀번호',
+            obscure: _obscure,
+            onToggleObscure: () => setState(() => _obscure = !_obscure),
+            error: _pwServer ?? (pwTyped && !_pwOk ? (_pw.text.toLowerCase() == _idv ? '아이디와 다른 비밀번호를 써 주세요' : '8자 이상, 영문과 숫자를 함께 써 주세요') : null),
+            help: '8자 이상, 영문과 숫자를 함께 써 주세요',
+          ),
+          const SizedBox(height: 20),
+          AuthField(
+            label: '이름',
+            controller: _name,
+            hint: '선택',
+            error: _nameServer ?? (!_nameOk ? '이름은 30자까지 쓸 수 있어요' : null),
+            help: '구룡메이트가 부를 이름이에요. 비우면 아이디로 불러요',
+            onSubmitted: (_) => _submit(),
+          ),
+          const SizedBox(height: 28),
+          AppButton(label: '가입하고 시작하기', loading: _busy, onPressed: _idOk && _pwOk && _nameOk ? _submit : null),
+        ]),
       ),
     );
   }

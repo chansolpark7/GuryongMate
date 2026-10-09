@@ -15,6 +15,7 @@ abstract final class AppColors {
   static const warningLine = Color(0xFFFBE1B5);
   static const danger = Color(0xFFE5484D);
   static const dangerSoft = Color(0xFFFDECEC);
+  static const dangerLine = Color(0xFFF8C9CB);
   static const text = Color(0xFF111827);
   static const text2 = Color(0xFF4B5563);
   static const text3 = Color(0xFF8B95A1);

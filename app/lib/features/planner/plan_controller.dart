@@ -1,7 +1,10 @@
 import 'package:flutter/foundation.dart';
+import 'package:latlong2/latlong.dart';
 
+import '../../core/api/api_client.dart';
 import '../../core/api/guryong_api.dart';
 import '../../core/models/plan.dart';
+import '../../core/models/safety.dart';
 import 'restore_ops.dart';
 
 /// AI 가 바꾼 항목 표시 (08_Planner_After_Apply 의 "✨ AI updated 14:00 → 11:00").
@@ -15,9 +18,10 @@ class AiUpdate {
 
 /// 마지막으로 승인한 AI 제안. 실행 취소 · 지도 비교(이전 경로, 제거된 장소)에 쓴다.
 class AppliedProposal {
-  AppliedProposal({required this.proposal, required this.before});
+  AppliedProposal({required this.proposal, required this.before, required this.at});
   final ProposalDetail proposal;
   final PlanDetail before;
+  final DateTime at;
 
   /// 제안 카드 기준 변경 건수 (항목 단위).
   int get changeCount => proposal.changes.where((c) => c.itemId != null).map((c) => c.itemId).toSet().length;
@@ -25,12 +29,29 @@ class AppliedProposal {
   List<PlanItem> removedItems(PlanDetail current) => before.allItems.where((i) => current.item(i.id) == null).toList();
 }
 
-/// 한 계획의 상태. Planner 탭과 Map 탭이 같은 인스턴스를 공유한다 (선택 항목·Day·AI 변경 표시).
+/// 두 장소 사이 실제 길 (routing geometry). 같은 구간·수단은 한 번만 묻는다.
+class RouteCache {
+  RouteCache(this.api);
+  final GuryongApi api;
+  final _cache = <String, Future<RouteResult?>>{};
+
+  static String key(String mode, LatLng a, LatLng b, [String? hazards]) =>
+      '$mode:${a.latitude.toStringAsFixed(5)},${a.longitude.toStringAsFixed(5)};${b.latitude.toStringAsFixed(5)},${b.longitude.toStringAsFixed(5)}:${hazards ?? ''}';
+
+  /// 실패하면 null (화면은 직선 + "약"으로 그린다).
+  Future<RouteResult?> leg(String mode, LatLng a, LatLng b, {String? hazards}) => _cache.putIfAbsent(
+        key(mode, a, b, hazards),
+        () => api.route(mode, [(a.latitude, a.longitude), (b.latitude, b.longitude)], hazards: hazards).then<RouteResult?>((r) => r).catchError((_) => null),
+      );
+}
+
+/// 한 계획의 상태. Planner 탭과 Map 탭이 같은 인스턴스를 공유한다 (선택 항목·Day·AI 변경 표시·안전 점검).
 class PlanController extends ChangeNotifier {
-  PlanController(this.api, this.planId);
+  PlanController(this.api, this.planId) : routes = RouteCache(api);
 
   final GuryongApi api;
   final int planId;
+  final RouteCache routes;
 
   PlanDetail? plan;
   Object? loadError;
@@ -41,6 +62,14 @@ class PlanController extends ChangeNotifier {
   int? selectedItemId;
   int tab = 0; // 0 Planner, 1 Map
   AppliedProposal? lastApplied;
+
+  /// 안전 점검 (25). 일정 version·progress_version 이 바뀌면 다시 부른다.
+  SafetyCheck? safety;
+  ApiException? safetyError;
+  bool safetyLoading = false;
+  List<SafetyAlert> alerts = const [];
+  int? _safetyFor; // 점검한 (version, progress) 해시
+  DateTime? _safetyAt;
 
   /// 항목 id → AI 변경 표시. 사용자가 그 항목을 직접 고치면 사라진다.
   final aiUpdates = <int, AiUpdate>{};
@@ -82,11 +111,60 @@ class PlanController extends ChangeNotifier {
     }
   }
 
+  /// 일정이 바뀌었는지(version) 또는 진행 상태만 바뀌었는지(progress_version) 보고, 바뀌었으면 안전 점검도 다시 (c12).
   void _set(PlanDetail p) {
     plan = p;
     if (day > p.numDays) day = p.numDays;
     if (selectedItemId != null && p.item(selectedItemId!) == null) selectedItemId = null;
     aiUpdates.removeWhere((id, _) => p.item(id) == null);
+    final key = Object.hash(p.version, p.progressVersion, p.itemCount);
+    if (key != _safetyFor) {
+      _safetyFor = key;
+      loadSafety();
+    }
+  }
+
+  /// 승인·추천 추가처럼 다른 경로로 받은 최신 일정을 반영한다.
+  void applyPlan(PlanDetail p) {
+    _set(p);
+    _notify();
+  }
+
+  /// 안전 점검과 새 경고. 503 safety_unavailable 이면 배지를 비우고 헤더 줄로 알린다 (25 상태).
+  Future<void> loadSafety() async {
+    if (_disposed) return;
+    safetyLoading = true;
+    _notify();
+    try {
+      safety = await api.safety(planId);
+      safetyError = null;
+      _safetyAt = DateTime.now();
+    } on ApiException catch (e) {
+      safetyError = e;
+      safety = null;
+    } catch (_) {
+      safety = null;
+    }
+    try {
+      alerts = await api.safetyAlerts(planId);
+    } catch (_) {
+      alerts = const [];
+    }
+    safetyLoading = false;
+    _notify();
+  }
+
+  /// checked_at 이 10분 넘으면 다시 (25 데이터 갱신).
+  void refreshSafetyIfStale() {
+    final at = _safetyAt;
+    if (at == null || DateTime.now().difference(at) > const Duration(minutes: 10)) loadSafety();
+  }
+
+  /// 배너를 보였으면 경고를 확인 표시한다.
+  Future<void> markAlertSeen(SafetyAlert a) async {
+    try {
+      await api.safetyAlertSeen(planId, a.id);
+    } catch (_) {}
   }
 
   void setDay(int d) {
@@ -145,6 +223,9 @@ class PlanController extends ChangeNotifier {
   Future<void> updateItem(int itemId, Map<String, dynamic> fields) =>
       _mutate(() => api.updateItem(planId, itemId, fields), touchedItemId: itemId);
 
+  /// 25 Travel Segment 탭 → 이 구간 수단 바꾸기 (직접 편집, 즉시).
+  Future<void> setTravelMode(int itemId, String mode) => updateItem(itemId, {'travel_mode': mode});
+
   Future<void> removeItem(int itemId) => _mutate(() => api.removeItem(planId, itemId), touchedItemId: itemId);
 
   /// 드래그로 순서 변경. 서버가 이동시간을 다시 계산한다.
@@ -157,8 +238,7 @@ class PlanController extends ChangeNotifier {
       if (idx >= 0) {
         final moved = items.removeAt(idx);
         items.insert(newOrder - 1, moved);
-        final days = p.days.map((x) => x.day == d.day ? PlanDay(day: d.day, date: d.date, weekday: d.weekday, endAt: d.endAt, items: items) : x).toList();
-        plan = PlanDetail(id: p.id, title: p.title, startDate: p.startDate, endDate: p.endDate, dayStart: p.dayStart, dayEnd: p.dayEnd, travelMode: p.travelMode, memo: p.memo, createdAt: p.createdAt, updatedAt: p.updatedAt, itemCount: p.itemCount, days: days, constraints: p.constraints, violations: p.violations);
+        plan = p.withDay(PlanDay(day: d.day, date: d.date, weekday: d.weekday, endAt: d.endAt, items: items));
         _notify();
       }
     }
@@ -176,7 +256,7 @@ class PlanController extends ChangeNotifier {
 
   /// AI 제안 승인 결과 반영. 바뀐 항목에 AI 배지를 붙인다.
   void applyAccepted(ProposalDetail proposal, PlanDetail after) {
-    final before = proposal.before ?? plan;
+    final before = plan ?? proposal.before;
     if (before != null) {
       final updates = <int, AiUpdate>{};
       final reasons = <int, String>{};
@@ -195,7 +275,7 @@ class PlanController extends ChangeNotifier {
           updates[a.id] = AiUpdate(kind: 'added', toTime: a.startAt, reason: '추가: ${a.title}');
         }
       }
-      lastApplied = AppliedProposal(proposal: proposal, before: before);
+      lastApplied = AppliedProposal(proposal: proposal, before: before, at: DateTime.now());
       aiUpdates
         ..clear()
         ..addAll(updates);
@@ -206,11 +286,18 @@ class PlanController extends ChangeNotifier {
     _notify();
   }
 
-  /// 승인 직후 "실행 취소": 승인 전 상태로 되돌린다.
+  /// 승인 직후 "실행 취소" (스낵바 4초 동안만, c9). 승인 전 일정과의 차이를 ops 로 되돌린다.
+  /// 한계: 삭제됐던 항목은 새 id 로 다시 만들어지고, 그 사이 다른 변경이 있으면 함께 되돌아간다.
+  /// 다녀온(done) 항목이 바뀌는 되돌리기는 막는다 (동행 중 진행 기록을 지우지 않게).
   Future<void> undoLastApplied() async {
     final applied = lastApplied, current = plan;
     if (applied == null || current == null) return;
     final ops = buildRestoreOps(applied.before, current);
+    final touchesDone = ops.any((o) {
+      final id = o['item_id'];
+      return id is int && current.item(id)?.status == 'done';
+    });
+    if (touchesDone) throw ApiException(409, '다녀온 곳이 바뀌어 되돌릴 수 없어요');
     if (ops.isEmpty) {
       lastApplied = null;
       aiUpdates.clear();
@@ -223,7 +310,6 @@ class PlanController extends ChangeNotifier {
     _notify();
   }
 
-  /// 06B 추천 카드에서 하나씩 추가한 항목 표시.
   void markAiAdded(int itemId, String reason) {
     aiUpdates[itemId] = AiUpdate(kind: 'added', toTime: plan?.item(itemId)?.startAt, reason: reason);
     _notify();

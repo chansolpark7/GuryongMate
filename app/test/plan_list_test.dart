@@ -1,59 +1,48 @@
-import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:google_fonts/google_fonts.dart';
-import 'package:guryong_mate/core/app_session.dart';
 import 'package:guryong_mate/main.dart';
-import 'package:http/http.dart' as http;
-import 'package:http/testing.dart';
 import 'package:provider/provider.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
 import 'fixtures.dart';
+import 'support/fixture_gateway.dart';
+import 'support/harness.dart';
 
 /// 계획 목록만 다루는 가짜 서버: 목록 · 상세 · 생성 · ops · 삭제.
 class ListGateway {
-  final plans = <int, Map<String, dynamic>>{1: planJson([itemJson(1, 1, '구룡포 시장', '10:00', '11:00')], title: '엄마랑 구룡포')};
-  var nextId = 2;
-
-  Future<http.StreamedResponse> handle(http.BaseRequest req, http.ByteStream body) async {
-    final text = await body.bytesToString();
-    final b = text.isEmpty ? null : jsonDecode(text);
-    final seg = req.url.pathSegments;
-    http.StreamedResponse json(Object? data, [int status = 200]) =>
-        http.StreamedResponse(Stream.value(utf8.encode(jsonEncode(data))), status);
-    if (req.url.path == '/planner/plans' && req.method == 'GET') {
-      return json(plans.values.map((p) => Map.of(p)..remove('days')).toList());
-    }
-    if (req.url.path == '/planner/plans' && req.method == 'POST') {
+  ListGateway() {
+    gw.on('GET /planner/plans', (_) => Res.json(200, plans.values.map((p) => Map.of(p)..remove('days')).toList()));
+    gw.on('POST /planner/plans', (r) {
       final id = nextId++;
-      plans[id] = planJson([], id: id, title: b['title'] as String);
-      return json(plans[id], 201);
-    }
-    if (seg.length >= 3 && seg[0] == 'planner' && seg[1] == 'plans') {
-      final id = int.parse(seg[2]);
-      if (seg.length == 4 && seg[3] == 'proposals') return json(<Object>[]);
-      if (seg.length == 4 && seg[3] == 'ops') return json(plans[id]);
-      if (req.method == 'DELETE') {
-        plans.remove(id);
-        return http.StreamedResponse(const Stream.empty(), 204);
-      }
-      return json(plans[id]);
-    }
-    return json({'detail': 'nf'}, 404);
+      plans[id] = planJson([], id: id, title: (r.body as Map)['title'] as String);
+      return Res.json(201, plans[id]);
+    });
+    gw.on('GET /planner/plans/{id}/proposals', (_) => Res.json(200, []));
+    gw.on('POST /planner/plans/{id}/ops', (r) => Res.json(200, plans[int.parse(r.path.split('/')[3])]));
+    gw.on('DELETE /planner/plans/{id}', (r) {
+      plans.remove(int.parse(r.path.split('/')[3]));
+      return Res.json(204, null);
+    });
+    gw.on('GET /planner/plans/{id}', (r) => Res.json(200, plans[int.parse(r.path.split('/')[3])]));
+    gw.on('GET /planner/plans/{id}/safety', (r) => Res.error(503, 'safety_unavailable'));
+    gw.on('GET /planner/plans/{id}/safety/alerts', (_) => Res.json(200, []));
+    gw.on('GET /trip/plans/{id}/state', (_) => Res.json(200, {'active': false}));
+    gw.on('GET /agent/sessions', (_) => Res.json(200, []));
+    gw.on('POST /agent/sessions', (_) => Res.json(201, {'id': 's1', 'plan_id': 1, 'created_at': '2026-10-04T10:00:00Z', 'updated_at': '2026-10-04T10:00:00Z'}));
   }
+  final gw = FixtureGateway([]);
+  final plans = <int, Map<String, dynamic>>{1: planJson([itemJson(1, 1, '구룡포 시장', '10:00', '11:00')], title: '엄마랑 구룡포', start: '2026-12-20', end: '2026-12-21')};
+  var nextId = 2;
 }
 
 void main() {
-  setUpAll(() => GoogleFonts.config.allowRuntimeFetching = false);
+  setUpHarness();
 
   testWidgets('길게 눌러 복제 → 복사본 삭제 → 원본 카드가 계속 눌린다', (tester) async {
     await tester.binding.setSurfaceSize(const Size(390, 844));
     addTearDown(() => tester.binding.setSurfaceSize(null));
-    SharedPreferences.setMockInitialValues({'user_id': 'seoyun', 'base_url': 'http://gateway.test'});
     final fake = ListGateway();
-    final session = await AppSession.load(clientFactory: () => MockClient.streaming(fake.handle));
+    final session = await signedInSession(fake.gw);
     await tester.pumpWidget(ChangeNotifierProvider.value(value: session, child: const GuryongApp()));
     await tester.pumpAndSettle();
 

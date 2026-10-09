@@ -1,4 +1,4 @@
-// planner 서비스 응답 모델 (backend/app/planner/schemas.py).
+// planner 서비스 응답 모델 (docs/planner/README.md §2.3, backend/app/planner/schemas.py).
 // 시각은 "HH:MM" 문자열 그대로 둔다. 자정을 넘으면 "24:30" 처럼 올 수 있다.
 
 List<T> _list<T>(Object? v, T Function(Map<String, dynamic>) f) =>
@@ -60,8 +60,24 @@ class Violation {
         'exclude' => '제외 장소 포함',
         'end_before' => '종료 조건 위반',
         'max_travel_minutes' => '이동 시간 초과',
-        _ => code,
+        'max_walk_minutes' || 'long_walk' => '긴 도보 구간',
+        'max_daily_walk_minutes' || 'daily_walk_total' => '도보 합계 초과',
+        'travel_estimated' => '이동 시간 추정',
+        _ => '확인 필요',
       };
+}
+
+/// 같은 구간의 도보·차량 비교 (`travel_options`).
+class TravelOption {
+  TravelOption({required this.minutes, required this.distanceM, required this.source});
+  final int minutes;
+  final int? distanceM;
+  final String source; // road | estimate
+
+  bool get estimated => source == 'estimate';
+
+  factory TravelOption.fromJson(Map<String, dynamic> j) =>
+      TravelOption(minutes: j['minutes'] as int, distanceM: j['distance_m'] as int?, source: j['source'] as String? ?? 'road');
 }
 
 class PlanItem {
@@ -80,6 +96,12 @@ class PlanItem {
     required this.arriveAt,
     required this.startAt,
     required this.endAt,
+    this.travelMode,
+    this.legMode,
+    this.travelSource,
+    this.travelOptions = const {},
+    this.arrivedAt,
+    this.doneAt,
   });
 
   final int id;
@@ -97,8 +119,19 @@ class PlanItem {
   final String? startAt;
   final String? endAt;
 
+  /// 이 항목에 정한 '여기까지 오는 수단'. null = 계획 기본.
+  final String? travelMode;
+
+  /// 실제로 계산한 수단 (첫 항목·건너뜀은 null).
+  final String? legMode;
+  final String? travelSource; // road | estimate
+  final Map<String, TravelOption> travelOptions; // walk / car
+  final String? arrivedAt;
+  final String? doneAt;
+
   String get title => place?.title ?? placeId;
   bool get skipped => status == 'skipped';
+  bool get estimated => travelSource == 'estimate';
 
   factory PlanItem.fromJson(Map<String, dynamic> j) => PlanItem(
         id: j['id'] as int,
@@ -115,6 +148,15 @@ class PlanItem {
         arriveAt: j['arrive_at'] as String?,
         startAt: j['start_at'] as String?,
         endAt: j['end_at'] as String?,
+        travelMode: j['travel_mode'] as String?,
+        legMode: j['leg_mode'] as String?,
+        travelSource: j['travel_source'] as String?,
+        travelOptions: {
+          for (final e in ((j['travel_options'] as Map?) ?? const {}).entries)
+            if (e.value != null) '${e.key}': TravelOption.fromJson(Map<String, dynamic>.from(e.value as Map)),
+        },
+        arrivedAt: j['arrived_at'] as String?,
+        doneAt: j['done_at'] as String?,
       );
 }
 
@@ -169,6 +211,8 @@ class PlanSummary {
     required this.createdAt,
     required this.updatedAt,
     required this.itemCount,
+    this.version = 0,
+    this.progressVersion = 0,
   });
 
   final int id;
@@ -182,6 +226,12 @@ class PlanSummary {
   final DateTime createdAt;
   final DateTime updatedAt;
   final int itemCount;
+
+  /// 일정을 바꾸면 오른다 (planner §2.2).
+  final int version;
+
+  /// 진행 상태(도착·완료)만 바뀌면 오른다. 화면 갱신용.
+  final int progressVersion;
 
   int get numDays => endDate.difference(startDate).inDays + 1;
 
@@ -197,6 +247,8 @@ class PlanSummary {
         createdAt: _date(j['created_at']).toLocal(),
         updatedAt: _date(j['updated_at']).toLocal(),
         itemCount: j['item_count'] as int? ?? 0,
+        version: j['version'] as int? ?? 0,
+        progressVersion: j['progress_version'] as int? ?? 0,
       );
 }
 
@@ -213,6 +265,8 @@ class PlanDetail extends PlanSummary {
     required super.createdAt,
     required super.updatedAt,
     required super.itemCount,
+    super.version,
+    super.progressVersion,
     required this.days,
     required this.constraints,
     required this.violations,
@@ -236,11 +290,33 @@ class PlanDetail extends PlanSummary {
       createdAt: s.createdAt,
       updatedAt: s.updatedAt,
       itemCount: s.itemCount,
+      version: s.version,
+      progressVersion: s.progressVersion,
       days: _list(j['days'], PlanDay.fromJson),
       constraints: _list(j['constraints'], Constraint.fromJson),
       violations: _list(j['violations'], Violation.fromJson),
     );
   }
+
+  /// 같은 계획에서 Day 하나의 항목만 바꾼 사본 (드래그 중 로컬 반영).
+  PlanDetail withDay(PlanDay day) => PlanDetail(
+        id: id,
+        title: title,
+        startDate: startDate,
+        endDate: endDate,
+        dayStart: dayStart,
+        dayEnd: dayEnd,
+        travelMode: travelMode,
+        memo: memo,
+        createdAt: createdAt,
+        updatedAt: updatedAt,
+        itemCount: itemCount,
+        version: version,
+        progressVersion: progressVersion,
+        days: days.map((d) => d.day == day.day ? day : d).toList(),
+        constraints: constraints,
+        violations: violations,
+      );
 
   Iterable<PlanItem> get allItems => days.expand((d) => d.items);
 
@@ -285,22 +361,30 @@ class ProposalDetail {
     required this.changes,
     required this.before,
     required this.after,
-    required this.applicable,
-    required this.error,
+    this.decision,
+    this.baseChanged = false,
+    this.progressChanged = const [],
   });
 
   final int id;
   final int planId;
   final String status; // pending | accepted | rejected | superseded
   final String summary;
-  final String source;
+  final String source; // llm | user | event
   final List<Map<String, dynamic>> ops;
   final DateTime createdAt;
   final List<Change> changes;
   final PlanDetail? before;
   final PlanDetail? after;
-  final bool applicable;
-  final String? error;
+  final String? decision; // applied | overwritten
+
+  /// 제안 이후 일정이 바뀜 → [전체 적용] 이 409 base_changed (36).
+  final bool baseChanged;
+
+  /// 제안 이후 다녀온(done) 항목 중 이 제안이 바꾸는 것 → 승인 409 progress_changed.
+  final List<int> progressChanged;
+
+  bool get pending => status == 'pending';
 
   factory ProposalDetail.fromJson(Map<String, dynamic> j) => ProposalDetail(
         id: j['id'] as int,
@@ -313,10 +397,11 @@ class ProposalDetail {
         changes: _list(j['changes'], Change.fromJson),
         before: j['before'] == null ? null : PlanDetail.fromJson(j['before'] as Map<String, dynamic>),
         after: j['after'] == null ? null : PlanDetail.fromJson(j['after'] as Map<String, dynamic>),
-        applicable: j['applicable'] as bool? ?? true,
-        error: j['error'] as String?,
+        decision: j['decision'] as String?,
+        baseChanged: j['base_changed'] as bool? ?? false,
+        progressChanged: ((j['progress_changed'] as List?) ?? const []).map((e) => e as int).toList(),
       );
 
-  /// 일정 추가만 있는 제안은 "방문할 곳 추천"(06B) 형태로 보여 준다.
-  bool get isRecommendation => ops.isNotEmpty && ops.every((o) => o['op'] == 'add_item');
+  /// 카드가 바꾸는 날 (변경 요약의 day 중 첫 번째, 없으면 1).
+  int get day => changes.map((c) => c.day).whereType<int>().firstOrNull ?? 1;
 }

@@ -3,13 +3,32 @@ import 'package:flutter/material.dart';
 import '../api/api_client.dart';
 import '../theme/app_theme.dart';
 
-/// 오류를 스낵바로 보여 준다.
+/// 오류 → 사람이 읽을 문구 (README §6.3). 서버 code 가 있으면 code 로 고른다.
+String userMessage(Object error) {
+  if (error is! ApiException) return '$error';
+  return switch (error.code) {
+    'agent_busy' => '구룡메이트가 답하는 중이에요. 잠시 후 다시 눌러 주세요',
+    'upstream_unavailable' || 'places_unavailable' || 'planner_unavailable' => '서버에 연결하지 못했어요. 일정은 그대로예요.',
+    'safety_unavailable' => '안전 정보를 불러오지 못했어요. 일정은 그대로예요.',
+    'network' || 'timeout' => error.message,
+    'proposal_not_pending' => '이미 처리된 제안이에요',
+    _ => error.status == 422 ? '요청을 처리하지 못했어요. 다시 시도해 주세요.' : error.message,
+  };
+}
+
+/// 오류를 스낵바로 보여 준다. agent_busy 는 빨간색이 아닌 Dark 스낵바 (States_Feedback).
 void showError(BuildContext context, Object error) {
   if (!context.mounted) return;
-  final msg = error is ApiException ? error.message : '$error';
+  final busy = error is ApiException && error.code == 'agent_busy';
   ScaffoldMessenger.of(context)
     ..hideCurrentSnackBar()
-    ..showSnackBar(SnackBar(content: Text(msg), backgroundColor: AppColors.danger));
+    ..showSnackBar(SnackBar(
+      content: Row(children: [
+        if (busy) ...[const Icon(Icons.schedule, color: Colors.white, size: 18), const SizedBox(width: 8)],
+        Expanded(child: Text(userMessage(error))),
+      ]),
+      backgroundColor: busy ? AppColors.dark : AppColors.danger,
+    ));
 }
 
 /// [margin] 으로 띄울 위치를 정한다 (하단 버튼을 가리지 않게).
@@ -28,7 +47,7 @@ class AiFab extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Tooltip(
-        message: 'AI Planner 열기',
+        message: '구룡메이트 열기',
         // 그라데이션·그림자는 바깥 원에, 눌림 효과는 원으로 잘린 투명 Material 에 (Ink 는 사각 하이라이트가 비친다)
         child: DecoratedBox(
           decoration: const BoxDecoration(
@@ -92,7 +111,7 @@ class InfoChip extends StatelessWidget {
 }
 
 /// 큰 버튼 (h52 r12). primary / secondary(흰 바탕+테두리) / soft(Primary Soft).
-enum ButtonKind { primary, secondary, soft, danger }
+enum ButtonKind { primary, secondary, soft, danger, ai, aiSoft }
 
 class AppButton extends StatelessWidget {
   const AppButton({
@@ -121,6 +140,8 @@ class AppButton extends StatelessWidget {
       ButtonKind.secondary => (AppColors.surface, AppColors.text, AppColors.line),
       ButtonKind.soft => (AppColors.primarySoft, AppColors.primary, null),
       ButtonKind.danger => (AppColors.surface, AppColors.danger, AppColors.line),
+      ButtonKind.ai => (AppColors.ai, Colors.white, null),
+      ButtonKind.aiSoft => (AppColors.aiSoft, AppColors.ai, null),
     };
     final disabled = onPressed == null || loading;
     return SizedBox(
@@ -128,9 +149,9 @@ class AppButton extends StatelessWidget {
       child: TextButton(
         onPressed: disabled ? null : onPressed,
         style: TextButton.styleFrom(
-          backgroundColor: disabled && kind == ButtonKind.primary ? AppColors.primary.withValues(alpha: 0.4) : bg,
+          backgroundColor: disabled && (kind == ButtonKind.primary || kind == ButtonKind.ai) ? bg.withValues(alpha: 0.4) : bg,
           foregroundColor: fg,
-          disabledForegroundColor: kind == ButtonKind.primary ? Colors.white : AppColors.text3,
+          disabledForegroundColor: kind == ButtonKind.primary || kind == ButtonKind.ai ? Colors.white : AppColors.text3,
           padding: const EdgeInsets.symmetric(horizontal: 12),
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(12),

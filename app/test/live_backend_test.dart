@@ -14,13 +14,29 @@ import 'package:guryong_mate/features/planner/restore_ops.dart';
 
 const live = String.fromEnvironment('LIVE_API');
 
+/// 테스트용 계정의 access 토큰 (refresh 는 하지 않는다).
+class _Token implements AuthHandler {
+  @override
+  String? accessToken;
+  @override
+  Future<bool> refresh() async => false;
+}
+
 void main() {
   final skip = live.isEmpty ? 'LIVE_API 가 없어 건너뜀' : null;
-  final api = GuryongApi(ApiClient(baseUrl: live, userId: 'app-live-test-${DateTime.now().millisecondsSinceEpoch}'));
+  final auth = _Token();
+  final api = GuryongApi(ApiClient(baseUrl: live, auth: auth));
   PlanDetail? plan;
 
+  setUpAll(() async {
+    if (live.isEmpty) return;
+    final t = await api.signup('applive${DateTime.now().millisecondsSinceEpoch % 100000000}', 'guryong2026');
+    auth.accessToken = t.accessToken;
+  });
+
   tearDownAll(() async {
-    if (plan != null) await api.deletePlan(plan!.id);
+    if (live.isEmpty) return;
+    await api.deleteMe(); // 계정과 계획·대화를 함께 지운다
   });
 
   test('places: 검색 · 상세 · 태그 · 이야기', () async {

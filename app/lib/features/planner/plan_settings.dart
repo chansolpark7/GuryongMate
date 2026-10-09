@@ -4,6 +4,8 @@ import '../../core/format.dart';
 import '../../core/models/plan.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/common.dart';
+import '../guide/guide_prep_screen.dart';
+import '../safety/outlook_sheet.dart';
 import 'plan_controller.dart';
 
 /// App Bar ⋯ 메뉴.
@@ -22,6 +24,13 @@ Future<void> showPlanMenu(BuildContext context, PlanController c) async {
         ),
         ListTile(leading: const Icon(Icons.history), title: const Text('AI 변경 이력'), onTap: () => Navigator.pop(ctx, 'history')),
         ListTile(
+          leading: const Icon(Icons.auto_stories_outlined, color: AppColors.ai),
+          title: const Text('현장 가이드 준비'),
+          subtitle: Text('장소마다 맞춤 해설을 미리 만들어 둬요', style: AppText.caption),
+          onTap: () => Navigator.pop(ctx, 'guide'),
+        ),
+        ListTile(leading: const Icon(Icons.waves), title: const Text('날씨·바다 전망'), onTap: () => Navigator.pop(ctx, 'outlook')),
+        ListTile(
           leading: const Icon(Icons.delete_outline, color: AppColors.danger),
           title: const Text('여행 삭제', style: TextStyle(color: AppColors.danger)),
           onTap: () => Navigator.pop(ctx, 'delete'),
@@ -37,6 +46,11 @@ Future<void> showPlanMenu(BuildContext context, PlanController c) async {
       await showRulesSheet(context, c);
     case 'history':
       await showProposalHistory(context, c);
+    case 'guide':
+      await Navigator.of(context).push(MaterialPageRoute(builder: (_) => GuidePrepScreen(plan: c)));
+    case 'outlook':
+      final p = c.plan;
+      if (p != null) await showOutlookSheet(context, c, p.startDate.add(Duration(days: c.day - 1)));
     case 'delete':
       final ok = await showDialog<bool>(
         context: context,

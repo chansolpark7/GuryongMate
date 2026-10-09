@@ -49,7 +49,7 @@ class _PlannerShellState extends State<PlannerShell> {
     super.dispose();
   }
 
-  /// 제안 적용 직후: 시트를 내리고 "AI가 일정 N개를 변경했어요 · 실행 취소" 스낵바 (5초).
+  /// 제안 적용 직후: 시트를 내리고 "AI가 일정 N개를 변경했어요 · 실행 취소" 스낵바 (4초).
   void _onPlanChanged() {
     final applied = plan.lastApplied;
     if (applied == null || applied.proposal.id == _shownAppliedId) return;
@@ -65,7 +65,7 @@ class _PlannerShellState extends State<PlannerShell> {
       ScaffoldMessenger.of(context)
         ..hideCurrentSnackBar()
         ..showSnackBar(SnackBar(
-          duration: const Duration(seconds: 5),
+          duration: const Duration(seconds: 4), // 실행 취소는 승인 직후 4초만 (c9)
           content: Row(children: [
             const Icon(Icons.auto_awesome, color: Color(0xFFB9A8FF), size: 18),
             const SizedBox(width: 8),

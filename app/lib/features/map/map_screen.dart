@@ -6,17 +6,21 @@ import 'package:provider/provider.dart';
 import '../../core/format.dart';
 import '../../core/models/place.dart';
 import '../../core/models/plan.dart';
+import '../../core/models/safety.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/common.dart';
+import '../../core/widgets/safety_widgets.dart';
 import '../chat/chat_controller.dart';
 import '../chat/proposal_card.dart';
 import '../planner/item_actions.dart';
 import '../planner/place_search_sheet.dart';
 import '../planner/plan_controller.dart';
+import 'map_layers.dart';
 
-const _guryongpo = LatLng(35.9890, 129.5560);
+const _guryongpo = guryongpo;
 
-/// 07_Map / 09_Map_After_Apply / 10_Map_Layers. Planner 와 같은 PlanController 를 쓴다.
+/// 07_Map / 09_Map_After_Apply / 10·28-S1 Layers / 28_Map_Safety. Planner 와 같은 PlanController 를 쓴다.
+/// 경로선은 routing geometry (구간마다 leg_mode, 차량은 점선), 위험 구역은 GET /safety/avoid.
 class MapScreen extends StatefulWidget {
   const MapScreen({super.key});
 
@@ -31,9 +35,23 @@ class _MapScreenState extends State<MapScreen> {
   bool _showItinerary = true;
   bool _showRoute = true;
   bool _showPlaces = false;
+  bool _showZones = true;
   List<PlaceSummary> _places = const [];
   String? _fittedKey;
   int? _focusedItem;
+
+  /// 위험 구역 (지도가 보일 때 60초마다).
+  List<AvoidZone> _zones = const [];
+  DateTime? _zonesAt;
+  DateTime? _zonesLoadedAt;
+
+  /// 구간 경로선: "fromId>toId:mode" → (점 목록, 직선 근사인지).
+  final _legs = <String, (List<LatLng>, bool)>{};
+  final _legsLoading = <String>{};
+
+  /// 우회 카드 (28): 닫았거나 [원래 길] 이면 숨김.
+  int? _detourDismissed;
+  int? _detourOn;
 
   PlanController get _c => context.read<PlanController>();
 
@@ -96,11 +114,87 @@ class _MapScreenState extends State<MapScreen> {
     }
   }
 
+  static String _legKey(PlanItem a, PlanItem b, String mode) => '${a.id}>${b.id}:$mode';
+
+  /// 지도가 보일 때만 구간 경로선을 묻는다 (IndexedStack 안이라 Planner 탭에서는 부르지 않는다).
+  void _ensureLegs(PlanController c, List<PlanItem> items) {
+    for (var i = 1; i < items.length; i++) {
+      final a = items[i - 1], b = items[i];
+      final mode = b.legMode ?? c.plan?.travelMode ?? 'walk';
+      final key = _legKey(a, b, mode);
+      if (_legs.containsKey(key) || !_legsLoading.add(key)) continue;
+      final pa = LatLng(a.place!.lat, a.place!.lng), pb = LatLng(b.place!.lat, b.place!.lng);
+      c.routes.leg(mode, pa, pb).then((r) {
+        _legsLoading.remove(key);
+        if (!mounted) return;
+        setState(() => _legs[key] = r == null || r.points.length < 2 ? ([pa, pb], true) : (r.points, r.estimated));
+      });
+    }
+  }
+
+  void _ensureZones(PlanController c) {
+    final at = _zonesAt;
+    if (at != null && DateTime.now().difference(at) < const Duration(seconds: 60)) return;
+    _zonesAt = DateTime.now();
+    c.api.avoidZones().then((z) {
+      if (mounted) {
+        setState(() {
+          _zones = z;
+          _zonesLoadedAt = DateTime.now();
+        });
+      }
+    }).catchError((_) {});
+  }
+
+  void _showZone(AvoidZone z) => showModalBottomSheet<void>(
+        context: context,
+        showDragHandle: true,
+        builder: (ctx) => SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+            child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Row(children: [
+                Expanded(child: Text(z.name, style: AppText.headline)),
+                RiskChip(risk: z.risk, label: riskWord(z.risk)),
+              ]),
+              const SizedBox(height: 4),
+              Text(z.kind == 'breakwater' ? '방파제' : '침수 감시 구역', style: AppText.caption),
+              const SizedBox(height: 10),
+              Text(z.reason.split('; ').join('\n'), style: AppText.meta.copyWith(color: AppColors.text)),
+              const SizedBox(height: 8),
+              Text('지금 기준${_zonesLoadedAt == null ? '' : ' ${hhmm(_zonesLoadedAt!)}'}', style: AppText.caption),
+            ]),
+          ),
+        ),
+      );
+
+  /// 이 날 이동 중 우회할 구역이 있는 첫 구간 (safety travel 항목의 detour.avoided).
+  PlanItem? _detourCandidate(PlanController c) {
+    if (!_showZones) return null;
+    for (final t in c.safety?.items ?? const <SafetyItem>[]) {
+      if (!t.isVisit && (t.detour?.avoided.isNotEmpty ?? false) && (t.day == null || t.day == c.day)) {
+        final it = c.plan?.item(t.itemId);
+        if (it != null && it.place != null && !it.skipped) return it;
+      }
+    }
+    return null;
+  }
+
+  PlanItem? _previousOf(List<PlanItem> items, PlanItem item) {
+    final i = items.indexWhere((x) => x.id == item.id);
+    return i > 0 ? items[i - 1] : null;
+  }
+
   @override
   Widget build(BuildContext context) {
     final c = context.watch<PlanController>();
     final plan = c.plan;
     final items = _visibleItems(c);
+    if (c.tab == 1) {
+      _ensureLegs(c, items);
+      if (_showZones) _ensureZones(c);
+    }
+    final detourItem = _detourCandidate(c);
     final applied = c.lastApplied;
     final ghostDay = applied?.before.dayOf(c.day);
     final oldRoute = (ghostDay?.items ?? const <PlanItem>[]).where((i) => i.place != null && !i.skipped).map((i) => LatLng(i.place!.lat, i.place!.lng)).toList();
@@ -111,7 +205,22 @@ class _MapScreenState extends State<MapScreen> {
       if (mounted) _syncCamera(c);
     });
 
-    final route = items.map((i) => LatLng(i.place!.lat, i.place!.lng)).toList();
+    final legLines = <Polyline>[];
+    for (var i = 1; i < items.length; i++) {
+      final a = items[i - 1], b = items[i];
+      final mode = b.legMode ?? plan?.travelMode ?? 'walk';
+      final leg = _legs[_legKey(a, b, mode)];
+      final pts = leg?.$1 ?? [LatLng(a.place!.lat, a.place!.lng), LatLng(b.place!.lat, b.place!.lng)];
+      final dashed = mode == 'car' || (leg?.$2 ?? true);
+      legLines.add(Polyline(
+        points: pts,
+        strokeWidth: 5,
+        color: AppColors.primary,
+        borderStrokeWidth: dashed ? 0 : 3,
+        borderColor: Colors.white,
+        pattern: dashed ? StrokePattern.dashed(segments: const [10, 8]) : const StrokePattern.solid(),
+      ));
+    }
     return Scaffold(
       body: Stack(children: [
         FlutterMap(
@@ -132,14 +241,15 @@ class _MapScreenState extends State<MapScreen> {
             },
           ),
           children: [
-            TileLayer(urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png', userAgentPackageName: 'com.guryongmate.guryong_mate'),
+            osmTiles(),
+            if (_showZones) ZoneLayer(zones: _zones, onTap: _showZone),
             if (_showRoute)
               PolylineLayer(polylines: [
                 if (showChange && oldRoute.length > 1)
                   Polyline(points: oldRoute, strokeWidth: 3, color: AppColors.text3, pattern: StrokePattern.dashed(segments: const [6, 6])),
-                if (route.length > 1)
-                  Polyline(points: route, strokeWidth: 5, color: AppColors.primary, borderStrokeWidth: 4, borderColor: Colors.white),
+                if (_detourOn == null) ...legLines,
               ]),
+            if (_showRoute && _detourOn != null && detourItem != null) _DetourLines(controller: c, item: detourItem, previous: _previousOf(items, detourItem)),
             if (_showPlaces)
               MarkerLayer(markers: [
                 for (final p in _places)
@@ -215,15 +325,22 @@ class _MapScreenState extends State<MapScreen> {
                   tooltip: '지도 레이어',
                 ),
               ]),
+              if (_showZones && _zones.isNotEmpty && !_layersOpen)
+                Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: Align(alignment: Alignment.centerLeft, child: _ZoneLegend(at: _zonesLoadedAt)),
+                ),
               if (_layersOpen)
                 Padding(
                   padding: const EdgeInsets.only(top: 8),
                   child: _LayerPanel(
                     itinerary: _showItinerary,
                     route: _showRoute,
+                    zones: _showZones,
                     places: _showPlaces,
                     onItinerary: (v) => setState(() => _showItinerary = v),
                     onRoute: (v) => setState(() => _showRoute = v),
+                    onZones: (v) => setState(() => _showZones = v),
                     onPlaces: _togglePlaces,
                   ),
                 ),
@@ -251,11 +368,150 @@ class _MapScreenState extends State<MapScreen> {
             if (plan != null)
               if (selected != null && items.any((i) => i.id == selected.id))
                 _PlaceMapCard(controller: c, items: items, item: selected)
+              else if (detourItem != null && _detourDismissed != detourItem.id)
+                _DetourCard(
+                  controller: c,
+                  item: detourItem,
+                  previous: _previousOf(items, detourItem),
+                  on: _detourOn == detourItem.id,
+                  onOriginal: () => setState(() {
+                    _detourOn = null;
+                    _detourDismissed = detourItem.id;
+                  }),
+                  onUse: () {
+                    setState(() => _detourOn = detourItem.id);
+                    showInfo(context, '여행 중에는 이 길로 다음 장소를 안내해요');
+                  },
+                )
               else
                 _RouteSummary(controller: c, items: items, showDelta: showChange),
           ]),
         ),
       ]),
+    );
+  }
+}
+
+/// 위험 구역 범례 pill: "● 위험 ● 주의 · 지금 기준 HH:MM".
+class _ZoneLegend extends StatelessWidget {
+  const _ZoneLegend({required this.at});
+  final DateTime? at;
+
+  @override
+  Widget build(BuildContext context) {
+    Widget dot(Color c) => Container(width: 8, height: 8, decoration: BoxDecoration(color: c, shape: BoxShape.circle));
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(14), boxShadow: AppShadow.card),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        dot(AppColors.danger),
+        const SizedBox(width: 4),
+        Text('위험', style: AppText.caption.copyWith(color: AppColors.text)),
+        const SizedBox(width: 8),
+        dot(AppColors.warning),
+        const SizedBox(width: 4),
+        Text('주의', style: AppText.caption.copyWith(color: AppColors.text)),
+        Text(' · 지금 기준${at == null ? '' : ' ${hhmm(at!)}'}', style: AppText.caption),
+      ]),
+    );
+  }
+}
+
+/// 원래 길(회색 점선) + 피해 가는 길(Primary) — [이 길로 안내] 를 눌렀을 때.
+class _DetourLines extends StatelessWidget {
+  const _DetourLines({required this.controller, required this.item, required this.previous});
+  final PlanController controller;
+  final PlanItem item;
+  final PlanItem? previous;
+
+  @override
+  Widget build(BuildContext context) {
+    final prev = previous;
+    if (prev == null) return const SizedBox.shrink();
+    final a = LatLng(prev.place!.lat, prev.place!.lng), b = LatLng(item.place!.lat, item.place!.lng);
+    final mode = item.legMode ?? 'walk';
+    return FutureBuilder<List<RouteResult?>>(
+      future: Future.wait([controller.routes.leg(mode, a, b, hazards: 'report'), controller.routes.leg(mode, a, b, hazards: 'avoid')]),
+      builder: (context, snap) {
+        final r = snap.data;
+        return PolylineLayer(polylines: [
+          if (r?[0] != null) Polyline(points: r![0]!.points, strokeWidth: 4, color: AppColors.text3, pattern: StrokePattern.dashed(segments: const [8, 6])),
+          if (r?[1] != null) Polyline(points: r![1]!.points, strokeWidth: 5, color: AppColors.primary, borderStrokeWidth: 3, borderColor: Colors.white),
+        ]);
+      },
+    );
+  }
+}
+
+/// 28 하단 우회 카드: "위험 구역을 피해 가는 길" · [원래 길 n분 · m m] [피해 가는 길 n분 · m m (+k분)].
+class _DetourCard extends StatelessWidget {
+  const _DetourCard({required this.controller, required this.item, required this.previous, required this.on, required this.onOriginal, required this.onUse});
+  final PlanController controller;
+  final PlanItem item;
+  final PlanItem? previous;
+  final bool on;
+  final VoidCallback onOriginal;
+  final VoidCallback onUse;
+
+  @override
+  Widget build(BuildContext context) {
+    final prev = previous;
+    if (prev == null) return const SizedBox.shrink();
+    final a = LatLng(prev.place!.lat, prev.place!.lng), b = LatLng(item.place!.lat, item.place!.lng);
+    final mode = item.legMode ?? 'walk';
+    return FutureBuilder<RouteResult?>(
+      future: controller.routes.leg(mode, a, b, hazards: 'avoid'),
+      builder: (context, snap) {
+        final r = snap.data;
+        final h = r?.hazards;
+        Widget box(String title, String value, {bool strike = false, bool primary = false}) => Expanded(
+              child: Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(color: primary ? AppColors.primarySoft : AppColors.background, borderRadius: BorderRadius.circular(12)),
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text(title, style: AppText.caption.copyWith(color: primary ? AppColors.primary : AppColors.text2)),
+                  Text(value,
+                      style: AppText.label.copyWith(
+                          fontWeight: FontWeight.w700, color: primary ? AppColors.primary : AppColors.text3, decoration: strike ? TextDecoration.lineThrough : null)),
+                ]),
+              ),
+            );
+        String dist(int? m) => m == null ? '' : (m >= 1000 ? '${(m / 1000).toStringAsFixed(1)}km' : '${m}m');
+        return Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(20), boxShadow: AppShadow.floating),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, mainAxisSize: MainAxisSize.min, children: [
+            Row(children: [
+              const Icon(Icons.alt_route, color: AppColors.primary, size: 20),
+              const SizedBox(width: 6),
+              Text('위험 구역을 피해 가는 길', style: AppText.section),
+            ]),
+            const SizedBox(height: 2),
+            Text('${prev.title} → ${item.title} · ${mode == 'car' ? '차량' : '도보'}', style: AppText.meta),
+            const SizedBox(height: 10),
+            if (snap.connectionState != ConnectionState.done)
+              const LinearProgressIndicator(minHeight: 2)
+            else if (r == null || h == null || !h.checked)
+              Text('안전 정보를 확인하지 못했어요 (안전하다는 뜻이 아니에요)', style: AppText.caption.copyWith(color: AppColors.warning))
+            else ...[
+              Row(children: [
+                box('원래 길', '${h.baselineMinutes ?? '-'}분 · ${dist(h.baselineDistanceM)}', strike: true),
+                const SizedBox(width: 8),
+                box('피해 가는 길', '${r.minutes}분 · ${dist(r.distanceM)}${h.detourMinutes == null ? '' : ' (+${h.detourMinutes}분)'}', primary: true),
+              ]),
+              const SizedBox(height: 8),
+              Text(h.avoided.isEmpty ? '피할 구역이 경로에 없어요' : '${h.avoided.join(', ')}을(를) 지나지 않아요', style: AppText.caption),
+              if (h.note != null) Text('${h.note} 목적지 자체가 위험하면 일정을 바꿔야 해요.', style: AppText.caption.copyWith(color: AppColors.warning)),
+            ],
+            const SizedBox(height: 12),
+            Row(children: [
+              Expanded(child: AppButton(label: '원래 길', kind: ButtonKind.secondary, height: 44, onPressed: onOriginal)),
+              const SizedBox(width: 8),
+              Expanded(flex: 2, child: AppButton(label: on ? '이 길로 보는 중' : '이 길로 안내', icon: Icons.near_me_outlined, height: 44, onPressed: on ? null : onUse)),
+            ]),
+          ]),
+        );
+      },
     );
   }
 }
@@ -320,13 +576,16 @@ class _PlanSwitcher extends StatelessWidget {
   }
 }
 
+/// 28-S1 레이어 패널: "날씨" → 위험 구역(지금 기준), "혼잡도" → 비활성 "데이터 없음".
 class _LayerPanel extends StatelessWidget {
-  const _LayerPanel({required this.itinerary, required this.route, required this.places, required this.onItinerary, required this.onRoute, required this.onPlaces});
+  const _LayerPanel({required this.itinerary, required this.route, required this.zones, required this.places, required this.onItinerary, required this.onRoute, required this.onZones, required this.onPlaces});
   final bool itinerary;
   final bool route;
+  final bool zones;
   final bool places;
   final ValueChanged<bool> onItinerary;
   final ValueChanged<bool> onRoute;
+  final ValueChanged<bool> onZones;
   final ValueChanged<bool> onPlaces;
 
   @override
@@ -339,7 +598,7 @@ class _LayerPanel extends StatelessWidget {
               Checkbox(value: value ?? false, onChanged: onChanged == null ? null : (v) => onChanged(v ?? false)),
               Icon(icon, size: 18, color: onChanged == null ? AppColors.text3 : AppColors.text2),
               const SizedBox(width: 8),
-              Text(label, style: AppText.label.copyWith(color: onChanged == null ? AppColors.text3 : AppColors.text)),
+              Expanded(child: Text(label, style: AppText.label.copyWith(color: onChanged == null ? AppColors.text3 : AppColors.text))),
               if (note != null) ...[const SizedBox(width: 6), Text(note, style: AppText.caption)],
             ]),
           ),
@@ -352,9 +611,9 @@ class _LayerPanel extends StatelessWidget {
         Padding(padding: const EdgeInsets.only(left: 12, bottom: 4), child: Text('지도 레이어', style: AppText.label.copyWith(fontWeight: FontWeight.w700))),
         row(Icons.place_outlined, '일정', itinerary, onItinerary),
         row(Icons.route, '이동 경로', route, onRoute),
-        row(Icons.groups_outlined, '혼잡도', false, null, note: '준비 중'),
-        row(Icons.cloud_outlined, '날씨', false, null, note: '준비 중'),
-        row(Icons.photo_outlined, '관광지', places, onPlaces),
+        row(Icons.shield_outlined, '위험 구역', zones, onZones, note: '지금 기준'),
+        row(Icons.photo_camera_outlined, '관광지', places, onPlaces),
+        Opacity(opacity: 0.5, child: row(Icons.groups_outlined, '혼잡도', false, null, note: '데이터 없음')),
       ]),
     );
   }
@@ -448,9 +707,10 @@ class _PlaceMapCard extends StatelessWidget {
     final c = controller;
     final idx = items.indexWhere((i) => i.id == item.id);
     final next = idx + 1 < items.length ? items[idx + 1] : null;
-    final mode = c.plan?.travelMode == 'car' ? '차량' : '도보';
+    final mode = (next?.legMode ?? c.plan?.travelMode) == 'car' ? '차량' : '도보';
     final vs = c.plan?.violationsFor(item.id) ?? const <Violation>[];
     final ai = c.aiUpdates.containsKey(item.id);
+    final safety = c.safety?.visit(item.id);
     return GestureDetector(
       // 카드 좌우 스와이프로 이전/다음 장소
       onHorizontalDragEnd: (d) {
@@ -480,8 +740,10 @@ class _PlaceMapCard extends StatelessWidget {
           const SizedBox(height: 10),
           Wrap(spacing: 6, runSpacing: 6, children: [
             if (ai) InfoChip(label: 'AI 변경', icon: Icons.auto_awesome, fg: AppColors.ai, bg: AppColors.aiSoft),
+            if (safety != null) RiskBadge(item: safety),
             for (final v in vs) v.isError ? InfoChip.error(v.shortLabel) : InfoChip.warning(v.shortLabel),
-            if (next?.travelMinutes != null) InfoChip(label: '다음 장소 $mode ${next!.travelMinutes}분', icon: mode == '차량' ? Icons.directions_car_outlined : Icons.directions_walk),
+            if (next?.travelMinutes != null)
+              InfoChip(label: '다음 장소 $mode ${next!.estimated ? '약 ' : ''}${next.travelMinutes}분', icon: mode == '차량' ? Icons.directions_car_outlined : Icons.directions_walk),
             if (next == null) const InfoChip(label: '오늘 마지막 장소', icon: Icons.flag_outlined),
           ]),
           const SizedBox(height: 14),
@@ -556,6 +818,7 @@ class _RouteSummary extends StatelessWidget {
                     style: TextStyle(color: delta > 0 ? AppColors.warning : AppColors.success, fontWeight: FontWeight.w700),
                   ),
                 if (day?.endAt != null) TextSpan(text: ' · ${day!.endAt} 종료'),
+                if (day?.items.any((i) => i.estimated) ?? false) const TextSpan(text: ' · 일부 구간 약'),
               ]),
             ),
             if (items.isEmpty) Text('일정을 추가하면 지도에 경로가 그려져요', style: AppText.caption),
@@ -570,9 +833,7 @@ class _RouteSummary extends StatelessWidget {
               onPressed: () {
                 final p = c.lastApplied?.proposal;
                 if (p == null) return;
-                final turn = ChatTurn('')
-                  ..proposal = p
-                  ..proposalState = ProposalState.applied;
+                final entry = ProposalEntry(p)..state = ProposalState.applied;
                 showModalBottomSheet<void>(
                   context: context,
                   isScrollControlled: true,
@@ -580,7 +841,7 @@ class _RouteSummary extends StatelessWidget {
                   builder: (ctx) => SafeArea(
                     child: SingleChildScrollView(
                       padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-                      child: ProposalCard(turn: turn, readOnly: true),
+                      child: ProposalCard(entry: entry, readOnly: true),
                     ),
                   ),
                 );

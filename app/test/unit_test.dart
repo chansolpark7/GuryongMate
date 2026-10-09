@@ -1,6 +1,9 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:guryong_mate/core/api/api_client.dart';
 import 'package:guryong_mate/core/models/plan.dart';
+import 'package:guryong_mate/core/models/safety.dart';
+import 'package:guryong_mate/core/widgets/safety_widgets.dart';
+import 'package:guryong_mate/features/chat/proposal_actions.dart';
 import 'package:guryong_mate/features/chat/proposal_card.dart';
 import 'package:guryong_mate/features/planner/restore_ops.dart';
 
@@ -53,6 +56,31 @@ Map<int, (int, int)> simulate(PlanDetail current, List<Map<String, dynamic>> ops
 }
 
 void main() {
+  group('안전 문구 (25 근거 규칙)', () {
+    Hazard h(String type, String level, String reason) => Hazard(type: type, level: level, reason: reason, source: '기상청 단기예보');
+    test('근거 → 짧은 값, 숫자를 못 뽑으면 종류 이름', () {
+      expect(shortReason(h('wind', 'danger', '10/10 15시 풍속 16m/s 예보')), '풍속 16m/s');
+      expect(shortReason(h('wave', 'danger', '10/10 16시 파고 3.5m 예보')), '파고 3.5m');
+      expect(shortReason(h('rain', 'caution', '10/05 13~15시 강수 최대 12mm/h 예보')), '시간당 12mm');
+      expect(shortReason(h('rain', 'info', '10/10 16~18시 강수 최대 8mm/h 예보')), '약한 비');
+      expect(shortReason(h('flood', 'danger', '구룡포수협_스마트맨홀 수위 등급 3 (위험)')), '수위 등급 3');
+      expect(shortReason(h('warning', 'danger', '풍랑주의보 발효 중 (경북남부앞바다)')), '풍랑주의보');
+      expect(shortReason(h('wind', 'caution', '바람 강함')), '바람');
+    });
+    SafetyItem item(Map<String, dynamic> j) => SafetyItem.fromJson({'item_id': 1, 'kind': 'visit', 'title': 'x', 'hazards': [], ...j});
+    test('배지: null 은 판단 불가/예보 전, past 는 숨김, 실내는 "안전 · 실내"', () {
+      expect(riskBadgeLabel(item({'risk': 'safe', 'sensitivity': ['실내']})), '안전 · 실내');
+      expect(riskBadgeLabel(item({'risk': null, 'unassessed_reason': 'data_missing'})), '판단 불가 · 데이터 없음');
+      expect(riskBadgeLabel(item({'risk': null, 'unassessed_reason': 'beyond_forecast', 'recheck_from': '2026-12-17'})), '예보 전 · 12/17부터');
+      expect(riskBadgeLabel(item({'risk': null, 'unassessed_reason': 'past'})), isNull);
+      expect(riskColors(null).$1, isNot(riskColors('safe').$1));
+    });
+    test('규칙 문구는 괄호 안 사람 말만 (코드 노출 금지)', () {
+      expect(ruleText("규칙 추가: end_before {'time': '18:00'} (18시 전에 끝내기)"), '18시 전에 끝내기');
+      expect(ruleText("규칙 추가: must_include {'place_id': 'kto-1'}"), '여행 조건');
+    });
+  });
+
   group('SseParser', () {
     test('조각이 줄 중간에서 끊겨도 이벤트를 복원한다', () {
       final p = SseParser();
