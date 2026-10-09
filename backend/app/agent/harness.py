@@ -5,6 +5,7 @@
 3. recommend_places 는 추천 카드를 바로 보낸다
 4. 변경 도구로 쌓인 초안이 있으면 턴 끝에 planner 에 변경 제안으로 저장한다 (사용자가 승인해야 반영)
 5. 여행 중(trip 상태 active)이면 동행 모드: 현재 상황 블록을 넣고 지난 일은 바꾸지 않는다 (docs/agent/README.md §11)
+6. 모든 턴의 시스템 프롬프트에 docent 메모리 요약을 넣는다. 동행 모드 대화는 가이드 노트·웹 검색(턴당 상한)을 쓴다
 
 LLM 응답은 수 분이 걸릴 수 있으므로 DB 는 턴 시작(기록 읽기)과 끝(기록 저장)에만 짧게 쓰고,
 동기 DB 호출은 스레드에서 실행해 이벤트 루프를 막지 않는다.
@@ -19,9 +20,19 @@ from sqlalchemy import select, update
 from app.agent import clock
 from app.agent.api import ApiError, ServiceApi
 from app.agent.config import settings
-from app.agent.llm import Finish, LLMError, LLMProvider, ReasoningDelta, TextDelta, ToolCall
+from app.agent.llm import (
+    Citation,
+    Finish,
+    LLMError,
+    LLMProvider,
+    ReasoningDelta,
+    TextDelta,
+    ToolCall,
+    WebSearchCall,
+    supports_web_search,
+)
 from app.agent.models import AgentMessage, AgentSession
-from app.agent.prompts import build_system_parts
+from app.agent.prompts import build_system, build_system_parts
 from app.agent.review import SKIP_CODES, summarize
 from app.agent.tools import STEP_KIND, Draft, Toolbox, tool_specs
 from app.db import SessionLocal
@@ -43,17 +54,24 @@ CHANGES_NOTE = ("[시스템] 지금 변경 제안 초안의 확정 변경 (답�
                 "싶으면 도구로 초안에 넣거나, 넣지 않을 거면 '다른 방법으로 …도 할 수 있어요'처럼 선택지로만 한 줄 말한다.")
 NO_CHANGES_NOTE = ("[시스템] 지금 변경 제안 초안이 비어 있다 (제안 카드가 만들어지지 않는다). 일정을 바꾸려면 변경 도구를 "
                    "써야 한다. 도구로 바꾸지 않은 변경을 했다거나 제안한다고 말하지 말고, 권하고 싶은 변경은 선택지로만 말한다.")
+WEB_DONE_NOTE = "[시스템] 이번 턴의 웹 검색 한도({n}번)를 다 썼다. 더 검색하지 말고 지금까지 찾은 자료로 답하라."
 REVIEW_NOTE = ("[시스템] 방금 쓴 답변은 아직 사용자에게 보내지 않았다. 일정을 검토했더니 아래 문제가 남아 있다. "
                "must 는 반드시, should 는 가능하면 고친 뒤 review_plan 으로 다시 확인하라. 다 고친 뒤 최종 답변을 처음부터 "
                "다시 써라. 고칠 수 없는 문제는 최종 답변에서 이유를 짧게 말하라.\n")
 
 STEP_TITLE = {"search": "장소 찾기", "place": "장소 정보 확인", "plan": "일정 확인", "edit": "일정 조정",
               "rule": "조건 반영", "review": "일정 검토", "recommend": "추천 정리", "proposal": "변경안 만들기",
-              "safety": "안전 확인", "route": "이동시간 확인"}
+              "safety": "안전 확인", "route": "이동시간 확인",
+              "memory": "기억하기", "forget": "기억 지우기", "recall": "기억 확인", "research": "자료 찾기",
+              "guide": "가이드 노트 확인"}
 STATUS_TEXT = {"search": "장소를 찾고 있어요.", "place": "장소 정보를 확인하고 있어요.", "plan": "일정을 확인하고 있어요.",
                "edit": "일정을 조정하고 있어요.", "rule": "조건을 반영하고 있어요.", "review": "일정을 검토하고 있어요.",
                "recommend": "추천할 곳을 고르고 있어요.", "proposal": "변경안을 만들고 있어요.",
-               "safety": "날씨와 안전을 확인하고 있어요.", "route": "이동 시간을 계산하고 있어요."}
+               "safety": "날씨와 안전을 확인하고 있어요.", "route": "이동 시간을 계산하고 있어요.",
+               "memory": "기억해 두고 있어요.", "forget": "기억을 지우고 있어요.", "recall": "기억을 확인하고 있어요.",
+               "research": "자료를 찾고 있어요.", "guide": "가이드 노트를 확인하고 있어요."}
+# 합치지 않는 단계: 기억하기는 항목마다 앱이 "기억했어요 · {detail}" 표시를 한다
+UNMERGED_STEPS = {"memory", "forget"}
 
 log = logging.getLogger("app.agent")
 if not log.handlers:  # uvicorn 은 app 로거를 설정하지 않으므로 직접 출력
@@ -80,7 +98,7 @@ class Steps:
 
     def start(self, kind: str, detail: str = "") -> list[Event]:
         events = []
-        if self.items and self.items[-1]["kind"] == kind:
+        if self.items and self.items[-1]["kind"] == kind and kind not in UNMERGED_STEPS:
             step = self.items[-1]
             step["status"] = "running"
         else:
@@ -152,6 +170,15 @@ async def active_trip(api: ServiceApi, plan_id: int) -> dict | None:
     return state if isinstance(state, dict) and state.get("active") else None
 
 
+async def memory_summary(api: ServiceApi, plan_id: int) -> str | None:
+    """docent 메모리 요약 (프롬프트용). docent 에 접근할 수 없으면 None (메모리 없이 턴은 계속)."""
+    try:
+        return (await api.memory_summary(plan_id))["text"]
+    except ApiError as e:
+        log.warning("plan=%s 메모리 요약을 받지 못함: %s", plan_id, e)
+        return None
+
+
 async def latest_pending(api: ServiceApi, plan_id: int, session_id: str) -> dict | None:
     """이 세션이 만든, 아직 대기 중인 최신 변경 제안 (상세)."""
     for p in await api.list_proposals(plan_id, status="pending"):
@@ -211,18 +238,26 @@ async def run_turn(session_id: str, plan_id: int, user_text: str, llm: LLMProvid
     history = await to_thread.run_sync(_load_history, session_id, settings.history_messages)
     review_on = settings.review_rounds > 0
     pushes_left = settings.review_rounds
-    specs = tool_specs(review_on, proactive=hidden)
+    # 동행 모드 대화(선제 턴 제외)는 현장 해설: 가이드 노트와 웹 검색(턴당 상한). 내장 검색이 없는 공급자는 docent 검색 함수 도구
+    docent = bool(trip) and not hidden
+    builtin_web = supports_web_search(llm)
+    toolbox.web_limit = max(0, settings.web_search_per_turn) if docent else 0
+    specs = tool_specs(review_on, proactive=hidden, guide=docent, web_functions=toolbox.web_limit > 0 and not builtin_web)
+    memory = await memory_summary(api, plan_id)
     rules, context = build_system_parts(plan_view, pending, dropped, repropose, review_on, now=now,
-                                        simulated=simulated, trip=trip, plan=toolbox.last_plan)
+                                        simulated=simulated, trip=trip, plan=toolbox.last_plan, memory=memory,
+                                        docent=docent, web_searches=toolbox.web_limit)
     # 기록 편집 금지 공급자(Claude): 시스템 프롬프트는 고정 규칙만 두고(턴이 바뀌어도 같아 캐시된다), 턴마다 바뀌는
-    # 맥락(현재 상황·지금 시각·현재 일정)은 이번 사용자 메시지 뒤 system 메시지로 둔다. 이후로는 덧붙이기만 한다
+    # 맥락(현재 상황·메모리·지금 시각·현재 일정)은 이번 사용자 메시지 뒤 system 메시지로 둔다. 이후로는 덧붙이기만 한다
     append_only = getattr(llm, "append_only", False)
     if append_only:
         messages = [{"role": "system", "content": rules}, *history, {"role": "user", "content": user_text},
                     {"role": "system", "content": context}]
     else:
-        messages = [{"role": "system", "content": f"{rules}\n\n{context}"}, *history,
-                    {"role": "user", "content": user_text}]
+        messages = [{"role": "system", "content": build_system(
+            plan_view, pending, dropped, repropose, review_on, now=now, simulated=simulated, trip=trip,
+            plan=toolbox.last_plan, memory=memory, docent=docent, web_searches=toolbox.web_limit)},
+            *history, {"role": "user", "content": user_text}]
     new_rows = [AgentMessage(session_id=session_id, role="user", content=user_text, hidden=hidden)]
     complete = 1  # new_rows[:complete] 는 저장해도 되는 완결된 기록 (도구 호출·결과 짝이 맞음)
     said: list[str] = []  # 이번 턴에 사용자에게 보인 말 (도구 호출 전 말 포함)
@@ -285,13 +320,20 @@ async def run_turn(session_id: str, plan_id: int, user_text: str, llm: LLMProvid
             gated = review_on and bool(draft.ops) and pushes_left > 0 and step_no < settings.max_steps - 2
             notes = changes_note() + extra
             if append_only:
+                # 웹 검색 도구는 턴 내내 그대로라(요청마다 max_uses = 턴 상한) 다 쓴 뒤로는 안내로 막는다
+                if builtin_web and toolbox.web_limit and not toolbox.web_left:
+                    notes.append(WEB_DONE_NOTE.format(n=toolbox.web_limit))
                 append_notes(notes)
             for attempt in range(LLM_RETRIES + 1):
                 text, calls, finish, reasoning_len, native = "", [], "", 0, None
-                if append_only:  # 도구 목록은 턴 내내 같게, 마지막 단계는 도구를 못 쓰게만 한다
-                    stream = llm.stream(messages, specs, allow_tools=bool(tools))
+                if append_only:
+                    # 도구 목록(내장 웹 검색 도구와 그 상한 포함)은 턴 내내 같게, 마지막 단계는 도구를 못 쓰게만 한다
+                    web = {"web_search": toolbox.web_limit} if builtin_web and toolbox.web_limit else {}
+                    stream = llm.stream(messages, specs, allow_tools=bool(tools), **web)
                 else:
-                    stream = llm.stream(messages + [{"role": "user", "content": n} for n in notes], tools)
+                    # 공급자 내장 웹 검색: 남은 횟수만큼 (도구를 줄 때만)
+                    web = {"web_search": toolbox.web_left} if builtin_web and tools and toolbox.web_left else {}
+                    stream = llm.stream(messages + [{"role": "user", "content": n} for n in notes], tools, **web)
                 sent = True
                 try:
                     async for ev in stream:
@@ -303,6 +345,13 @@ async def run_turn(session_id: str, plan_id: int, user_text: str, llm: LLMProvid
                             case ReasoningDelta(text=t):
                                 reasoning_len += len(t)
                                 yield _ev("thinking", delta=t)
+                            case WebSearchCall(query=q):
+                                toolbox.web_used += 1
+                                for e in steps.start("research"):
+                                    yield e
+                                yield steps.finish(True, f"웹 검색 · {q}"[:60] if q else "웹 검색")
+                            case Citation(url=u, title=t):
+                                toolbox.cite(u, t)
                             case ToolCall():
                                 calls.append(ev)
                             case Finish(reason=r, usage=u):

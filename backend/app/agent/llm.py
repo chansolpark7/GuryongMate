@@ -5,11 +5,14 @@
 - OpenAICompatProvider: OpenAI 호환 Chat Completions. LM Studio, vLLM 등 (ChatGPT 도 추론 없이 가능)
 - ClaudeProvider (claude_llm.py): Claude API (anthropic SDK). 기록을 추가만 하는 공급자 (append_only)
 하네스는 LLMProvider 인터페이스만 알고, 어떤 모델인지는 설정(config.py)에서만 정해진다.
+공급자가 내장 웹 검색을 지원하면 builtin_web_search = True 이고, stream(..., web_search=n) 으로 이번 호출에서
+최대 n 번 검색하게 한다 (OpenAI Responses 의 web_search 도구, Claude 의 웹 검색 서버 도구). 검색 호출은 WebSearchCall,
+답변의 인용은 Citation 으로 낸다.
 다른 형식의 API 를 붙이려면 같은 이벤트를 내는 Provider 를 하나 더 만들면 된다.
 
 하네스 내부 메시지 형식은 OpenAI Chat Completions 식(role/content/tool_calls/tool)이다. 덧붙는 자리:
 - assistant 의 "native": {"model", "content": [공급자 원본 블록]} — 그 공급자만 같은 턴 안에서 그대로 다시 보낸다
-  (Claude 의 thinking 블록). 다른 공급자는 무시한다.
+  (Claude 의 thinking·서버 도구 블록). 다른 공급자는 무시한다.
 - append_only 공급자에게만: 중간 {"role": "system", "content", "clear_at"?} 메시지 (docs/agent/README.md §7.1)
 """
 import json
@@ -42,6 +45,19 @@ class ToolCall:
 
 
 @dataclass
+class WebSearchCall:
+    """공급자 내장 웹 검색을 한 번 했다 (검색 수 상한·처리 단계 표시용)."""
+    query: str
+
+
+@dataclass
+class Citation:
+    """답변 문장에 붙은 웹 출처 (OpenAI url_citation)."""
+    url: str
+    title: str
+
+
+@dataclass
 class Finish:
     reason: str
     # 토큰 사용량 {"input", "cached", "output", "reasoning"} (공급자가 알려줄 때만). input 은 cached 를 포함한 전체
@@ -50,7 +66,11 @@ class Finish:
     native: dict | None = None
 
 
-LLMEvent = TextDelta | ReasoningDelta | ToolCall | Finish
+# 내장 웹 검색의 사용자 위치 (OpenAI·Claude 공통 형식)
+USER_LOCATION = {"type": "approximate", "country": "KR", "region": "Gyeongsangbuk-do", "city": "Pohang",
+                 "timezone": "Asia/Seoul"}
+
+LLMEvent = TextDelta | ReasoningDelta | ToolCall | WebSearchCall | Citation | Finish
 
 
 class LLMError(RuntimeError):
@@ -79,13 +99,20 @@ class LLMProvider(Protocol):
 
     def stream(self, messages: list[dict], tools: list[dict]) -> AsyncIterator[LLMEvent]:
         """텍스트·추론 조각은 오는 대로, ToolCall 은 완성된 뒤, 마지막에 Finish 를 낸다.
+        builtin_web_search 인 공급자는 web_search=n 키워드도 받는다 (n 번까지 내장 웹 검색).
 
-        append_only = True 인 공급자(기록 편집 금지)는 stream(messages, tools, allow_tools=...) 로 불린다:
-        도구 목록은 턴 내내 같게 주고, 도구를 못 쓰게 할 때는 allow_tools=False 로 알린다."""
+        append_only = True 인 공급자(기록 편집 금지)는 stream(messages, tools, allow_tools=..., web_search=n) 로 불린다:
+        도구 목록(웹 검색 도구와 그 n 포함)은 턴 내내 같게 주고, 도구를 못 쓰게 할 때는 allow_tools=False 로 알린다."""
         ...
 
 
+def supports_web_search(llm: LLMProvider) -> bool:
+    return bool(getattr(llm, "builtin_web_search", False))
+
+
 class OpenAICompatProvider:
+    builtin_web_search = False
+
     def __init__(self, name: str, base_url: str, api_key: str, model: str, reasoning_effort: str | None = None,
                  temperature: float | None = None, timeout: float = 300):
         self.name = name
@@ -148,6 +175,8 @@ class OpenAICompatProvider:
 class OllamaProvider:
     """Ollama 네이티브 /api/chat. OpenAI 호환 엔드포인트와 달리 요청마다 컨텍스트 길이(num_ctx)를 지정할 수 있다.
     (Ollama 기본 컨텍스트는 4096 토큰이라 시스템 프롬프트·도구 결과가 잘려 도구를 무시하게 된다)"""
+
+    builtin_web_search = False
 
     def __init__(self, name: str, base_url: str, model: str, num_ctx: int, think: bool,
                  temperature: float | None = None, timeout: float = 300):
@@ -226,7 +255,10 @@ class OllamaProvider:
 
 class OpenAIResponsesProvider:
     """OpenAI Responses API (/v1/responses). GPT-5.x 는 추론(reasoning)과 도구를 함께 쓰려면 이 API 가 필요하다.
-    하네스는 Chat Completions 형식 메시지를 쓰므로 여기서 Responses 입력 형식으로 바꾼다."""
+    하네스는 Chat Completions 형식 메시지를 쓰므로 여기서 Responses 입력 형식으로 바꾼다.
+    web_search=n 이면 내장 web_search 도구를 켜고 max_tool_calls=n 으로 검색 수를 묶는다 (함수 도구는 세지 않는다)."""
+
+    builtin_web_search = True
 
     def __init__(self, name: str, base_url: str, api_key: str, model: str, reasoning_effort: str | None = None,
                  timeout: float = 300, transport: httpx.AsyncBaseTransport | None = None):
@@ -257,11 +289,19 @@ class OpenAIResponsesProvider:
         return [{"type": "function", "name": t["function"]["name"], "description": t["function"]["description"],
                  "parameters": t["function"]["parameters"], "strict": False} for t in tools]
 
-    async def stream(self, messages: list[dict], tools: list[dict]) -> AsyncIterator[LLMEvent]:
+    @staticmethod
+    def web_search_tool() -> dict:
+        return {"type": "web_search", "search_context_size": settings.web_search_context,
+                "user_location": dict(USER_LOCATION)}
+
+    async def stream(self, messages: list[dict], tools: list[dict], web_search: int = 0) -> AsyncIterator[LLMEvent]:
         usage = None
         body: dict = {"model": self.model, "input": self._to_input(messages), "stream": True, "store": False}
         if tools:
             body["tools"] = self._to_tools(tools)
+        if web_search > 0:
+            body["tools"] = [*body.get("tools", []), self.web_search_tool()]
+            body["max_tool_calls"] = web_search
         if self._reasoning_effort:
             body["reasoning"] = {"effort": self._reasoning_effort, "summary": "auto"}
 
@@ -288,6 +328,14 @@ class OpenAIResponsesProvider:
                             item = ev["item"]
                             calls.append(ToolCall(id=item.get("call_id") or f"call_{uuid.uuid4().hex[:8]}",
                                                   name=item.get("name", ""), arguments=item.get("arguments") or "{}"))
+                        elif kind == "response.output_item.done" and ev.get("item", {}).get("type") == "web_search_call":
+                            action = ev["item"].get("action") or {}
+                            yield WebSearchCall(action.get("query") or "")
+                        elif kind == "response.output_item.done" and ev.get("item", {}).get("type") == "message":
+                            for part in ev["item"].get("content") or []:
+                                for a in part.get("annotations") or []:
+                                    if a.get("type") == "url_citation" and a.get("url"):
+                                        yield Citation(a["url"], a.get("title") or "")
                         elif kind in ("response.completed", "response.incomplete"):
                             if kind == "response.incomplete":
                                 finish = "length"
@@ -327,6 +375,5 @@ def get_llm() -> LLMProvider:
         from app.agent.claude_llm import ClaudeProvider  # anthropic SDK 는 이 공급자를 쓸 때만 읽는다
 
         return ClaudeProvider(s.claude_model, api_key=s.claude_api_key or None, effort=s.claude_effort,
-                              max_tokens=s.claude_max_tokens, web_search_max_uses=s.claude_web_search_max_uses,
-                              thinking_mismatch=s.claude_thinking_mismatch, timeout=s.request_timeout_sec)
+                              max_tokens=s.claude_max_tokens, thinking_mismatch=s.claude_thinking_mismatch, timeout=s.request_timeout_sec)
     raise ValueError(f"알 수 없는 AGENT_PROVIDER: {s.provider}")

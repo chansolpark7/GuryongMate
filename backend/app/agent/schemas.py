@@ -18,7 +18,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-StepKind = Literal["search", "place", "plan", "edit", "rule", "review", "recommend", "proposal", "safety", "route"]
+StepKind = Literal["search", "place", "plan", "edit", "rule", "review", "recommend", "proposal", "safety", "route",
+                   "memory", "forget", "recall", "research", "guide"]
 
 
 class Strict(BaseModel):
@@ -102,6 +103,40 @@ class ChatResult(BaseModel):
     usage: dict[str, int] | None = Field(None, description="이 턴의 LLM 토큰 사용량 (input, cached, output, reasoning, calls)")
     message_id: int | None = Field(None, description="저장된 답변 메시지 id (선제 턴 결과를 trip 이 이벤트에 기록)")
     mode: Literal["plan", "guide"] | None = Field(None, description="plan: 계획 모드 / guide: 동행 모드 (여행 중)")
+
+
+class GuidePrepareRequest(Strict):
+    """가이드 준비 (docs/docent/README.md §3.3). 본문 생략 = 일정의 장소 중 준비되지 않은(ready 가 아닌) 곳."""
+
+    place_ids: list[str] | None = Field(None, max_length=50, description="이 장소만 (일정에 있어야 한다)")
+    force: bool = Field(False, description="true 면 ready 노트도 다시 만든다")
+
+
+class GuidePlaceProgress(BaseModel):
+    place_id: str
+    title: str
+    status: Literal["pending", "preparing", "ready", "failed"]
+    error: str = ""
+    sources: int = Field(0, description="저장한 출처 수")
+    web_searches: int = Field(0, description="이 장소에서 쓴 웹 검색 수")
+    seconds: float | None = Field(None, description="이 장소에 걸린 시간")
+    usage: dict[str, int] | None = Field(None, description="이 장소의 LLM 토큰 사용량")
+
+
+class GuideJobView(BaseModel):
+    job_id: str
+    plan_id: int
+    status: Literal["running", "done"]
+    total: int = Field(description="준비할 장소 수")
+    finished: int = Field(description="끝난 장소 수 (ready + failed)")
+    ready: int
+    failed: int
+    current: str | None = Field(None, description="지금 준비 중인 place_id")
+    eta_sec: int | None = Field(None, description="남은 시간 어림 (끝난 장소 평균, 아직 없으면 장소당 20초)")
+    places: list[GuidePlaceProgress]
+    started_at: datetime
+    finished_at: datetime | None = None
+    usage: dict[str, int] = Field(description="작업 전체 LLM 토큰 사용량 (input, cached, output, reasoning, calls)")
 
 
 class AgentInfo(BaseModel):

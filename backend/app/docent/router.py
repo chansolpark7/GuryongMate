@@ -60,6 +60,9 @@ CATEGORY_LABELS = {
     "food": "음식", "known": "이미 아는 것·본 것", "feedback": "반응",
 }
 SUMMARY_PER_CATEGORY = 5
+# 해설 길이 선호 (앱의 [짧게]/[자세히] 강조용). 최신 style 항목의 문구로 정한다
+SHORT_WORDS = ("짧", "핵심", "간단", "요약")
+LONG_WORDS = ("자세", "길게", "깊이", "상세")
 
 
 def _now() -> datetime:
@@ -100,6 +103,17 @@ def _visible(db: Session, user_id: str, plan_id: int | None) -> list[DocentMemor
                            .order_by(DocentMemory.updated_at.desc(), DocentMemory.id.desc())))
 
 
+def style_length(items: list[DocentMemory]) -> str | None:
+    """최신 style 항목부터 보며 길이 선호를 찾는다 (short | long). 없으면 None. items 는 최신순."""
+    for m in items:
+        if m.category != "style":
+            continue
+        short, long = any(w in m.text for w in SHORT_WORDS), any(w in m.text for w in LONG_WORDS)
+        if short != long:
+            return "short" if short else "long"
+    return None
+
+
 def _own_memory(db: Session, user_id: str, memory_id: int, lock: bool = False) -> DocentMemory:
     mem = db.get(DocentMemory, memory_id, with_for_update=lock)
     if mem is None or mem.user_id != user_id:
@@ -114,8 +128,9 @@ async def list_memory(db: DbSession, http: Http, user_id: UserId, auth: Auth,
     """메모리 전체 (user 범위 + 그 plan 범위, 최신순) + memory_version."""
     if plan_id is not None:
         await ensure_plan(http, plan_id, auth)
-    items = [MemoryItem.model_validate(m) for m in _visible(db, user_id, plan_id)]
-    return MemoryList(items=items, memory_version=_version(db, user_id))
+    rows = _visible(db, user_id, plan_id)
+    return MemoryList(items=[MemoryItem.model_validate(m) for m in rows], memory_version=_version(db, user_id),
+                      style_length=style_length(rows))
 
 
 @router.post("/memory", response_model=MemoryItem, status_code=201)
@@ -155,7 +170,8 @@ async def memory_summary(db: DbSession, http: Http, user_id: UserId, auth: Auth,
         texts = [("(이번 여행) " if m.scope == "plan" else "") + m.text for m in items if m.category == category]
         if texts:
             lines.append(f"- {label}: " + "; ".join(texts[:SUMMARY_PER_CATEGORY]))
-    return MemorySummary(text="\n".join(lines), count=len(items), memory_version=_version(db, user_id))
+    return MemorySummary(text="\n".join(lines), count=len(items), memory_version=_version(db, user_id),
+                         style_length=style_length(items))
 
 
 @router.patch("/memory/{memory_id}", response_model=MemoryItem)
@@ -273,8 +289,11 @@ async def get_note(plan_id: OwnedPlan, place_id: PlaceId, db: DbSession) -> Note
 async def put_note(plan_id: OwnedPlan, place_id: PlaceId, body: NotePut, response: Response, db: DbSession,
                    user_id: UserId) -> NoteView:
     """노트 저장 (전체 교체, 없으면 만든다 201). status=ready 는 short·long·sources 가 있어야 한다.
+    출처 등급(tier)은 보낸 값을 무시하고 URL 의 도메인 규칙으로 다시 정한다 (URL 이 없으면 unknown).
     본문을 비워 보낸 pending·preparing·failed 는 이전 본문을 남긴다 (다시 만드는 중·실패해도 현장에서 이전 노트를 쓸 수 있게)."""
     content = NoteContent.model_validate(body.model_dump()).model_dump(mode="json")
+    for src in content["sources"]:  # 등급은 보낸 값을 믿지 않고 URL 로 다시 정한다 (§2.2)
+        src["tier"] = tier_of(src["url"]) if src["url"] else "unknown"
     empty = content == NoteContent().model_dump(mode="json")
     note = _get_note(db, plan_id, place_id, lock=True)
     if note is None:

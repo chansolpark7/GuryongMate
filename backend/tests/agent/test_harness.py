@@ -15,6 +15,8 @@ from app.agent.api import get_http
 from app.agent.llm import Finish, TextDelta, ToolCall, get_llm
 from app.agent.models import AgentMessage, AgentSession
 from app.db import SessionLocal, init_db
+from app.docent.models import DocentGuideNote, DocentMemory, DocentMemoryVersion
+from app.docent.plans import get_http as docent_http
 from app.main import app
 from app.planner.models import PlannerPlan
 from app.planner.places import get_place_lookup
@@ -76,13 +78,17 @@ def client():
         with SessionLocal.begin() as s:
             s.execute(delete(AgentSession).where(AgentSession.user_id.like("test-agent-%")))
             s.execute(delete(PlannerPlan).where(PlannerPlan.user_id.like("test-agent-%")))
+            for model in (DocentMemory, DocentMemoryVersion, DocentGuideNote):
+                s.execute(delete(model).where(model.user_id.like("test-agent-%")))
 
     cleanup()
     asgi = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://app")
-    app.dependency_overrides |= {get_place_lookup: FakeLookup, get_llm: lambda: llm, get_http: lambda: asgi}
+    # docent 도 계획 소유 확인(planner)을 같은 앱으로 부른다
+    app.dependency_overrides |= {get_place_lookup: FakeLookup, get_llm: lambda: llm, get_http: lambda: asgi,
+                                 docent_http: lambda: asgi}
     with TestClient(app) as c:
         yield c
-    for dep in (get_place_lookup, get_llm, get_http):
+    for dep in (get_place_lookup, get_llm, get_http, docent_http):
         app.dependency_overrides.pop(dep, None)
     cleanup()
 

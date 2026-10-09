@@ -19,12 +19,23 @@ from collections.abc import AsyncIterator
 
 import anthropic
 
-from app.agent.llm import Finish, LLMError, LLMEvent, LLMRefusal, ReasoningDelta, TextDelta, ToolCall
+from app.agent.llm import (
+    USER_LOCATION,
+    Citation,
+    Finish,
+    LLMError,
+    LLMEvent,
+    LLMRefusal,
+    ReasoningDelta,
+    TextDelta,
+    ToolCall,
+    WebSearchCall,
+)
 
 log = logging.getLogger("app.agent")
 
 # 모델마다 다른 것 (claude-api 스킬 문서 기준)
-# - 웹 검색 서버 도구: 동적 필터링 버전(web_search_20260209)은 Opus·Sonnet 계열만, Haiku 5.5 는 기본 버전
+# - 웹 검색 서버 도구: 동적 필터링 버전(web_search_20260209)은 Opus·Sonnet 계열만, Haiku 5.5 는 기본 버전(web_search_20250305)
 # - thinking: 둘 다 adaptive 만 받는다 (budget_tokens 는 400). display 기본값이 omitted(빈 문자열)라 summarized 로 요청
 # - effort: 둘 다 low~max. 기본값이 Sonnet 5.5 는 high, Haiku 5.5 는 medium 이라 항상 명시해서 보낸다
 # - 서버측 refusal fallback: Sonnet 5.5 만 있고 Haiku 5.5 는 없다. 쓰지 않는다 (docs/agent/README.md §7.1)
@@ -58,17 +69,17 @@ def _add(out: list[dict], role: str, blocks: list[dict]) -> None:
 
 
 class ClaudeProvider:
-    append_only = True  # 하네스가 기록을 고치지 않고 덧붙이기만 한다 (harness.py)
+    append_only = True  # 하네스가 기록을 고치지 않고 덧붙이기만 한다 (harness.py, guide.py)
+    builtin_web_search = True  # stream(..., web_search=n): Anthropic 웹 검색 서버 도구 (max_uses=n)
 
     def __init__(self, model: str, *, api_key: str | None = None, effort: str = "medium", max_tokens: int = 64000,
-                 web_search_max_uses: int = 0, thinking_mismatch: str = "drop_block", timeout: float = 300,
+                 thinking_mismatch: str = "drop_block", timeout: float = 300,
                  client: anthropic.AsyncAnthropic | None = None):
         self.name = f"claude:{model}"
         self.model = model
         self._api_key = api_key
         self._effort = effort
         self._max_tokens = max_tokens
-        self._web_search_max_uses = web_search_max_uses
         self._thinking_mismatch = thinking_mismatch
         self._timeout = timeout
         self._client = client
@@ -115,15 +126,15 @@ class ClaudeProvider:
                 _add(out, "user", [{"type": "text", "text": m["content"]}])
         return system, out
 
-    def tools(self, tools: list[dict]) -> list[dict]:
+    def tools(self, tools: list[dict], web_search: int = 0) -> list[dict]:
         out = [{"name": t["function"]["name"], "description": t["function"]["description"],
                 "input_schema": t["function"]["parameters"]} for t in tools]
-        if self._web_search_max_uses > 0:
+        if web_search > 0:  # 하네스가 턴(장소) 내내 같은 n 을 준다 -> 도구 목록이 바뀌지 않는다
             out.append({"type": WEB_SEARCH_TOOL.get(self.model, DEFAULT_WEB_SEARCH_TOOL), "name": "web_search",
-                        "max_uses": self._web_search_max_uses})
+                        "max_uses": web_search, "user_location": dict(USER_LOCATION)})
         return out
 
-    def request(self, messages: list[dict], tools: list[dict], allow_tools: bool = True) -> dict:
+    def request(self, messages: list[dict], tools: list[dict], allow_tools: bool = True, web_search: int = 0) -> dict:
         system, msgs = self.convert(messages)
         params: dict = {
             "model": self.model, "max_tokens": self._max_tokens, "system": system, "messages": msgs,
@@ -133,8 +144,8 @@ class ClaudeProvider:
             "cache_control": CACHE,  # 자동 캐시 지점: 마지막 블록을 따라간다 (도구 루프의 앞부분을 다음 호출이 읽는다)
             "betas": BETAS,
         }
-        if tools:
-            params["tools"] = self.tools(tools)
+        if tools or web_search > 0:
+            params["tools"] = self.tools(tools, web_search)
             if not allow_tools:  # 도구 목록은 그대로 두고 쓰지 못하게만 한다 (목록을 바꾸면 기록 편집)
                 params["tool_choice"] = {"type": "none"}
         return params
@@ -147,20 +158,40 @@ class ClaudeProvider:
             log.warning("%s thinking 블록 %s %s (%s)", self.name, getattr(t, "type", "?"), getattr(t, "path", "?"),
                         getattr(t, "reason", "?"))
 
-    async def stream(self, messages: list[dict], tools: list[dict], allow_tools: bool = True) -> AsyncIterator[LLMEvent]:
-        params = self.request(messages, tools, allow_tools)
+    def _block_done(self, block, queries: dict[str, str]) -> LLMEvent | None:
+        """끝난 서버 도구 블록 -> WebSearchCall. 검색 오류는 HTTP 200 + 오류 객체로 온다 (결과 목록 대신)."""
+        if block.type == "server_tool_use" and block.name == "web_search":
+            queries[block.id] = str((block.input or {}).get("query") or "")
+        elif block.type == "web_search_tool_result":
+            if isinstance(block.content, list):
+                return WebSearchCall(queries.get(block.tool_use_id, ""))
+            log.warning("%s 웹 검색 오류: %s", self.name, getattr(block.content, "error_code", block.content))
+        return None
+
+    async def stream(self, messages: list[dict], tools: list[dict], allow_tools: bool = True,
+                     web_search: int = 0) -> AsyncIterator[LLMEvent]:
+        params = self.request(messages, tools, allow_tools, web_search)
+        queries: dict[str, str] = {}  # server_tool_use id -> 검색어
         usage = {"input": 0, "cached": 0, "cache_write": 0, "output": 0}
         contents: list[list[dict]] = []
         try:
             for _ in range(PAUSE_LIMIT + 1):
                 async with self.client.beta.messages.stream(**params) as stream:
                     async for event in stream:
+                        if event.type == "content_block_stop":
+                            if done := self._block_done(event.content_block, queries):
+                                yield done
+                            continue
                         if event.type != "content_block_delta":
                             continue
                         if event.delta.type == "text_delta" and event.delta.text:
                             yield TextDelta(event.delta.text)
                         elif event.delta.type == "thinking_delta" and event.delta.thinking:
                             yield ReasoningDelta(event.delta.thinking)
+                        elif event.delta.type == "citations_delta":  # 답변 문장에 붙은 웹 출처
+                            c = event.delta.citation
+                            if c.type == "web_search_result_location" and c.url:
+                                yield Citation(c.url, c.title or "")
                     msg = await stream.get_final_message()
                 u = msg.usage
                 read, write = u.cache_read_input_tokens or 0, u.cache_creation_input_tokens or 0

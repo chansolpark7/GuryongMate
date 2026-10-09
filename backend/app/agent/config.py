@@ -32,7 +32,6 @@ class AgentSettings(BaseSettings):
     # (Sonnet 5.5: 기본 high, 도구를 여러 번 쓰는 작업은 medium 권장 / Haiku 5.5: 기본·권장 모두 medium)
     claude_effort: str = Field("medium", description="low | medium | high | xhigh | max (항상 명시적으로 보낸다)")
     claude_max_tokens: int = Field(64000, description="응답 하나의 최대 토큰 (thinking 포함). 스트리밍이라 넉넉히")
-    claude_web_search_max_uses: int = Field(0, description="Anthropic 웹 검색 서버 도구의 응답당 최대 횟수. 0 이면 끔")
     claude_thinking_mismatch: str = Field("drop_block", description="기록이 바뀌어 thinking 블록이 무효일 때: "
                                                                    "drop_block (버리고 계속, 로그) | error (400)")
 
@@ -50,6 +49,18 @@ class AgentSettings(BaseSettings):
     clock: str = Field("safety", description="safety (GET /safety/sim 가상 시각을 따름) | system")
     clock_cache_sec: float = 5
     trip_timeout_sec: float = Field(3, description="매 턴 trip 상태 조회 제한 시간. 넘기면 계획 모드로")
+    memory_timeout_sec: float = Field(3, description="매 턴 docent 메모리 요약 조회 제한 시간. 넘기면 메모리 없이")
+
+    # 외부 웹 검색 (docs/docent/README.md §2.1). 공급자가 내장 검색을 지원하면(OpenAI Responses) 그것을,
+    # 아니면 docent /docent/search·/docent/page 를 함수 도구로 쓴다. 비용을 막기 위해 호출 수 상한을 둔다
+    # (내장 검색은 검색 호출, 함수 도구는 web_search·read_page 호출을 합쳐서 센다)
+    web_search_per_place: int = Field(3, description="가이드 준비 작업에서 장소 하나당 웹 검색 상한. 0 이면 웹 검색 안 함")
+    web_search_per_turn: int = Field(2, description="동행 모드 대화 한 턴의 웹 검색 상한. 0 이면 웹 검색 안 함")
+    web_search_context: str = Field("low", description="OpenAI 내장 검색의 search_context_size (low | medium | high)")
+
+    # 가이드 준비 작업 (docs/docent/README.md §3.3)
+    guide_max_steps: int = Field(6, description="장소 하나의 LLM 호출 최대 횟수 (마지막 호출은 도구 없이 노트 JSON 강제)")
+    guide_passages: int = Field(6, description="장소마다 미리 찾아 주는 근거 조각 수")
 
 
 settings = AgentSettings()

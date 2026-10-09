@@ -7,7 +7,7 @@ import httpx2
 import pytest
 
 from app.agent.claude_llm import ClaudeProvider
-from app.agent.llm import Finish, LLMError, LLMRefusal, ReasoningDelta, TextDelta, ToolCall
+from app.agent.llm import Citation, Finish, LLMError, LLMRefusal, ReasoningDelta, TextDelta, ToolCall, WebSearchCall
 
 TOOLS = [{"type": "function", "function": {"name": "add_item", "description": "d",
                                            "parameters": {"type": "object", "properties": {}}}}]
@@ -46,7 +46,15 @@ def message(blocks, stop="end_turn", usage=None, stop_details=None, model="claud
                     ev("content_block_delta", index=i, delta={"type": "signature_delta", "signature": b["signature"]})]
         elif b["type"] == "text":
             out.append(ev("content_block_start", index=i, content_block={"type": "text", "text": ""}))
+            out += [ev("content_block_delta", index=i, delta={"type": "citations_delta", "citation": c})
+                    for c in b.get("citations", [])]
             out += [ev("content_block_delta", index=i, delta={"type": "text_delta", "text": t}) for t in b["parts"]]
+        elif b["type"] == "server_tool_use":
+            out += [ev("content_block_start", index=i, content_block={**b, "input": {}}),
+                    ev("content_block_delta", index=i,
+                       delta={"type": "input_json_delta", "partial_json": json.dumps(b["input"], ensure_ascii=False)})]
+        elif b["type"] == "web_search_tool_result":
+            out.append(ev("content_block_start", index=i, content_block=b))
         elif b["type"] == "tool_use":
             out += [ev("content_block_start", index=i,
                        content_block={"type": "tool_use", "id": b["id"], "name": b["name"], "input": {}}),
@@ -174,21 +182,76 @@ def test_final_step_keeps_tools_with_tool_choice_none():
     assert body["tool_choice"] == {"type": "none"} and [t["name"] for t in body["tools"]] == ["add_item"]
 
 
+POHANG = {"type": "approximate", "country": "KR", "region": "Gyeongsangbuk-do", "city": "Pohang",
+          "timezone": "Asia/Seoul"}
+
+
 @pytest.mark.parametrize("model, tool", [("claude-sonnet-5-5", "web_search_20260209"),
                                          ("claude-haiku-5-5", "web_search_20250305")])
 def test_model_specific_web_search_and_effort(model, tool):
     fake = Fake((200, message([{"type": "text", "parts": ["네"]}], model=model)))
-    run(provider(fake, model, effort="low", web_search_max_uses=2, thinking_mismatch="error"))
+    p = provider(fake, model, effort="low", thinking_mismatch="error")
+    assert p.builtin_web_search and p.append_only
+    run(p, web_search=2)
     body = fake.requests[0]["body"]
-    assert body["tools"][-1] == {"type": tool, "name": "web_search", "max_uses": 2}
+    assert body["tools"][-1] == {"type": tool, "name": "web_search", "max_uses": 2, "user_location": POHANG}
     assert body["output_config"] == {"effort": "low"} and "fallbacks" not in body
     assert body["thinking"]["block_binding"] == {"prefix_mismatch_behavior": "error"}
 
 
-def test_web_search_off_by_default():
-    fake = Fake((200, message([{"type": "text", "parts": ["네"]}])))
+def test_web_search_only_when_asked():
+    fake = Fake((200, message([{"type": "text", "parts": ["네"]}])), (200, message([{"type": "text", "parts": ["네"]}])))
     run(provider(fake))
     assert [t["name"] for t in fake.requests[0]["body"]["tools"]] == ["add_item"]
+    run(provider(fake), tools=[], web_search=1)  # 함수 도구 없이 웹 검색만이어도 도구 목록을 보낸다
+    assert [t["name"] for t in fake.requests[1]["body"]["tools"]] == ["web_search"]
+
+
+CITE = {"type": "web_search_result_location", "url": "https://www.pohang.go.kr/x", "title": "포항시",
+        "cited_text": "1920년대", "encrypted_index": "ei"}
+SEARCH_TURN = [
+    {"type": "server_tool_use", "id": "srvtoolu_1", "name": "web_search", "input": {"query": "구룡포 돌계단"}},
+    {"type": "web_search_tool_result", "tool_use_id": "srvtoolu_1", "content": [
+        {"type": "web_search_result", "url": "https://www.pohang.go.kr/x", "title": "포항시", "encrypted_content": "ec",
+         "page_age": None}]},
+    {"type": "server_tool_use", "id": "srvtoolu_2", "name": "web_search", "input": {"query": "한 번 더"}},
+    {"type": "web_search_tool_result", "tool_use_id": "srvtoolu_2",
+     "content": {"type": "web_search_tool_result_error", "error_code": "max_uses_exceeded"}},
+    {"type": "text", "parts": ["1920년대에 만들어졌어요."], "citations": [CITE]},
+]
+
+
+def test_web_search_events_and_server_blocks_round_trip(caplog):
+    """검색 결과마다 WebSearchCall(검색어), 인용마다 Citation. 오류 블록(HTTP 200)은 세지 않고 경고.
+    서버 도구 블록은 원본 그대로 같은 턴의 다음 호출에 다시 보낸다."""
+    fake = Fake((200, message(SEARCH_TURN, model="claude-haiku-5-5")),
+                (200, message([{"type": "text", "parts": ["네"]}], model="claude-haiku-5-5")))
+    p = provider(fake, "claude-haiku-5-5")
+    events = run(p, web_search=2)
+    assert [e for e in events if isinstance(e, WebSearchCall | Citation)] == [
+        WebSearchCall("구룡포 돌계단"), Citation("https://www.pohang.go.kr/x", "포항시")]
+    assert "max_uses_exceeded" in caplog.text
+    fin = events[-1]
+    assert [b["type"] for b in fin.native["content"][0]] == [
+        "server_tool_use", "web_search_tool_result", "server_tool_use", "web_search_tool_result", "text"]
+    run(p, [*MESSAGES, {"role": "assistant", "content": "1920년대에 만들어졌어요.", "native": fin.native},
+            {"role": "user", "content": "고마워"}], web_search=2)
+    a, b = (r["body"] for r in fake.requests)
+    assert b["tools"] == a["tools"] and b["messages"][:len(a["messages"])] == a["messages"]
+    replay = b["messages"][len(a["messages"])]["content"]
+    assert replay == fin.native["content"][0]
+    assert replay[1]["content"][0]["encrypted_content"] == "ec" and replay[4]["citations"][0]["encrypted_index"] == "ei"
+
+
+def test_pause_turn_with_server_search_resumes():
+    fake = Fake((200, message(SEARCH_TURN[:1], stop="pause_turn")),
+                (200, message(SEARCH_TURN[1:2] + [{"type": "text", "parts": ["찾았어요"]}])))
+    events = run(provider(fake), web_search=1)
+    assert WebSearchCall("구룡포 돌계단") in events  # 검색어는 앞 응답의 server_tool_use 에서
+    second = fake.requests[1]["body"]["messages"]
+    assert second[-1] == {"role": "assistant", "content": [
+        {"type": "server_tool_use", "id": "srvtoolu_1", "name": "web_search", "input": {"query": "구룡포 돌계단"}}]}
+    assert events[-1].reason == "end_turn" and len(events[-1].native["content"]) == 2
 
 
 def test_pause_turn_is_resumed():

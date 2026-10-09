@@ -103,7 +103,22 @@ def test_summary_with_plan_marks_trip_items(client):
     s = ok(client.get("/docent/memory/summary", params={"plan_id": pid}, headers=headers))
     assert s["text"] == "- 동행자·제약: 계단은 피하고 싶음; (이번 여행) 어머니(60대) 동행"
     empty = ok(client.get("/docent/memory/summary", headers={"X-User-Id": "test-docent-nobody"}))
-    assert empty == {"text": "", "count": 0, "memory_version": 0}
+    assert empty == {"text": "", "count": 0, "memory_version": 0, "style_length": None}
+
+
+def test_style_length(client):
+    """해설 길이 선호: 최신 style 항목 문구로 정한다 (앱의 [짧게]/[자세히] 강조, gaps b19)."""
+    headers = {"X-User-Id": "test-docent-style"}
+    pid = new_plan(client, headers=headers)
+    assert ok(client.get("/docent/memory", headers=headers))["style_length"] is None
+    remember(client, "style", "수치·연도는 빼고", headers=headers)  # 길이와 무관
+    remember(client, "interest", "짧은 산책", headers=headers)  # style 이 아니면 보지 않는다
+    assert ok(client.get("/docent/memory/summary", headers=headers))["style_length"] is None
+    remember(client, "style", "해설은 핵심만 짧게", headers=headers)
+    assert ok(client.get("/docent/memory/summary", headers=headers))["style_length"] == "short"
+    remember(client, "style", "이번엔 자세히 듣고 싶음", scope="plan", plan_id=pid, headers=headers)
+    assert ok(client.get("/docent/memory", headers=headers))["style_length"] == "short"  # plan 범위는 그 계획에서만
+    assert ok(client.get("/docent/memory", params={"plan_id": pid}, headers=headers))["style_length"] == "long"
 
 
 def test_delete_me(client):
@@ -114,6 +129,6 @@ def test_delete_me(client):
     keep = remember(client, "interest", "남의 메모리는 남는다", headers=H)
 
     ok(client.delete("/docent/me", headers=headers), 204)
-    assert ok(client.get("/docent/memory", headers=headers)) == {"items": [], "memory_version": 0}
+    assert ok(client.get("/docent/memory", headers=headers)) == {"items": [], "memory_version": 0, "style_length": None}
     assert ok(client.get(f"/docent/plans/{pid}/notes", headers=headers)) == []
     assert keep["id"] in [m["id"] for m in ok(client.get("/docent/memory", headers=H))["items"]]

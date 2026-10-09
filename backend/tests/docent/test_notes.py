@@ -25,6 +25,21 @@ def test_put_get_list(client):
     assert [(n["place_id"], n["status"]) for n in listed] == [("kto-2610501", "ready"), ("kto-other", "preparing")]
 
 
+def test_source_tier_is_reclassified_by_url(client):
+    """노트 출처 등급은 보낸 값을 믿지 않고 docent 가 URL 로 다시 정한다 (LLM 이 준 tier 무시)."""
+    pid = new_plan(client)
+    sources = [
+        {"title": "블로그 후기", "url": "https://m.blog.naver.com/x/1", "tier": "official"},  # 거짓 official
+        {"title": "포항시청", "url": "https://www.pohang.go.kr/a", "tier": "community"},
+        {"title": "매일신문", "url": "https://www.imaeil.com/page/1"},  # tier 생략
+        {"title": "어딘가", "url": "https://example.com/", "tier": "press"},
+        {"title": "URL 없는 자료", "tier": "official"},
+    ]
+    note = ok(client.put(f"/docent/plans/{pid}/notes/kto-1", json=READY_NOTE | {"sources": sources}, headers=H), 201)
+    assert [s["tier"] for s in note["sources"]] == ["community", "official", "press", "unknown", "unknown"]
+    assert ok(client.get(f"/docent/plans/{pid}/notes/kto-1", headers=H))["sources"] == note["sources"]
+
+
 def test_ready_needs_body_and_sources(client):
     pid = new_plan(client)
     url = f"/docent/plans/{pid}/notes/kto-1"
