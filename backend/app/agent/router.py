@@ -28,7 +28,7 @@ from app.agent.errors import AgentError, AgentRoute
 from app.agent.harness import STEP_TITLE, add_note, run_turn
 from app.agent.prompts import event_message
 from app.agent.llm import LLMProvider, get_llm
-from app.agent.models import AgentMessage, AgentSession
+from app.agent.models import AgentEventTurn, AgentMessage, AgentSession
 from app.agent.schemas import (
     AcceptRequest,
     AgentInfo,
@@ -44,7 +44,7 @@ from app.agent.schemas import (
     Step,
 )
 from app.core.auth import CurrentUser, ForwardAuth, issue_token
-from app.db import get_db
+from app.db import SessionLocal, get_db
 
 router = APIRouter(prefix="/agent", tags=["agent"], route_class=AgentRoute)
 
@@ -255,12 +255,25 @@ async def proactive_turn(session_id: str, body: EventRequest, db: DbSession, use
     """선제 턴 (trip 이 부른다, 앱은 부르지 않는다). 숨김 메시지 '[이벤트] …'로 턴을 시작해 Agent 가 먼저 말을 건다.
 
     chat 과 같은 잠금(409 agent_busy)·제안 생성·검토 관문을 쓴다. trip 은 본문의 TripState 를 쓴다 (다시 조회하지 않음).
+    같은 event.id 가 다시 오면 (trip 의 재시도) 새 턴을 돌리지 않고 이전 결과를 그대로 돌려준다.
     """
     s = _get_session(db, user_id, session_id)
     event = body.event.model_dump()
-    log.info("session=%s 선제 턴 event=%s id=%s", session_id[:8], event["type"], event.get("id"))
-    return await _turn_response(session_id, s.plan_id, event_message(event), auth, http, llm, False,
-                                trip=body.trip, fetch_trip=False, hidden=True)
+    event_id = event.get("id")
+    if event_id is not None and (done := db.get(AgentEventTurn, (session_id, event_id))) is not None:
+        log.info("session=%s 선제 턴 event=%s id=%s 이미 처리함 -> 이전 결과", session_id[:8], event["type"], event_id)
+        return ChatResult.model_validate(done.result)
+    log.info("session=%s 선제 턴 event=%s id=%s", session_id[:8], event["type"], event_id)
+    result = await _turn_response(session_id, s.plan_id, event_message(event), auth, http, llm, False,
+                                  trip=body.trip, fetch_trip=False, hidden=True)
+    if event_id is not None and result.error is None:
+        await to_thread.run_sync(_save_event_turn, session_id, event_id, result.model_dump(mode="json"))
+    return result
+
+
+def _save_event_turn(session_id: str, event_id: int, result: dict) -> None:
+    with SessionLocal.begin() as db:
+        db.merge(AgentEventTurn(session_id=session_id, event_id=event_id, result=result))
 
 
 # ---------- 카드 동작 ----------

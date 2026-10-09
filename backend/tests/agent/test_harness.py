@@ -467,7 +467,25 @@ def test_llm_error_event(client, session):
     from app.agent.llm import LLMError
     sid, _ = session
     events = chat(client, sid, "a", [[LLMError("x")], [LLMError("x")], [LLMError("x")]])  # 재시도 2번 후 실패
-    assert events[-1][1]["code"] == "llm_failed" and len(llm.calls) == 3
+    assert events[-1] == ("error", {"code": "llm_unavailable", "message": "지금은 답할 수 없어요. 잠시 후 다시 시도해 주세요."})
+    assert len(llm.calls) == 3
+
+
+def test_llm_error_hides_provider_text(client, session):
+    """공급자 오류 원문(결제 URL 등)은 사용자 답변·대화 기록에 남기지 않는다. 크레딧 부족은 llm_quota."""
+    from app.agent.llm import LLMError
+    sid, _ = session
+    raw = "claude:claude-haiku-5-5 요청 오류 400: Your credit balance is too low. https://console.anthropic.com/settings/billing"
+    events = chat(client, sid, "a", [[LLMError(raw, retryable=False, quota=True)]])
+    code, message = events[-1][1]["code"], events[-1][1]["message"]
+    assert code == "llm_quota" and "console.anthropic.com" not in message and "credit" not in message
+    assert len(llm.calls) == 1
+    llm.script = [[LLMError(raw, retryable=False)]]
+    res = ok(client.post(f"/agent/sessions/{sid}/chat?stream=false", json={"message": "b"}, headers=H))
+    assert res["error"]["code"] == "llm_unavailable" and "console.anthropic.com" not in res["error"]["message"]
+    msgs = ok(client.get(f"/agent/sessions/{sid}", headers=H))["messages"]
+    assert not any("console.anthropic.com" in m["content"] or "credit" in m["content"] for m in msgs)
+    assert msgs[-1]["content"] == "지금은 답할 수 없어요. 잠시 후 다시 시도해 주세요."
 
 
 @pytest.mark.parametrize("body", [{}, {"message": ""}, {"message": "   "}, {"message": "x" * 4001},
@@ -519,7 +537,7 @@ def test_llm_failure_saves_user_message(client, session):
     sid, _ = session
     chat(client, sid, "안녕", [[LLMError("x")], [LLMError("x")], [LLMError("x")]])
     msgs = ok(client.get(f"/agent/sessions/{sid}", headers=H))["messages"]
-    assert [m["role"] for m in msgs] == ["user", "assistant"] and "LLM 호출 실패" in msgs[1]["content"]
+    assert [m["role"] for m in msgs] == ["user", "assistant"] and msgs[1]["content"].startswith("지금은 답할 수 없어요")
 
 
 def test_steps_kept_when_final_text_empty(client, session):
