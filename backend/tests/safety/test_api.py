@@ -10,7 +10,8 @@ from fastapi.testclient import TestClient
 from app.main import app
 from app.safety.places import PlacePoint, PlacesUnavailable, get_place_lookup
 from app.safety.router import get_sources
-from app.safety.sources import KST, Fetched, MockSources
+from app.safety.config import SafetySettings
+from app.safety.sources import KST, Fetched, LiveSources, MockSources, SimSources, build_sources
 
 NOW = datetime(2026, 10, 4, 10, 0, tzinfo=KST)
 PLACES = {
@@ -385,6 +386,80 @@ def test_sim_rejects_bad_requests(use):
     assert r.status_code == 404 and r.json()["detail"]["code"] == "sim_disabled"
 
 
+
+
+# ---------- 실제 <-> 가상 전환 (SAFETY_SIM_ENABLED) ----------
+
+def switchable(mode="live"):
+    """실제 소스 자리에 flood mock(시각 NOW)을 넣는다. 가상 상황은 calm 에서 시작."""
+    return SimSources(MockSources("flood", clock=lambda: NOW), CountingMock("calm"), mode=mode)
+
+
+def test_switch_between_live_and_sim(use):
+    client = use(switchable())
+    st = ok(client.get("/safety/sim"))
+    assert st["mode"] == "live" and st["switchable"] is True and st["scenario"] == "calm"
+    s = ok(client.get("/safety/status"))
+    assert s["mode"] == "live" and s["scenario"] is None and s["overall_risk"] == "danger"  # 실제(=flood) 데이터
+    assert s["data_status"]["sensors"]["note"] is None  # 가상 시각이 실제와 같으면 옮기지 않는다
+
+    st = ok(client.put("/safety/sim", json={"source": "mock", "scenario": "storm"}))
+    assert st["mode"] == "sim" and st["scenario"] == "storm"
+    s = ok(client.get("/safety/status"))
+    assert s["mode"] == "sim" and s["scenario"] == "storm" and s["warnings"]
+    assert "mock" in s["data_status"]["warnings"]["note"]
+
+    st = ok(client.put("/safety/sim", json={"source": "live"}))
+    assert st["mode"] == "live" and st["scenario"] == "storm"  # 시나리오는 기억해 두고 쓰지 않는다
+    s = ok(client.get("/safety/status"))
+    assert s["mode"] == "live" and s["warnings"] == []
+
+    # 시나리오만 주면 가상 상황으로 바뀐다 (기존 재생 파일의 sim 단계가 그대로 동작)
+    assert ok(client.put("/safety/sim", json={"scenario": "calm"}))["mode"] == "sim"
+    assert ok(client.get("/safety/status"))["overall_risk"] == "safe"
+    # source 를 같이 주면 source 를 따른다
+    st = ok(client.put("/safety/sim", json={"source": "live", "scenario": "storm"}))
+    assert st["mode"] == "live" and st["scenario"] == "storm"
+
+
+def test_virtual_clock_applies_to_live_by_shifting_data(use):
+    """발표일(실제)에 계획일(가상)로 시각을 옮겨도 실제 데이터로 판단한다: 실제 관측·예보의 시각을 가상 시각으로 옮긴다."""
+    client = use(switchable())
+    virtual = NOW - timedelta(days=3, minutes=10)
+    st = ok(client.put("/safety/sim", json={"now": virtual.isoformat()}))
+    assert st["mode"] == "live" and st["offset_minutes"] == -(3 * 24 * 60 + 10)
+    s = ok(client.get("/safety/status"))
+    assert s["now"].startswith("2026-10-01T09:50") and s["data_status"]["forecast"]["note"].startswith("실제 데이터")
+    assert s["data_status"]["sensors"]["fetched_at"].startswith("2026-10-01T10:00")  # 시간 단위로 옮김
+    sit = ok(client.get("/safety/situation"))
+    real = ok(use(MockSources("flood", clock=lambda: NOW)).get("/safety/situation"))
+    assert datetime.fromisoformat(sit["forecast_until"]) == datetime.fromisoformat(real["forecast_until"]) - timedelta(days=3)
+    assert sit["zones"] == real["zones"]
+    # 가상 날짜의 방문도 (옮긴) 실제 예보로 판단한다 (판단 보류가 아님)
+    client = use(client_src := switchable())
+    ok(client.put("/safety/sim", json={"now": virtual.isoformat()}))
+    r = ok(client.post("/safety/assess", json={"visits": [visit("p-breakwater", "2026-10-01", "13:00")]}))
+    assert r["visits"][0]["risk"] is not None and r["visits"][0]["horizon"] == "short_range"
+    assert client_src.mode == "live"
+
+
+def test_mock_only_cannot_switch_to_live(use):
+    client = use(CountingMock())
+    st = ok(client.get("/safety/sim"))
+    assert st["mode"] == "sim" and st["switchable"] is False
+    r = client.put("/safety/sim", json={"source": "live"})
+    assert r.status_code == 409 and r.json()["detail"]["code"] == "switch_disabled"
+    assert ok(client.put("/safety/sim", json={"source": "mock", "scenario": "storm"}))["scenario"] == "storm"
+    assert client.put("/safety/sim", json={"source": "real"}).status_code == 422
+
+
+def test_build_sources_modes():
+    assert isinstance(build_sources(SafetySettings(source="live", sim_enabled=False)), LiveSources)
+    assert isinstance(build_sources(SafetySettings(source="mock", sim_enabled=False)), MockSources)
+    src = build_sources(SafetySettings(source="live", sim_enabled=True))
+    assert isinstance(src, SimSources) and src.mode == "live"
+    src = build_sources(SafetySettings(source="mock", sim_enabled=True, mock_scenario="storm"))
+    assert src.mode == "sim" and src.scenario == "storm" and src.snapshot() is src.mock
 
 # ---------- 데이터 장애는 낮은 단계가 아니라 판단 보류 ----------
 

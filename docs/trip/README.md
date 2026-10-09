@@ -250,7 +250,7 @@ Agent 는 매 턴 `GET /trip/plans/{plan_id}/state` 를 부르고, `active` 면 
 
 trip·agent·planner·safety 가 **같은 '지금'**을 봐야 한다. 시뮬레이션 시각이 서비스마다 다르면 데모 중 "아직 여행일이 아니에요"가 나온다.
 
-- 기준은 safety 의 시각이다 (`PUT /safety/sim` 의 `now`, `SAFETY_SOURCE=mock` 일 때). safety 가 시각의 단일 원천이다.
+- 기준은 safety 의 시각이다 (`PUT /safety/sim` 의 `now`, `SAFETY_SOURCE=mock` 또는 `SAFETY_SIM_ENABLED=true` 일 때 — 후자는 실제 데이터 모드에서도 가상 시각을 쓴다, docs/safety/README.md §1). safety 가 시각의 단일 원천이다.
 - trip 은 `TRIP_CLOCK=safety` 이면 `GET /safety/sim` 의 `now`(실제 시간만큼 흘러감)를 5초 캐시해서 쓰고, 실패하면 시스템 시각. `TRIP_CLOCK=system` 이면 시스템 시각만.
 - 위치의 `recorded_at` 은 판정에 쓰는 시각이다. 재생기는 시뮬레이션 시각 기준 `recorded_at` 을 넣는다.
 - planner 는 같은 규칙(`PLANNER_CLOCK=safety`, `GET /safety/sim` 5초 캐시, 실패하면 시스템 시각)으로 맞췄다 (`docs/planner/README.md` §8.3).
@@ -349,6 +349,7 @@ trip events 3 [--after N] [--follow]  이벤트 보기 (--follow: 3초마다 폴
 trip events 3 --seen 41               이벤트 확인 표시 (delivered -> handled)
 trip tick 3 [--at 15:45]              틱을 지금 한 번 (지연·안전 경고·자동 종료·선제 턴 전송)
 sim / sim scenario storm / sim now 2026-10-10T14:00 (또는 14:00) / sim reset   safety 가상 상황·시각 (PUT /safety/sim)
+sim live / sim mock                   실제 데이터 <-> 가상 상황 (SAFETY_SIM_ENABLED=true)
 ```
 
 ```bash
@@ -359,7 +360,7 @@ python scripts/planner/cli.py trip replay new scene4_safety --speed 60   # 장�
 python scripts/planner/cli.py trip end 7      # 재생이 끝나도 여행일은 진행 중이다. 끝내지 않으면 백그라운드 틱이 계속 판정한다
 ```
 
-**재생 파일** (`scripts/trip/scenes/*.json`): 데모 장면과 테스트를 같은 파일로 만든다. 펼침(시간순 동작 목록)은 `scripts/trip/scene.py` 하나를 CLI 와 pytest 가 같이 쓴다.
+**재생 파일** (`scripts/trip/scenes/*.json`): 데모 장면과 테스트를 같은 파일로 만든다. 장면 ①~④ 를 한 계획으로 이어서 하는 발표 진행은 `scripts/demo/run_demo.py` (같은 재생기 `trip_cli.Player`, docs/demo/README.md). 펼침(시간순 동작 목록)은 `scripts/trip/scene.py` 하나를 CLI 와 pytest 가 같이 쓴다.
 세 파일 모두 데모 데이터(`docs/app/README.md` §6.1)의 계획이다: 가옥거리 12:30 → 구룡포항 13:40 → 과메기문화관 14:47 → 북방파제 16:00 → 카페파도 16:53(차량) → 17:38 종료, `end_before 18:00`.
 북방파제(`poi-gr-breakwater-north`)는 places 에 직접 정의한 장소다 (docs/places/README.md "직접 정의한 장소").
 

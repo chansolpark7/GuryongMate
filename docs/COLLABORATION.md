@@ -35,6 +35,7 @@ LLM: Claude API(운영 기본, Haiku 5.5) · OpenAI · 호스트 Ollama(host.doc
 | trip | 동행 담당 | `backend/app/trip/` | `backend/app/trip/`, `backend/tests/trip/`, `scripts/trip/`, `docs/trip/` | `trip_*` | `/trip/docs` |
 | docent | 가이드 담당 | `backend/app/docent/` | `backend/app/docent/`, `backend/tests/docent/`, `docs/docent/` | `docent_*` | `/docent/docs` |
 | account | 계정 담당 | `backend/app/account/` | `backend/app/account/`, `backend/requirements/account.txt`, `backend/tests/account/`, `docs/account/` | `account_*` | `/account/docs` |
+| demo (발표 진행) | 발표 담당 | `scripts/demo/` | `scripts/demo/`, `docs/demo/` | 없음 (다른 서비스 API 만 부름) | `docs/demo/README.md` |
 | gateway·db·공용 | 공용 | — | 아래 "공용 파일" | — | — |
 
 ### 백엔드 서비스는 이미지 하나, 컨테이너 여러 개

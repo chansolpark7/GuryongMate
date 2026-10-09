@@ -5,7 +5,8 @@
 - POST /safety/assess          일정 항목(장소+시각)별 위험도와 행동 지침 (계획 Agent 용)
 - GET  /safety/zones           방파제·침수 감시 구역 위치 (지도 표시용)
 - GET  /safety/situation       지금 상황 요약 + fingerprint (planner 가 바뀌었을 때만 일정을 다시 점검)
-- GET/PUT /safety/sim          가상 상황 (SAFETY_SOURCE=mock 일 때만): 시나리오·가상 시각 바꾸기
+- GET/PUT /safety/sim          가상 상황 (SAFETY_SOURCE=mock 또는 SAFETY_SIM_ENABLED=true): 시나리오·가상 시각,
+                               실제(live) <-> 가상(mock) 전환 (SAFETY_SIM_ENABLED 일 때)
 - GET  /safety/avoid           지금 길찾기에서 피할 구역 다각형 (routing 서비스가 우회에 사용)
 
 위험 단계는 safe / caution / danger 3단계. 여행일까지 많이 남았으면 판단하지 않고(risk=null) '바꾸지 말라'는 지침을
@@ -24,7 +25,7 @@ from app.safety.schemas import (
     AssessRequest, AssessResult, AvoidResult, Outlook, SimState, SimUpdate, Situation, Status, ZoneView,
 )
 from app.safety.service import SafetyService
-from app.safety.sources import KST, MOCK_SCENARIOS, MockSources, Sources, build_sources
+from app.safety.sources import KST, MOCK_SCENARIOS, MockSources, SimSources, Sources, build_sources
 
 router = APIRouter(prefix="/safety", tags=["safety"])
 
@@ -95,37 +96,46 @@ def situation(svc: Service, now: NowParam = None) -> Situation:
     return svc.situation(now)
 
 
-# ---------- 가상 상황 (mock 전용) ----------
+# ---------- 가상 상황 (mock, 또는 실제 <-> 가상 전환) ----------
 
-def _mock(sources: Sources) -> MockSources:
-    if not isinstance(sources, MockSources):
+def _sim(sources: Sources) -> MockSources | SimSources:
+    if not isinstance(sources, (MockSources, SimSources)):
         raise HTTPException(404, {"code": "sim_disabled",
-                                  "message": "가상 상황은 SAFETY_SOURCE=mock 일 때만 쓸 수 있습니다."})
+                                  "message": "가상 상황은 SAFETY_SOURCE=mock 또는 SAFETY_SIM_ENABLED=true 일 때만 쓸 수 있습니다."})
     return sources
 
 
-def _sim_state(src: MockSources) -> SimState:
-    return SimState(scenario=src.scenario, now=src.now(), offset_minutes=round(src.offset.total_seconds() / 60),
-                    scenarios=MOCK_SCENARIOS)
+def _sim_state(src: MockSources | SimSources) -> SimState:
+    switchable = isinstance(src, SimSources)
+    return SimState(mode=src.mode if switchable else "sim", scenario=src.scenario, switchable=switchable,
+                    now=src.now(), offset_minutes=round(src.offset.total_seconds() / 60), scenarios=MOCK_SCENARIOS)
 
 
 @router.get("/sim", response_model=SimState)
 def get_sim(sources: Annotated[Sources, Depends(get_sources)]) -> SimState:
-    return _sim_state(_mock(sources))
+    return _sim_state(_sim(sources))
 
 
 @router.put("/sim", response_model=SimState)
 def put_sim(body: SimUpdate, sources: Annotated[Sources, Depends(get_sources)]) -> SimState:
-    """시나리오와 가상 시각을 바꾼다. 가상 시각은 설정한 뒤 실제 시간만큼 흘러간다 (서비스를 다시 띄우면 초기화)."""
-    src = _mock(sources)
+    """시나리오·가상 시각·데이터 모드를 바꾼다. 가상 시각은 설정한 뒤 실제 시간만큼 흘러가고 live·sim 모두에 쓴다 (서비스를 다시 띄우면 초기화).
+    scenario 를 주면 가상 상황(mock)으로 바뀐다 (source 를 같이 주면 source 를 따른다)."""
+    src = _sim(sources)
     if body.scenario is not None and body.scenario not in MOCK_SCENARIOS:
         raise HTTPException(422, {"code": "unknown_scenario", "message": f"알 수 없는 시나리오: {body.scenario}",
                                   "scenarios": sorted(MOCK_SCENARIOS)})
+    source = body.source or ("mock" if body.scenario is not None else None)
+    if source == "live" and not isinstance(src, SimSources):
+        raise HTTPException(409, {"code": "switch_disabled",
+                                  "message": "실제 데이터로 바꾸려면 SAFETY_SIM_ENABLED=true 로 띄워야 합니다."})
     scenario, offset = body.scenario or src.scenario, src.offset
     if body.reset_clock:
         offset = timedelta(0)
     if body.now is not None:
         when = body.now if body.now.tzinfo else body.now.replace(tzinfo=KST)
         offset = when - src._clock()
-    src.set(scenario, offset)
+    if isinstance(src, SimSources):
+        src.set(scenario, offset, {"live": "live", "mock": "sim"}.get(source))
+    else:
+        src.set(scenario, offset)
     return _sim_state(src)

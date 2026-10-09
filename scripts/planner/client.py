@@ -367,12 +367,14 @@ class PlannerClient:
     def trip_event_seen(self, plan_id: int, event_id: int) -> dict:
         return self._req("POST", f"/trip/plans/{plan_id}/events/{event_id}/seen")
 
-    # ----- 가상 상황·시각 (safety, SAFETY_SOURCE=mock) -----
+    # ----- 가상 상황·시각 (safety, SAFETY_SOURCE=mock 또는 SAFETY_SIM_ENABLED) -----
     def sim(self) -> dict:
         return self._req("GET", "/safety/sim")
 
-    def set_sim(self, scenario: str | None = None, now: str | None = None, reset_clock: bool = False) -> dict:
-        body = {k: v for k, v in {"scenario": scenario, "now": now}.items() if v is not None}
+    def set_sim(self, scenario: str | None = None, now: str | None = None, reset_clock: bool = False,
+                source: str | None = None) -> dict:
+        """source: live(실제 데이터) | mock(가상 상황). SAFETY_SIM_ENABLED 일 때 live 로 바꿀 수 있다. scenario 를 주면 mock."""
+        body = {k: v for k, v in {"scenario": scenario, "now": now, "source": source}.items() if v is not None}
         if reset_clock:
             body["reset_clock"] = True
         return self._req("PUT", "/safety/sim", json=body)

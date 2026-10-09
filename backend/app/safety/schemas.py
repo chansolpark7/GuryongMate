@@ -218,6 +218,8 @@ class Status(BaseModel):
     next_hours: list[Hazard] = Field(description="앞으로 12시간 예보상 위험 신호")
     guidance: str
     data_status: dict[str, SourceStatus]
+    mode: Literal["live", "sim"] = Field("live", description="live: 실제 데이터 / sim: 가상 상황(mock 시나리오)")
+    scenario: str | None = Field(None, description="가상 상황 시나리오 (mode=sim 일 때만)")
 
 
 class AvoidZone(BaseModel):
@@ -267,7 +269,9 @@ class Situation(BaseModel):
 
 
 class SimState(BaseModel):
-    scenario: str
+    mode: Literal["live", "sim"] = Field(description="live: 실제 데이터 / sim: 가상 상황 (scenario 를 씀)")
+    scenario: str = Field(description="가상 상황 시나리오 (mode=live 이면 쓰지 않고, sim 으로 바꾸면 이것을 쓴다)")
+    switchable: bool = Field(description="실행 중에 live <-> sim 을 바꿀 수 있는지 (SAFETY_SIM_ENABLED)")
     now: datetime = Field(description="지금 가상 시각 (시뮬레이션 시각이 아니면 실제 시각)")
     offset_minutes: int = Field(description="실제 시각과의 차이")
     scenarios: dict[str, str] = Field(description="쓸 수 있는 시나리오와 설명")
@@ -276,6 +280,9 @@ class SimState(BaseModel):
 class SimUpdate(BaseModel):
     model_config = {"extra": "forbid"}
 
+    source: Literal["live", "mock"] | None = Field(
+        None, description="live: 실제 데이터 / mock: 가상 상황 (SAFETY_SIM_ENABLED 일 때만 live 로 바꿀 수 있다). "
+                          "생략하면 그대로, scenario 를 주면 mock")
     scenario: str | None = Field(None, description="바꿀 시나리오 (생략하면 그대로)")
     now: datetime | None = Field(None, description="가상 시각. 이후 실제 시간만큼 흘러간다. 생략하면 그대로")
     reset_clock: bool = Field(False, description="true 면 실제 시각으로 되돌린다")

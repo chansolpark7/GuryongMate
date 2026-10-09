@@ -20,10 +20,10 @@
 | `GET` | `/safety/status` | 지금 구역별 위험도, 센서 실측, 방파제 CCTV 집계, 특보 | 앱 지도, 현재 상황 |
 | `GET` | `/safety/zones` | 방파제·침수 감시 구역 위치 | 앱 지도 |
 | `GET` | `/safety/situation` | 지금 상황 요약 + `fingerprint` (상황이 바뀌면 달라짐) | planner 주기 점검 |
-| `GET`·`PUT` | `/safety/sim` | 가상 상황: 시나리오·가상 시각 바꾸기 (`SAFETY_SOURCE=mock` 일 때만) | 시연·테스트 |
+| `GET`·`PUT` | `/safety/sim` | 가상 상황: 시나리오·가상 시각 바꾸기, 실제 ↔ 가상 전환 (`SAFETY_SOURCE=mock` 또는 `SAFETY_SIM_ENABLED=true`) | 시연·테스트·발표 데모 |
 | `GET` | `/safety/avoid?min_risk=caution` | 지금 길찾기에서 피할 구역 다각형 | routing (위험 구역 우회) |
 
-모든 조회에 `now`(기준 시각 덮어쓰기)를 줄 수 있다. 주지 않으면 지금 시각이고, mock 에서 가상 시각을 설정했으면 그 시각이다 (§1.6).
+모든 조회에 `now`(기준 시각 덮어쓰기)를 줄 수 있다. 주지 않으면 지금 시각이고, 가상 시각을 설정했으면 그 시각이다 (`/safety/sim`).
 
 ### POST /safety/assess
 ```json
@@ -100,6 +100,7 @@
 지금 상태. 구역(북·남방파제, 침수 감시 구역 9곳)별 `risk`·`reasons`, 센서 10대 실측값, 방파제별 최근 1시간 CCTV 집계,
 자외선, 발효 중 특보, 앞으로 12시간 예보상 위험 신호. **지금 상태일 뿐이라 다른 날짜 일정 판단에는 쓰지 않는다.**
 구역·센서의 `risk` 는 3단계, 데이터를 받지 못해 판단하지 못한 구역은 `null`. 센서의 참고 신호(노면 수위 감지)는 `note`.
+`mode`(`live` 실제 데이터 / `sim` 가상 상황)와 `scenario`(sim 일 때 시나리오, live 면 `null`)로 지금 어느 데이터인지 알려준다 — 앱이 "실제 데이터"·"가상 상황" 표시에 쓴다.
 
 ### GET /safety/situation
 지금 상황 요약과 `fingerprint`. **이용자는 fingerprint 를 저장해 두었다가 바뀌었을 때만 일정을 다시 점검한다**
@@ -122,16 +123,31 @@
   - 참고 신호만 바뀌어도 바뀐다 (약한 비 소식도 일정 조정에 참고할 수 있으니).
   - 데이터 장애·복구도 바뀐다.
 
-### GET·PUT /safety/sim (가상 상황, mock 전용)
-`SAFETY_SOURCE=mock` 일 때만 열린다 (아니면 `404 sim_disabled`). 서비스를 다시 띄우면 초기화된다.
+### GET·PUT /safety/sim (가상 상황, 실제 ↔ 가상 전환)
+`SAFETY_SOURCE=mock` 또는 `SAFETY_SIM_ENABLED=true` 일 때만 열린다 (아니면 `404 sim_disabled`). 서비스를 다시 띄우면 초기화된다.
+
+| 설정 | 시작 모드 | 실행 중 전환 |
+|---|---|---|
+| `SAFETY_SOURCE=live` (기본) | live | 없음 (`/safety/sim` 404) |
+| `SAFETY_SOURCE=mock` | sim | 시나리오·가상 시각만 (`source: "live"` 는 `409 switch_disabled`) |
+| `SAFETY_SIM_ENABLED=true` (+ `SAFETY_SOURCE`) | `SAFETY_SOURCE` 대로 (live 면 live, mock 이면 sim) | **live ↔ sim** + 시나리오·가상 시각 (발표 데모: 실제 DT 데이터 화면 → 가상 악천후) |
+
 ```http
 PUT /safety/sim
-{"scenario": "wind_tomorrow", "now": "2026-10-05T10:30:00+09:00"}
+{"source": "mock", "scenario": "storm", "now": "2026-10-10T15:20:00+09:00"}
 ```
+- `source` (선택): `live`(실제 데이터) | `mock`(가상 상황). 생략하면 그대로인데, **`scenario` 를 주면 `mock`** 이다 (기존 재생 파일의 `sim` 단계가 그대로 가상 상황으로 바꾼다).
+  `scenario` 와 `source: "live"` 를 같이 주면 시나리오만 기억해 두고 live 로 둔다.
 - `scenario` (선택): 아래 시나리오 중 하나. 모르는 값은 `422 unknown_scenario`.
-- `now` (선택): 가상 시각. 설정한 뒤 실제 시간만큼 흘러간다. `now` 를 주지 않은 모든 조회가 이 시각을 쓴다.
+- `now` (선택): 가상 시각. 설정한 뒤 실제 시간만큼 흘러간다. `now` 를 주지 않은 모든 조회가 이 시각을 쓴다. **live·sim 모두 적용된다.**
 - `reset_clock: true`: 실제 시각으로 되돌린다. 정의되지 않은 필드는 422.
-- 응답: `{"scenario", "now", "offset_minutes", "scenarios": {이름: 설명}}`
+- 응답: `{"mode": "live"|"sim", "scenario", "switchable", "now", "offset_minutes", "scenarios": {이름: 설명}}`.
+  `scenario` 는 live 일 때도 기억해 둔 시나리오(sim 으로 바꾸면 쓸 것)다. 지금 어느 모드인지는 `mode`, `GET /safety/status` 의 `mode`·`scenario` 로도 본다.
+- **live 에서 가상 시각**: 발표일(10/13)에 계획일(10/10) 시각으로 시연하면 실제 예보·CCTV 의 시각이 판단 시각과 맞지 않는다.
+  그래서 live 모드는 **지금 실제 관측·예보를 가상 시각의 것으로 옮겨** 판단한다 (모든 시각을 가상 시각 차이만큼 — 예보가 정시 단위라 시간 단위로 반올림 — 옮김.
+  조위는 그날에 해당하는 실제 날짜의 것을 옮김). 응답 `data_status[*].note` 에 "실제 데이터 (가상 시각에 맞춰 시각을 옮김)" 가 붙는다. 가상 시각이 실제와 같으면 옮기지 않는다.
+- 요청마다 그 순간의 모드로 소스 하나를 정해 끝까지 쓴다 (요청 도중 전환돼도 섞이지 않음). 전환하면 내용이 달라지므로 `/safety/situation` 의 `fingerprint` 가 바뀌어 planner 가 일정을 다시 점검한다.
+- live 로 바꾼 동안 실제 데이터에 주의·위험이 있으면 그대로 planner 경고·trip `safety_raised` 로 이어진다 (실제 상황이므로). 발표 전 확인: `docs/demo/README.md`.
 
 | 시나리오 | 내용 | 기대 결과 |
 |---|---|---|
@@ -293,6 +309,8 @@ curl "localhost:${API_PORT:-8000}/safety/status"           # gateway 까지 띄�
 ```
 - 키 없이 개발: `backend/.env` 에 `SAFETY_SOURCE=mock`. 시작 시나리오는 `SAFETY_MOCK_SCENARIO` (기본 calm),
   실행 중에는 `PUT /safety/sim` 으로 시나리오·가상 시각을 바꾼다 (§1, 응답 `data_status[*].note` 에 mock 표시).
+- 발표 데모: `SAFETY_SIM_ENABLED=true` (+ 키). 실제 데이터로 시작해 `PUT /safety/sim {"source": "mock", "scenario": "storm"}` 으로 바꾸고
+  `{"source": "live"}` 로 되돌린다. CLI: `python scripts/planner/cli.py sim live` / `sim mock` / `sim scenario storm`. 진행 스크립트: `scripts/demo/run_demo.py`.
 - 가상 상황 시연 (일정에 경고가 들어오는지):
   ```bash
   curl -X PUT localhost:8000/safety/sim -H 'content-type: application/json' -d '{"scenario":"wind_tomorrow"}'

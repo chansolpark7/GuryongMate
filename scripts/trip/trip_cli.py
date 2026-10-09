@@ -8,6 +8,7 @@
     trip events 3 [--follow] [--seen 41]  이벤트 보기 (--follow: 폴링, --seen: 확인 표시)
     trip tick 3                           틱(지연·안전 경고·자동 종료)을 지금 한 번
     sim / sim scenario storm / sim now 2026-10-10T14:00 / sim reset    safety 가상 상황·시각
+    sim live / sim mock                   실제 데이터 <-> 가상 상황 (SAFETY_SIM_ENABLED)
 """
 import json
 import time as _time
@@ -176,7 +177,7 @@ def _create_plan(c, spec: dict) -> int:
 
 def cmd_replay(c, a):
     """재생 파일을 시간순으로 실제 API 에 보낸다. --speed: 시뮬레이션 시각이 흐르는 배속 (0 이면 기다리지 않음).
-    가상 시각(safety sim)을 재생 시각에 맞춰 옮긴다 (SAFETY_SOURCE=mock 이어야 planner·trip 의 '지금'이 맞는다)."""
+    가상 시각(safety sim)을 재생 시각에 맞춰 옮긴다 (SAFETY_SOURCE=mock 또는 SAFETY_SIM_ENABLED 여야 planner·trip 의 '지금'이 맞는다)."""
     data = json.loads(_scene_path(a.scene).read_text(encoding="utf-8"))
     print(f"{BOLD}{data.get('name', a.scene)}{RESET}  {DIM}{data.get('description', '')}{RESET}")
     plan = _create_plan(c, data["plan"]) if a.plan == "new" else int(a.plan)
@@ -196,60 +197,98 @@ def cmd_replay(c, a):
             return None
 
     actions = expand(data, coords, path)
-    sim_ok, started, prev, passed, failed = True, False, None, 0, 0
-    for act in actions:
-        if prev is not None and a.speed > 0:
-            _time.sleep(max(0.0, (act.at - prev).total_seconds() / a.speed))
-        prev = act.at
-        if sim_ok:  # 가상 시각을 재생 시각에 맞춘다 (--speed 0 이어도 모든 동작마다)
-            try:
-                c.set_sim(scenario=act.data.get("scenario") if act.kind == "sim" else None, now=act.at.isoformat())
-            except Exception as e:
-                sim_ok = False
-                print(f"{YELLOW}가상 상황을 쓸 수 없습니다 (SAFETY_SOURCE=mock 필요): {e}. 위치의 recorded_at 만으로 재생합니다.{RESET}")
-        if act.kind == "sim":
-            print(f"{DIM}{act.at:%H:%M:%S}{RESET} 가상 상황: {act.data.get('scenario', '-')}")
-            if not started:
-                if sim_ok:
-                    _wait_clock(c, plan, act.at)
-                print_state(c.trip_start(plan))
-                started = True
-            else:
-                _tick(c, plan, act.at, wait=sim_ok and a.speed == 0)
-        elif act.kind == "loc":
-            r = c.trip_location(plan, [_point(act.lat, act.lng, act.at, 10, "replay")])
-            if a.verbose:
-                print(f"{DIM}{act.at:%H:%M:%S} {act.lat:.6f}, {act.lng:.6f}{RESET}")
-            for e in r["events"]:
-                print_event(e)
-        elif act.kind == "skip":
-            _wait_proactive(c, plan)
-            item = next((i for d in c.get_plan(plan)["days"] for i in d["items"]
-                         if i["place_id"] == act.data["place_id"] and i["status"] == "planned"), None)
-            if item is None:
-                print(f"{YELLOW}건너뛸 항목이 없습니다: {act.data['place_id']}{RESET}")
-            else:
-                c.update_item(plan, item["id"], status="skipped")
-                print(f"{DIM}{act.at:%H:%M:%S}{RESET} 일정에서 뺌: {item['place']['title'] if item['place'] else item['place_id']}")
-        elif act.kind == "accept":
-            _wait_proactive(c, plan)
-            _accept_proactive(c, plan, act.at, act.data)
-        elif act.kind == "tick":
-            _tick(c, plan, act.at, wait=sim_ok and a.speed == 0)
-        elif act.kind == "expect":
-            if a.speed > 0:
-                _time.sleep(0.5)  # 응답 뒤 선제 턴 전송(백그라운드)을 조금 기다린다
-            ok = matches(act.data, c.trip_events(plan, 0, 200))
-            passed, failed = passed + ok, failed + (not ok)
-            print(f"{act.at:%H:%M:%S} 기대 {act.data}: {GREEN + '통과' if ok else RED + '실패'}{RESET}")
-    if sim_ok and prev is not None and a.speed == 0:
-        _wait_clock(c, plan, prev)  # 끝난 뒤 상태와 이어서 하는 `trip tick` 이 재생 마지막 시각을 보게
+    player = Player(c, plan, a.speed, verbose=a.verbose)
+    player.play(actions)
+    player.finish()
     print()
     print_state(c.trip_state(plan))
-    print(f"\n기대 {passed + failed}개 중 {passed}개 통과" + (f", {RED}{failed}개 실패{RESET}" if failed else ""))
+    print(f"\n기대 {player.passed + player.failed}개 중 {player.passed}개 통과"
+          + (f", {RED}{player.failed}개 실패{RESET}" if player.failed else ""))
 
 
-def _tick(c, plan: int, at: datetime, wait: bool = False) -> None:
+class Player:
+    """펼친 동작 목록(scene.expand)을 시간순으로 실제 API 에 보낸다. `trip replay` 와 데모 진행(scripts/demo/run_demo.py)이 같이 쓴다.
+    speed: 시뮬레이션 시각이 흐르는 배속 (0 이면 기다리지 않음). stay_speed: 한 자리에 머무는 동안의 배속 (생략하면 speed).
+    가상 시각(safety sim)을 동작마다 재생 시각으로 옮긴다 (SAFETY_SOURCE=mock 또는 SAFETY_SIM_ENABLED 여야 planner·trip 의 '지금'이 맞는다).
+    play() 를 여러 번 부르면 이어서 재생한다 (여행일은 처음 sim 동작에서 시작하거나, started=True 로 두고 직접 시작)."""
+
+    def __init__(self, c, plan: int, speed: float, stay_speed: float | None = None, verbose: bool = False,
+                 on_event=None):
+        self.c, self.plan, self.speed, self.verbose = c, plan, speed, verbose
+        self.stay_speed = speed if stay_speed is None else stay_speed
+        self.on_event = on_event or print_event
+        self.sim_ok, self.started, self.prev, self.prev_pos = True, False, None, None
+        self.passed = self.failed = 0
+        self.results: list[tuple[dict, bool]] = []  # (기대, 통과)
+
+    def _sleep(self, act) -> None:
+        if self.prev is None:
+            return
+        staying = act.kind == "loc" and self.prev_pos == (act.lat, act.lng)
+        speed = self.stay_speed if staying else self.speed
+        if speed > 0:
+            _time.sleep(max(0.0, (act.at - self.prev).total_seconds() / speed))
+
+    def play(self, actions) -> None:
+        c, plan = self.c, self.plan
+        for act in actions:
+            self._sleep(act)
+            self.prev = act.at
+            if self.sim_ok:  # 가상 시각을 재생 시각에 맞춘다 (--speed 0 이어도 모든 동작마다)
+                try:
+                    c.set_sim(scenario=act.data.get("scenario") if act.kind == "sim" else None, now=act.at.isoformat())
+                except Exception as e:
+                    self.sim_ok = False
+                    print(f"{YELLOW}가상 상황을 쓸 수 없습니다 (SAFETY_SOURCE=mock 또는 SAFETY_SIM_ENABLED 필요): {e}. "
+                          f"위치의 recorded_at 만으로 재생합니다.{RESET}")
+            if act.kind == "sim":
+                print(f"{DIM}{act.at:%H:%M:%S}{RESET} 가상 상황: {act.data.get('scenario', '-')}")
+                if not self.started:
+                    if self.sim_ok:
+                        _wait_clock(c, plan, act.at)
+                    print_state(c.trip_start(plan))
+                    self.started = True
+                else:
+                    _tick(c, plan, act.at, wait=self.sim_ok and self.speed == 0, on_event=self.on_event)
+            elif act.kind == "loc":
+                r = c.trip_location(plan, [_point(act.lat, act.lng, act.at, 10, "replay")])
+                self.prev_pos = (act.lat, act.lng)
+                if self.verbose:
+                    print(f"{DIM}{act.at:%H:%M:%S} {act.lat:.6f}, {act.lng:.6f}{RESET}")
+                for e in r["events"]:
+                    self.on_event(e)
+            elif act.kind == "skip":
+                _wait_proactive(c, plan)
+                item = next((i for d in c.get_plan(plan)["days"] for i in d["items"]
+                             if i["place_id"] == act.data["place_id"] and i["status"] == "planned"), None)
+                if item is None:
+                    print(f"{YELLOW}건너뛸 항목이 없습니다: {act.data['place_id']}{RESET}")
+                else:
+                    c.update_item(plan, item["id"], status="skipped")
+                    print(f"{DIM}{act.at:%H:%M:%S}{RESET} 일정에서 뺌: {item['place']['title'] if item['place'] else item['place_id']}")
+            elif act.kind == "accept":
+                _wait_proactive(c, plan)
+                _accept_proactive(c, plan, act.at, act.data)
+            elif act.kind == "tick":
+                _tick(c, plan, act.at, wait=self.sim_ok and self.speed == 0, on_event=self.on_event)
+            elif act.kind == "expect":
+                self.expect(act.data, act.at)
+
+    def expect(self, want: dict, at: datetime | None = None) -> bool:
+        if self.speed > 0:
+            _time.sleep(0.5)  # 응답 뒤 선제 턴 전송(백그라운드)을 조금 기다린다
+        ok = matches(want, self.c.trip_events(self.plan, 0, 200))
+        self.passed, self.failed = self.passed + ok, self.failed + (not ok)
+        self.results.append((want, ok))
+        print(f"{at or _now(self.c):%H:%M:%S} 기대 {want}: {GREEN + '통과' if ok else RED + '실패'}{RESET}")
+        return ok
+
+    def finish(self) -> None:
+        if self.sim_ok and self.prev is not None and self.speed == 0:
+            _wait_clock(self.c, self.plan, self.prev)  # 끝난 뒤 상태와 이어서 하는 `trip tick` 이 재생 마지막 시각을 보게
+
+
+def _tick(c, plan: int, at: datetime, wait: bool = False, on_event=None) -> None:
     """planner 안전 점검(개발 모드)을 바로 돌리고 재생 시각으로 trip 틱. 운영 모드면 점검은 planner 주기(60초)에 맡긴다.
     wait: 틱이 보내는 선제 턴은 trip·planner 의 지금을 쓰므로, 기다리지 않는 재생(--speed 0)이면 시계가 따라올 때까지 기다린다."""
     if wait:
@@ -258,7 +297,8 @@ def _tick(c, plan: int, at: datetime, wait: bool = False) -> None:
         c.safety_scan()
     except Exception:
         pass
-    _print_result(c.trip_tick(plan, at.isoformat()), quiet=True)
+    for e in c.trip_tick(plan, at.isoformat()).get("events", []):
+        (on_event or print_event)(e)
 
 
 def _accept_proactive(c, plan: int, at: datetime, expect: dict) -> None:
@@ -307,7 +347,10 @@ def _wait_clock(c, plan: int, target: datetime, limit_sec: float = 10) -> None:
 # ---------- sim ----------
 
 def print_sim(s: dict) -> None:
-    print(f"가상 상황: {s['scenario']} · 지금 {s['now'][:19]} (실제와 {s['offset_minutes']}분 차이)")
+    mode = s.get("mode", "sim")
+    what = f"가상 상황 {s['scenario']}" if mode == "sim" else f"실제 데이터 (가상 상황 {s['scenario']} 은 쓰지 않음)"
+    switch = " · live/mock 전환 가능" if s.get("switchable") else ""
+    print(f"{what} · 지금 {s['now'][:19]} (실제와 {s['offset_minutes']}분 차이){switch}")
     print(f"{DIM}  시나리오: {', '.join(s['scenarios'])}{RESET}")
 
 
@@ -324,6 +367,8 @@ def cmd_sim(c, a):
         print_sim(c.set_sim(now=(t if t.tzinfo else t.replace(tzinfo=KST)).isoformat()))
     elif a.sim_cmd == "reset":
         print_sim(c.set_sim(reset_clock=True))
+    elif a.sim_cmd in ("live", "mock"):
+        print_sim(c.set_sim(source=a.sim_cmd))
 
 
 # ---------- 등록 ----------
@@ -366,7 +411,8 @@ def register(sub) -> None:
     p = add("tick", cmd_tick, "틱을 지금 한 번 (지연 재판정·안전 경고 수집·자동 종료·선제 턴 전송)")
     p.add_argument("--at", help="판정 시각 HH:MM (생략: trip 의 지금)")
 
-    sp = sub.add_parser("sim", help="safety 가상 상황·시각 (SAFETY_SOURCE=mock): sim / sim scenario storm / sim now 14:00")
+    sp = sub.add_parser("sim", help="safety 가상 상황·시각 (SAFETY_SOURCE=mock 또는 SAFETY_SIM_ENABLED): sim / sim scenario storm / "
+                                    "sim now 14:00 / sim live / sim mock")
     sp.set_defaults(fn=cmd_sim)
     ss = sp.add_subparsers(dest="sim_cmd", metavar="명령")
     p = ss.add_parser("scenario", help="calm | rain | wind_tomorrow | flood | storm")
@@ -374,3 +420,5 @@ def register(sub) -> None:
     p = ss.add_parser("now", help="가상 시각 (2026-10-10T14:00 또는 HH:MM)")
     p.add_argument("when")
     ss.add_parser("reset", help="실제 시각으로")
+    ss.add_parser("live", help="실제 데이터로 (SAFETY_SIM_ENABLED, 가상 시각은 그대로)")
+    ss.add_parser("mock", help="가상 상황으로 (지금 시나리오)")
