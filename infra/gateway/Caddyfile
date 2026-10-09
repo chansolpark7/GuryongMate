@@ -26,6 +26,10 @@
 		reverse_proxy routing:8000
 	}
 
+	handle /docent* {
+		reverse_proxy docent:8000
+	}
+
 	handle /agent* {
 		# 채팅은 SSE 스트림이라 버퍼링 없이 바로 흘려보낸다
 		reverse_proxy agent:8000 {

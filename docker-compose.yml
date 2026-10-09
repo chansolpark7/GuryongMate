@@ -29,6 +29,7 @@ x-backend-env: &backend-env
   PLANNER_ROUTING_BASE_URL: http://gateway
   ROUTING_SAFETY_BASE_URL: http://gateway
   ROUTING_VALHALLA_URL: http://valhalla:8002
+  DOCENT_API_BASE_URL: http://gateway
 
 services:
   gateway:
@@ -44,6 +45,7 @@ services:
       - safety
       - account
       - routing
+      - docent
 
   db:
     image: pgvector/pgvector:pg16
@@ -152,6 +154,16 @@ services:
     environment:
       <<: *backend-env
       SERVICE: account
+    depends_on:
+      db:
+        condition: service_healthy
+
+  # 사용자 메모리·가이드 노트 저장, 외부 검색·페이지 읽기 대행 (LLM 없음). docs/docent/README.md
+  docent:
+    <<: *backend
+    environment:
+      <<: *backend-env
+      SERVICE: docent
     depends_on:
       db:
         condition: service_healthy
