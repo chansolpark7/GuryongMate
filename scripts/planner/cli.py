@@ -4,6 +4,7 @@
     python scripts/planner/cli.py shell          # 대화형 (명령을 한 줄씩 입력)
     python scripts/planner/cli.py chat 1         # Planner Agent 와 대화 (응답 실시간 스트리밍)
     python scripts/planner/cli.py login seoyun   # 로그인 (이후 요청은 토큰으로). 로그인 안 했으면 --user 가 X-User-Id
+    python scripts/planner/cli.py trip replay new scene3_delay   # 여행 중 재생 (trip·sim 명령: scripts/trip/trip_cli.py)
 
 환경변수 GURYONG_API_URL, GURYONG_USER 로 기본값을 바꿀 수 있다. 명령 목록은 -h 참고.
 """
@@ -14,10 +15,14 @@ import os
 import shlex
 import sys
 import unicodedata
+from pathlib import Path
 
 import httpx
 
 from client import PlannerApiError, PlannerClient
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "trip"))
+import trip_cli  # noqa: E402  trip·sim 명령 (scripts/trip/)
 
 MODE = {"walk": "도보", "car": "차량"}
 
@@ -763,6 +768,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--thinking", action="store_true", help="모델의 추론 과정도 표시")
     p.add_argument("-m", "--message", action="append",
                    help="이 메시지만 보내고 종료 (여러 번 지정 가능, /accept 같은 명령도 가능)")
+
+    trip_cli.register(sub)
 
     add("shell", None, "대화형 모드")
     return ap
