@@ -1,0 +1,4235 @@
+{
+ "scene": "scene3_delay",
+ "title": "장면 ③ 지연 대응",
+ "description": "일본인 가옥거리에서 30분 더 머묾. 처음 1시간은 예정대로라 알리지 않고, 카페 종료가 18:00 을 넘게 되면(day_overflow·end_before) delay(단계 3, Agent 선제 턴)가 한 번 나온다. 계획: 일본인 가옥거리 12:30 → 구룡포항(점심) 13:40 → 과메기문화관 14:47 → 북방파제 16:00 → 카페파도 16:53(차량) → 17:38 종료, 규칙 end_before 18:00 (hard). docs/app/README.md §6.1",
+ "recorded_at": "2026-10-09T23:38:14+09:00",
+ "backend": {
+  "agent_provider": "scripted:scripts",
+  "safety_source": "mock",
+  "git": "6a7d484"
+ },
+ "plan_id": 244,
+ "session_id": "f71e291ef8354d6686c6ff163161500d",
+ "plan": {
+  "id": 244,
+  "user_id": "74bb7f62aa554ec1861a8a24288ff267",
+  "title": "엄마랑 구룡포",
+  "start_date": "2026-10-10",
+  "end_date": "2026-10-10",
+  "day_start": "12:30",
+  "day_end": "18:00",
+  "travel_mode": "walk",
+  "memo": "",
+  "version": 7,
+  "progress_version": 0,
+  "item_count": 5,
+  "created_at": "2026-10-09T14:38:09.911492Z",
+  "updated_at": "2026-10-09T14:38:09.963579Z",
+  "days": [
+   {
+    "day": 1,
+    "date": "2026-10-10",
+    "weekday": "토",
+    "end_at": "17:38",
+    "items": [
+     {
+      "id": 507,
+      "day": 1,
+      "order": 1,
+      "place_id": "kto-1909659",
+      "place": {
+       "id": "kto-1909659",
+       "title": "구룡포 일본인 가옥거리",
+       "content_type": "관광지",
+       "lat": 35.9906209551,
+       "lng": 129.5604550366,
+       "addr": "경상북도 포항시 남구 구룡포읍 호미로 277",
+       "open_hours": "상시 개방",
+       "rest_date": "연중무휴"
+      },
+      "stay_minutes": 60,
+      "start_time": null,
+      "memo": "",
+      "status": "planned",
+      "travel_mode": null,
+      "leg_mode": null,
+      "travel_minutes": null,
+      "travel_distance_m": null,
+      "travel_source": null,
+      "travel_options": null,
+      "arrive_at": "12:30",
+      "start_at": "12:30",
+      "end_at": "13:30",
+      "arrived_at": null,
+      "done_at": null
+     },
+     {
+      "id": 508,
+      "day": 1,
+      "order": 2,
+      "place_id": "kto-2610501",
+      "place": {
+       "id": "kto-2610501",
+       "title": "구룡포항",
+       "content_type": "관광지",
+       "lat": 35.9893051205,
+       "lng": 129.555641609,
+       "addr": "경상북도 포항시 남구 구룡포읍 호미로 222-1",
+       "open_hours": "상시 개방",
+       "rest_date": "연중무휴"
+      },
+      "stay_minutes": 50,
+      "start_time": null,
+      "memo": "",
+      "status": "planned",
+      "travel_mode": null,
+      "leg_mode": "walk",
+      "travel_minutes": 10,
+      "travel_distance_m": 632,
+      "travel_source": "road",
+      "travel_options": {
+       "walk": {
+        "minutes": 10,
+        "distance_m": 632,
+        "source": "road"
+       },
+       "car": {
+        "minutes": 7,
+        "distance_m": 631,
+        "source": "road"
+       }
+      },
+      "arrive_at": "13:40",
+      "start_at": "13:40",
+      "end_at": "14:30",
+      "arrived_at": null,
+      "done_at": null
+     },
+     {
+      "id": 509,
+      "day": 1,
+      "order": 3,
+      "place_id": "kto-2660046",
+      "place": {
+       "id": "kto-2660046",
+       "title": "구룡포과메기문화관",
+       "content_type": "문화시설",
+       "lat": 35.9927402978,
+       "lng": 129.5617992377,
+       "addr": "경상북도 포항시 남구 구룡포읍 구룡포길117번길 28-8",
+       "open_hours": "09:00~18:00 (입장 마감 17:30)",
+       "rest_date": "매주 월요일 / 공휴일 다음날 / 1월 1일 / 추석 당일"
+      },
+      "stay_minutes": 60,
+      "start_time": null,
+      "memo": "",
+      "status": "planned",
+      "travel_mode": null,
+      "leg_mode": "walk",
+      "travel_minutes": 17,
+      "travel_distance_m": 1006,
+      "travel_source": "road",
+      "travel_options": {
+       "walk": {
+        "minutes": 17,
+        "distance_m": 1006,
+        "source": "road"
+       },
+       "car": {
+        "minutes": 9,
+        "distance_m": 1471,
+        "source": "road"
+       }
+      },
+      "arrive_at": "14:47",
+      "start_at": "14:47",
+      "end_at": "15:47",
+      "arrived_at": null,
+      "done_at": null
+     },
+     {
+      "id": 510,
+      "day": 1,
+      "order": 4,
+      "place_id": "poi-gr-breakwater-north",
+      "place": {
+       "id": "poi-gr-breakwater-north",
+       "title": "구룡포 북방파제",
+       "content_type": "관광지",
+       "lat": 35.988078,
+       "lng": 129.559279,
+       "addr": "경상북도 포항시 남구 구룡포읍 구룡포리 (구룡포항 북방파제)",
+       "open_hours": "상시 개방 (기상 악화 시 출입 자제)",
+       "rest_date": "연중무휴"
+      },
+      "stay_minutes": 40,
+      "start_time": null,
+      "memo": "",
+      "status": "planned",
+      "travel_mode": null,
+      "leg_mode": "walk",
+      "travel_minutes": 13,
+      "travel_distance_m": 886,
+      "travel_source": "road",
+      "travel_options": {
+       "walk": {
+        "minutes": 13,
+        "distance_m": 886,
+        "source": "road"
+       },
+       "car": {
+        "minutes": 10,
+        "distance_m": 1138,
+        "source": "road"
+       }
+      },
+      "arrive_at": "16:00",
+      "start_at": "16:00",
+      "end_at": "16:40",
+      "arrived_at": null,
+      "done_at": null
+     },
+     {
+      "id": 511,
+      "day": 1,
+      "order": 5,
+      "place_id": "kto-2834344",
+      "place": {
+       "id": "kto-2834344",
+       "title": "카페파도",
+       "content_type": "음식점",
+       "lat": 35.9768342269,
+       "lng": 129.5514895569,
+       "addr": "경상북도 포항시 남구 구룡포읍 하정로172번길 2",
+       "open_hours": "10:00~21:00 (마지막 주문 20:30)",
+       "rest_date": "연중무휴"
+      },
+      "stay_minutes": 45,
+      "start_time": null,
+      "memo": "",
+      "status": "planned",
+      "travel_mode": "car",
+      "leg_mode": "car",
+      "travel_minutes": 13,
+      "travel_distance_m": 3265,
+      "travel_source": "road",
+      "travel_options": {
+       "walk": {
+        "minutes": 45,
+        "distance_m": 2922,
+        "source": "road"
+       },
+       "car": {
+        "minutes": 13,
+        "distance_m": 3265,
+        "source": "road"
+       }
+      },
+      "arrive_at": "16:53",
+      "start_at": "16:53",
+      "end_at": "17:38",
+      "arrived_at": null,
+      "done_at": null
+     }
+    ]
+   }
+  ],
+  "constraints": [
+   {
+    "id": 40,
+    "type": "end_before",
+    "params": {
+     "time": "18:00"
+    },
+    "hard": true,
+    "source": "user",
+    "note": "18시 전에 끝내기"
+   }
+  ],
+  "violations": []
+ },
+ "timeline": [
+  {
+   "at": "2026-10-10T12:25:00+09:00",
+   "kind": "sim",
+   "scenario": "calm"
+  },
+  {
+   "at": "2026-10-10T12:25:00+09:00",
+   "kind": "http",
+   "method": "POST",
+   "route": "/trip/plans/{plan_id}/start",
+   "body": {
+    "session_id": "f71e291ef8354d6686c6ff163161500d"
+   },
+   "status": 200,
+   "response": {
+    "plan_id": 244,
+    "active": true,
+    "day": 1,
+    "date": "2026-10-10",
+    "started_at": "2026-10-10T12:25:04.459934+09:00",
+    "ended_at": null,
+    "ended_reason": null,
+    "now": "2026-10-10T12:25:04.464908+09:00",
+    "clock": "sim",
+    "location": null,
+    "current": {
+     "item_id": null,
+     "state": "idle",
+     "since": null
+    },
+    "next": null,
+    "delay_minutes": null,
+    "session_id": "f71e291ef8354d6686c6ff163161500d"
+   }
+  },
+  {
+   "at": "2026-10-10T12:30:00+09:00",
+   "kind": "location",
+   "body": {
+    "lat": 35.9906209551,
+    "lng": 129.5604550366,
+    "accuracy": 10,
+    "recorded_at": "2026-10-10T12:30:00+09:00",
+    "source": "replay"
+   },
+   "response": {
+    "state": {
+     "plan_id": 244,
+     "active": true,
+     "day": 1,
+     "date": "2026-10-10",
+     "started_at": "2026-10-10T12:25:04.459934+09:00",
+     "ended_at": null,
+     "ended_reason": null,
+     "now": "2026-10-10T12:25:04.489242+09:00",
+     "clock": "sim",
+     "location": {
+      "lat": 35.9906209551,
+      "lng": 129.5604550366,
+      "accuracy": 10.0,
+      "recorded_at": "2026-10-10T12:30:00+09:00",
+      "source": "replay"
+     },
+     "current": {
+      "item_id": null,
+      "state": "idle",
+      "since": null
+     },
+     "next": {
+      "item_id": 507,
+      "title": "구룡포 일본인 가옥거리",
+      "planned_start": "12:30",
+      "eta": "12:30"
+     },
+     "delay_minutes": 0,
+     "session_id": "f71e291ef8354d6686c6ff163161500d"
+    },
+    "events": [],
+    "accepted": 1,
+    "ignored": 0
+   }
+  },
+  {
+   "at": "2026-10-10T12:30:30+09:00",
+   "kind": "location",
+   "body": {
+    "lat": 35.9906209551,
+    "lng": 129.5604550366,
+    "accuracy": 10,
+    "recorded_at": "2026-10-10T12:30:30+09:00",
+    "source": "replay"
+   },
+   "response": {
+    "state": {
+     "plan_id": 244,
+     "active": true,
+     "day": 1,
+     "date": "2026-10-10",
+     "started_at": "2026-10-10T12:25:04.459934+09:00",
+     "ended_at": null,
+     "ended_reason": null,
+     "now": "2026-10-10T12:25:04.521658+09:00",
+     "clock": "sim",
+     "location": {
+      "lat": 35.9906209551,
+      "lng": 129.5604550366,
+      "accuracy": 10.0,
+      "recorded_at": "2026-10-10T12:30:30+09:00",
+      "source": "replay"
+     },
+     "current": {
+      "item_id": null,
+      "state": "idle",
+      "since": null
+     },
+     "next": {
+      "item_id": 507,
+      "title": "구룡포 일본인 가옥거리",
+      "planned_start": "12:30",
+      "eta": "12:30"
+     },
+     "delay_minutes": 0,
+     "session_id": "f71e291ef8354d6686c6ff163161500d"
+    },
+    "events": [],
+    "accepted": 1,
+    "ignored": 0
+   }
+  },
+  {
+   "at": "2026-10-10T12:31:00+09:00",
+   "kind": "location",
+   "body": {
+    "lat": 35.9906209551,
+    "lng": 129.5604550366,
+    "accuracy": 10,
+    "recorded_at": "2026-10-10T12:31:00+09:00",
+    "source": "replay"
+   },
+   "response": {
+    "state": {
+     "plan_id": 244,
+     "active": true,
+     "day": 1,
+     "date": "2026-10-10",
+     "started_at": "2026-10-10T12:25:04.459934+09:00",
+     "ended_at": null,
+     "ended_reason": null,
+     "now": "2026-10-10T12:25:04.550612+09:00",
+     "clock": "sim",
+     "location": {
+      "lat": 35.9906209551,
+      "lng": 129.5604550366,
+      "accuracy": 10.0,
+      "recorded_at": "2026-10-10T12:31:00+09:00",
+      "source": "replay"
+     },
+     "current": {
+      "item_id": null,
+      "state": "idle",
+      "since": null
+     },
+     "next": {
+      "item_id": 507,
+      "title": "구룡포 일본인 가옥거리",
+      "planned_start": "12:30",
+      "eta": "12:31"
+     },
+     "delay_minutes": 1,
+     "session_id": "f71e291ef8354d6686c6ff163161500d"
+    },
+    "events": [],
+    "accepted": 1,
+    "ignored": 0
+   }
+  },
+  {
+   "at": "2026-10-10T12:31:30+09:00",
+   "kind": "location",
+   "body": {
+    "lat": 35.9906209551,
+    "lng": 129.5604550366,
+    "accuracy": 10,
+    "recorded_at": "2026-10-10T12:31:30+09:00",
+    "source": "replay"
+   },
+   "response": {
+    "state": {
+     "plan_id": 244,
+     "active": true,
+     "day": 1,
+     "date": "2026-10-10",
+     "started_at": "2026-10-10T12:25:04.459934+09:00",
+     "ended_at": null,
+     "ended_reason": null,
+     "now": "2026-10-10T12:25:04.590223+09:00",
+     "clock": "sim",
+     "location": {
+      "lat": 35.9906209551,
+      "lng": 129.5604550366,
+      "accuracy": 10.0,
+      "recorded_at": "2026-10-10T12:31:30+09:00",
+      "source": "replay"
+     },
+     "current": {
+      "item_id": 507,
+      "state": "visiting",
+      "since": "12:30"
+     },
+     "next": {
+      "item_id": 508,
+      "title": "구룡포항",
+      "planned_start": "13:40",
+      "eta": "13:40"
+     },
+     "delay_minutes": 0,
+     "session_id": "f71e291ef8354d6686c6ff163161500d"
+    },
+    "events": [
+     {
+      "id": 349,
+      "plan_id": 244,
+      "day": 1,
+      "type": "arrived",
+      "level": 2,
+      "severity": "info",
+      "created_at": "2026-10-09T14:38:10.130998Z",
+      "now": "2026-10-10T12:30:00+09:00",
+      "item_ids": [
+       507
+      ],
+      "message": "구룡포 일본인 가옥거리에 도착했어요. 이야기 들어볼까요?",
+      "payload": {
+       "item_id": 507,
+       "place_id": "kto-1909659",
+       "title": "구룡포 일본인 가옥거리",
+       "out_of_order": false
+      },
+      "status": "delivered",
+      "agent": null,
+      "card": {
+       "kind": "docent",
+       "place_id": "kto-1909659",
+       "item_id": 507
+      },
+      "seen_at": null,
+      "attempts": 0,
+      "last_error": null
+     }
+    ],
+    "accepted": 1,
+    "ignored": 0
+   }
+  },
+  {
+   "at": "2026-10-10T12:32:00+09:00",
+   "kind": "location",
+   "body": {
+    "lat": 35.9906209551,
+    "lng": 129.5604550366,
+    "accuracy": 10,
+    "recorded_at": "2026-10-10T12:32:00+09:00",
+    "source": "replay"
+   },
+   "response": {
+    "state": {
+     "plan_id": 244,
+     "active": true,
+     "day": 1,
+     "date": "2026-10-10",
+     "started_at": "2026-10-10T12:25:04.459934+09:00",
+     "ended_at": null,
+     "ended_reason": null,
+     "now": "2026-10-10T12:25:04.614269+09:00",
+     "clock": "sim",
+     "location": {
+      "lat": 35.9906209551,
+      "lng": 129.5604550366,
+      "accuracy": 10.0,
+      "recorded_at": "2026-10-10T12:32:00+09:00",
+      "source": "replay"
+     },
+     "current": {
+      "item_id": 507,
+      "state": "visiting",
+      "since": "12:30"
+     },
+     "next": {
+      "item_id": 508,
+      "title": "구룡포항",
+      "planned_start": "13:40",
+      "eta": "13:40"
+     },
+     "delay_minutes": 0,
+     "session_id": "f71e291ef8354d6686c6ff163161500d"
+    },
+    "events": [],
+    "accepted": 1,
+    "ignored": 0
+   }
+  },
+  {
+   "at": "2026-10-10T12:32:30+09:00",
+   "kind": "location",
+   "body": {
+    "lat": 35.9906209551,
+    "lng": 129.5604550366,
+    "accuracy": 10,
+    "recorded_at": "2026-10-10T12:32:30+09:00",
+    "source": "replay"
+   },
+   "response": {
+    "state": {
+     "plan_id": 244,
+     "active": true,
+     "day": 1,
+     "date": "2026-10-10",
+     "started_at": "2026-10-10T12:25:04.459934+09:00",
+     "ended_at": null,
+     "ended_reason": null,
+     "now": "2026-10-10T12:25:04.646189+09:00",
+     "clock": "sim",
+     "location": {
+      "lat": 35.9906209551,
+      "lng": 129.5604550366,
+      "accuracy": 10.0,
+      "recorded_at": "2026-10-10T12:32:30+09:00",
+      "source": "replay"
+     },
+     "current": {
+      "item_id": 507,
+      "state": "visiting",
+      "since": "12:30"
+     },
+     "next": {
+      "item_id": 508,
+      "title": "구룡포항",
+      "planned_start": "13:40",
+      "eta": "13:40"
+     },
+     "delay_minutes": 0,
+     "session_id": "f71e291ef8354d6686c6ff163161500d"
+    },
+    "events": [],
+    "accepted": 1,
+    "ignored": 0
+   }
+  },
+  {
+   "at": "2026-10-10T12:33:00+09:00",
+   "kind": "location",
+   "body": {
+    "lat": 35.9906209551,
+    "lng": 129.5604550366,
+    "accuracy": 10,
+    "recorded_at": "2026-10-10T12:33:00+09:00",
+    "source": "replay"
+   },
+   "response": {
+    "state": {
+     "plan_id": 244,
+     "active": true,
+     "day": 1,
+     "date": "2026-10-10",
+     "started_at": "2026-10-10T12:25:04.459934+09:00",
+     "ended_at": null,
+     "ended_reason": null,
+     "now": "2026-10-10T12:25:04.679933+09:00",
+     "clock": "sim",
+     "location": {
+      "lat": 35.9906209551,
+      "lng": 129.5604550366,
+      "accuracy": 10.0,
+      "recorded_at": "2026-10-10T12:33:00+09:00",
+      "source": "replay"
+     },
+     "current": {
+      "item_id": 507,
+      "state": "visiting",
+      "since": "12:30"
+     },
+     "next": {
+      "item_id": 508,
+      "title": "구룡포항",
+      "planned_start": "13:40",
+      "eta": "13:40"
+     },
+     "delay_minutes": 0,
+     "session_id": "f71e291ef8354d6686c6ff163161500d"
+    },
+    "events": [],
+    "accepted": 1,
+    "ignored": 0
+   }
+  },
+  {
+   "at": "2026-10-10T12:38:00+09:00",
+   "kind": "location",
+   "body": {
+    "lat": 35.9906209551,
+    "lng": 129.5604550366,
+    "accuracy": 10,
+    "recorded_at": "2026-10-10T12:38:00+09:00",
+    "source": "replay"
+   },
+   "response": {
+    "state": {
+     "plan_id": 244,
+     "active": true,
+     "day": 1,
+     "date": "2026-10-10",
+     "started_at": "2026-10-10T12:25:04.459934+09:00",
+     "ended_at": null,
+     "ended_reason": null,
+     "now": "2026-10-10T12:25:04.711160+09:00",
+     "clock": "sim",
+     "location": {
+      "lat": 35.9906209551,
+      "lng": 129.5604550366,
+      "accuracy": 10.0,
+      "recorded_at": "2026-10-10T12:38:00+09:00",
+      "source": "replay"
+     },
+     "current": {
+      "item_id": 507,
+      "state": "visiting",
+      "since": "12:30"
+     },
+     "next": {
+      "item_id": 508,
+      "title": "구룡포항",
+      "planned_start": "13:40",
+      "eta": "13:40"
+     },
+     "delay_minutes": 0,
+     "session_id": "f71e291ef8354d6686c6ff163161500d"
+    },
+    "events": [],
+    "accepted": 1,
+    "ignored": 0
+   }
+  },
+  {
+   "at": "2026-10-10T12:43:00+09:00",
+   "kind": "location",
+   "body": {
+    "lat": 35.9906209551,
+    "lng": 129.5604550366,
+    "accuracy": 10,
+    "recorded_at": "2026-10-10T12:43:00+09:00",
+    "source": "replay"
+   },
+   "response": {
+    "state": {
+     "plan_id": 244,
+     "active": true,
+     "day": 1,
+     "date": "2026-10-10",
+     "started_at": "2026-10-10T12:25:04.459934+09:00",
+     "ended_at": null,
+     "ended_reason": null,
+     "now": "2026-10-10T12:25:04.735118+09:00",
+     "clock": "sim",
+     "location": {
+      "lat": 35.9906209551,
+      "lng": 129.5604550366,
+      "accuracy": 10.0,
+      "recorded_at": "2026-10-10T12:43:00+09:00",
+      "source": "replay"
+     },
+     "current": {
+      "item_id": 507,
+      "state": "visiting",
+      "since": "12:30"
+     },
+     "next": {
+      "item_id": 508,
+      "title": "구룡포항",
+      "planned_start": "13:40",
+      "eta": "13:40"
+     },
+     "delay_minutes": 0,
+     "session_id": "f71e291ef8354d6686c6ff163161500d"
+    },
+    "events": [],
+    "accepted": 1,
+    "ignored": 0
+   }
+  },
+  {
+   "at": "2026-10-10T12:48:00+09:00",
+   "kind": "location",
+   "body": {
+    "lat": 35.9906209551,
+    "lng": 129.5604550366,
+    "accuracy": 10,
+    "recorded_at": "2026-10-10T12:48:00+09:00",
+    "source": "replay"
+   },
+   "response": {
+    "state": {
+     "plan_id": 244,
+     "active": true,
+     "day": 1,
+     "date": "2026-10-10",
+     "started_at": "2026-10-10T12:25:04.459934+09:00",
+     "ended_at": null,
+     "ended_reason": null,
+     "now": "2026-10-10T12:25:04.760410+09:00",
+     "clock": "sim",
+     "location": {
+      "lat": 35.9906209551,
+      "lng": 129.5604550366,
+      "accuracy": 10.0,
+      "recorded_at": "2026-10-10T12:48:00+09:00",
+      "source": "replay"
+     },
+     "current": {
+      "item_id": 507,
+      "state": "visiting",
+      "since": "12:30"
+     },
+     "next": {
+      "item_id": 508,
+      "title": "구룡포항",
+      "planned_start": "13:40",
+      "eta": "13:40"
+     },
+     "delay_minutes": 0,
+     "session_id": "f71e291ef8354d6686c6ff163161500d"
+    },
+    "events": [],
+    "accepted": 1,
+    "ignored": 0
+   }
+  },
+  {
+   "at": "2026-10-10T12:53:00+09:00",
+   "kind": "location",
+   "body": {
+    "lat": 35.9906209551,
+    "lng": 129.5604550366,
+    "accuracy": 10,
+    "recorded_at": "2026-10-10T12:53:00+09:00",
+    "source": "replay"
+   },
+   "response": {
+    "state": {
+     "plan_id": 244,
+     "active": true,
+     "day": 1,
+     "date": "2026-10-10",
+     "started_at": "2026-10-10T12:25:04.459934+09:00",
+     "ended_at": null,
+     "ended_reason": null,
+     "now": "2026-10-10T12:25:04.784886+09:00",
+     "clock": "sim",
+     "location": {
+      "lat": 35.9906209551,
+      "lng": 129.5604550366,
+      "accuracy": 10.0,
+      "recorded_at": "2026-10-10T12:53:00+09:00",
+      "source": "replay"
+     },
+     "current": {
+      "item_id": 507,
+      "state": "visiting",
+      "since": "12:30"
+     },
+     "next": {
+      "item_id": 508,
+      "title": "구룡포항",
+      "planned_start": "13:40",
+      "eta": "13:40"
+     },
+     "delay_minutes": 0,
+     "session_id": "f71e291ef8354d6686c6ff163161500d"
+    },
+    "events": [],
+    "accepted": 1,
+    "ignored": 0
+   }
+  },
+  {
+   "at": "2026-10-10T12:58:00+09:00",
+   "kind": "location",
+   "body": {
+    "lat": 35.9906209551,
+    "lng": 129.5604550366,
+    "accuracy": 10,
+    "recorded_at": "2026-10-10T12:58:00+09:00",
+    "source": "replay"
+   },
+   "response": {
+    "state": {
+     "plan_id": 244,
+     "active": true,
+     "day": 1,
+     "date": "2026-10-10",
+     "started_at": "2026-10-10T12:25:04.459934+09:00",
+     "ended_at": null,
+     "ended_reason": null,
+     "now": "2026-10-10T12:25:04.810447+09:00",
+     "clock": "sim",
+     "location": {
+      "lat": 35.9906209551,
+      "lng": 129.5604550366,
+      "accuracy": 10.0,
+      "recorded_at": "2026-10-10T12:58:00+09:00",
+      "source": "replay"
+     },
+     "current": {
+      "item_id": 507,
+      "state": "visiting",
+      "since": "12:30"
+     },
+     "next": {
+      "item_id": 508,
+      "title": "구룡포항",
+      "planned_start": "13:40",
+      "eta": "13:40"
+     },
+     "delay_minutes": 0,
+     "session_id": "f71e291ef8354d6686c6ff163161500d"
+    },
+    "events": [],
+    "accepted": 1,
+    "ignored": 0
+   }
+  },
+  {
+   "at": "2026-10-10T13:03:00+09:00",
+   "kind": "location",
+   "body": {
+    "lat": 35.9906209551,
+    "lng": 129.5604550366,
+    "accuracy": 10,
+    "recorded_at": "2026-10-10T13:03:00+09:00",
+    "source": "replay"
+   },
+   "response": {
+    "state": {
+     "plan_id": 244,
+     "active": true,
+     "day": 1,
+     "date": "2026-10-10",
+     "started_at": "2026-10-10T12:25:04.459934+09:00",
+     "ended_at": null,
+     "ended_reason": null,
+     "now": "2026-10-10T12:25:04.834250+09:00",
+     "clock": "sim",
+     "location": {
+      "lat": 35.9906209551,
+      "lng": 129.5604550366,
+      "accuracy": 10.0,
+      "recorded_at": "2026-10-10T13:03:00+09:00",
+      "source": "replay"
+     },
+     "current": {
+      "item_id": 507,
+      "state": "visiting",
+      "since": "12:30"
+     },
+     "next": {
+      "item_id": 508,
+      "title": "구룡포항",
+      "planned_start": "13:40",
+      "eta": "13:40"
+     },
+     "delay_minutes": 0,
+     "session_id": "f71e291ef8354d6686c6ff163161500d"
+    },
+    "events": [],
+    "accepted": 1,
+    "ignored": 0
+   }
+  },
+  {
+   "at": "2026-10-10T13:08:00+09:00",
+   "kind": "location",
+   "body": {
+    "lat": 35.9906209551,
+    "lng": 129.5604550366,
+    "accuracy": 10,
+    "recorded_at": "2026-10-10T13:08:00+09:00",
+    "source": "replay"
+   },
+   "response": {
+    "state": {
+     "plan_id": 244,
+     "active": true,
+     "day": 1,
+     "date": "2026-10-10",
+     "started_at": "2026-10-10T12:25:04.459934+09:00",
+     "ended_at": null,
+     "ended_reason": null,
+     "now": "2026-10-10T12:25:04.862301+09:00",
+     "clock": "sim",
+     "location": {
+      "lat": 35.9906209551,
+      "lng": 129.5604550366,
+      "accuracy": 10.0,
+      "recorded_at": "2026-10-10T13:08:00+09:00",
+      "source": "replay"
+     },
+     "current": {
+      "item_id": 507,
+      "state": "visiting",
+      "since": "12:30"
+     },
+     "next": {
+      "item_id": 508,
+      "title": "구룡포항",
+      "planned_start": "13:40",
+      "eta": "13:40"
+     },
+     "delay_minutes": 0,
+     "session_id": "f71e291ef8354d6686c6ff163161500d"
+    },
+    "events": [],
+    "accepted": 1,
+    "ignored": 0
+   }
+  },
+  {
+   "at": "2026-10-10T13:13:00+09:00",
+   "kind": "location",
+   "body": {
+    "lat": 35.9906209551,
+    "lng": 129.5604550366,
+    "accuracy": 10,
+    "recorded_at": "2026-10-10T13:13:00+09:00",
+    "source": "replay"
+   },
+   "response": {
+    "state": {
+     "plan_id": 244,
+     "active": true,
+     "day": 1,
+     "date": "2026-10-10",
+     "started_at": "2026-10-10T12:25:04.459934+09:00",
+     "ended_at": null,
+     "ended_reason": null,
+     "now": "2026-10-10T12:25:04.889033+09:00",
+     "clock": "sim",
+     "location": {
+      "lat": 35.9906209551,
+      "lng": 129.5604550366,
+      "accuracy": 10.0,
+      "recorded_at": "2026-10-10T13:13:00+09:00",
+      "source": "replay"
+     },
+     "current": {
+      "item_id": 507,
+      "state": "visiting",
+      "since": "12:30"
+     },
+     "next": {
+      "item_id": 508,
+      "title": "구룡포항",
+      "planned_start": "13:40",
+      "eta": "13:40"
+     },
+     "delay_minutes": 0,
+     "session_id": "f71e291ef8354d6686c6ff163161500d"
+    },
+    "events": [],
+    "accepted": 1,
+    "ignored": 0
+   }
+  },
+  {
+   "at": "2026-10-10T13:18:00+09:00",
+   "kind": "location",
+   "body": {
+    "lat": 35.9906209551,
+    "lng": 129.5604550366,
+    "accuracy": 10,
+    "recorded_at": "2026-10-10T13:18:00+09:00",
+    "source": "replay"
+   },
+   "response": {
+    "state": {
+     "plan_id": 244,
+     "active": true,
+     "day": 1,
+     "date": "2026-10-10",
+     "started_at": "2026-10-10T12:25:04.459934+09:00",
+     "ended_at": null,
+     "ended_reason": null,
+     "now": "2026-10-10T12:25:04.912127+09:00",
+     "clock": "sim",
+     "location": {
+      "lat": 35.9906209551,
+      "lng": 129.5604550366,
+      "accuracy": 10.0,
+      "recorded_at": "2026-10-10T13:18:00+09:00",
+      "source": "replay"
+     },
+     "current": {
+      "item_id": 507,
+      "state": "visiting",
+      "since": "12:30"
+     },
+     "next": {
+      "item_id": 508,
+      "title": "구룡포항",
+      "planned_start": "13:40",
+      "eta": "13:40"
+     },
+     "delay_minutes": 0,
+     "session_id": "f71e291ef8354d6686c6ff163161500d"
+    },
+    "events": [],
+    "accepted": 1,
+    "ignored": 0
+   }
+  },
+  {
+   "at": "2026-10-10T13:23:00+09:00",
+   "kind": "location",
+   "body": {
+    "lat": 35.9906209551,
+    "lng": 129.5604550366,
+    "accuracy": 10,
+    "recorded_at": "2026-10-10T13:23:00+09:00",
+    "source": "replay"
+   },
+   "response": {
+    "state": {
+     "plan_id": 244,
+     "active": true,
+     "day": 1,
+     "date": "2026-10-10",
+     "started_at": "2026-10-10T12:25:04.459934+09:00",
+     "ended_at": null,
+     "ended_reason": null,
+     "now": "2026-10-10T12:25:04.933669+09:00",
+     "clock": "sim",
+     "location": {
+      "lat": 35.9906209551,
+      "lng": 129.5604550366,
+      "accuracy": 10.0,
+      "recorded_at": "2026-10-10T13:23:00+09:00",
+      "source": "replay"
+     },
+     "current": {
+      "item_id": 507,
+      "state": "visiting",
+      "since": "12:30"
+     },
+     "next": {
+      "item_id": 508,
+      "title": "구룡포항",
+      "planned_start": "13:40",
+      "eta": "13:40"
+     },
+     "delay_minutes": 0,
+     "session_id": "f71e291ef8354d6686c6ff163161500d"
+    },
+    "events": [],
+    "accepted": 1,
+    "ignored": 0
+   }
+  },
+  {
+   "at": "2026-10-10T13:28:00+09:00",
+   "kind": "location",
+   "body": {
+    "lat": 35.9906209551,
+    "lng": 129.5604550366,
+    "accuracy": 10,
+    "recorded_at": "2026-10-10T13:28:00+09:00",
+    "source": "replay"
+   },
+   "response": {
+    "state": {
+     "plan_id": 244,
+     "active": true,
+     "day": 1,
+     "date": "2026-10-10",
+     "started_at": "2026-10-10T12:25:04.459934+09:00",
+     "ended_at": null,
+     "ended_reason": null,
+     "now": "2026-10-10T12:25:04.956211+09:00",
+     "clock": "sim",
+     "location": {
+      "lat": 35.9906209551,
+      "lng": 129.5604550366,
+      "accuracy": 10.0,
+      "recorded_at": "2026-10-10T13:28:00+09:00",
+      "source": "replay"
+     },
+     "current": {
+      "item_id": 507,
+      "state": "visiting",
+      "since": "12:30"
+     },
+     "next": {
+      "item_id": 508,
+      "title": "구룡포항",
+      "planned_start": "13:40",
+      "eta": "13:40"
+     },
+     "delay_minutes": 0,
+     "session_id": "f71e291ef8354d6686c6ff163161500d"
+    },
+    "events": [],
+    "accepted": 1,
+    "ignored": 0
+   }
+  },
+  {
+   "at": "2026-10-10T13:30:00+09:00",
+   "kind": "location",
+   "body": {
+    "lat": 35.9906209551,
+    "lng": 129.5604550366,
+    "accuracy": 10,
+    "recorded_at": "2026-10-10T13:30:00+09:00",
+    "source": "replay"
+   },
+   "response": {
+    "state": {
+     "plan_id": 244,
+     "active": true,
+     "day": 1,
+     "date": "2026-10-10",
+     "started_at": "2026-10-10T12:25:04.459934+09:00",
+     "ended_at": null,
+     "ended_reason": null,
+     "now": "2026-10-10T12:25:04.979468+09:00",
+     "clock": "sim",
+     "location": {
+      "lat": 35.9906209551,
+      "lng": 129.5604550366,
+      "accuracy": 10.0,
+      "recorded_at": "2026-10-10T13:30:00+09:00",
+      "source": "replay"
+     },
+     "current": {
+      "item_id": 507,
+      "state": "visiting",
+      "since": "12:30"
+     },
+     "next": {
+      "item_id": 508,
+      "title": "구룡포항",
+      "planned_start": "13:40",
+      "eta": "13:40"
+     },
+     "delay_minutes": 0,
+     "session_id": "f71e291ef8354d6686c6ff163161500d"
+    },
+    "events": [],
+    "accepted": 1,
+    "ignored": 0
+   }
+  },
+  {
+   "at": "2026-10-10T13:30:00+09:00",
+   "kind": "poll",
+   "route": "/trip/plans/{plan_id}/events",
+   "query": {
+    "after": 0,
+    "limit": 200
+   },
+   "response": [
+    {
+     "id": 348,
+     "plan_id": 244,
+     "day": 1,
+     "type": "day_started",
+     "level": 0,
+     "severity": "info",
+     "created_at": "2026-10-09T14:38:10.031713Z",
+     "now": "2026-10-10T12:25:04.459934+09:00",
+     "item_ids": [],
+     "message": "1일차 여행을 시작했어요.",
+     "payload": {},
+     "status": "delivered",
+     "agent": null,
+     "card": null,
+     "seen_at": null,
+     "attempts": 0,
+     "last_error": null
+    },
+    {
+     "id": 349,
+     "plan_id": 244,
+     "day": 1,
+     "type": "arrived",
+     "level": 2,
+     "severity": "info",
+     "created_at": "2026-10-09T14:38:10.130998Z",
+     "now": "2026-10-10T12:30:00+09:00",
+     "item_ids": [
+      507
+     ],
+     "message": "구룡포 일본인 가옥거리에 도착했어요. 이야기 들어볼까요?",
+     "payload": {
+      "title": "구룡포 일본인 가옥거리",
+      "item_id": 507,
+      "place_id": "kto-1909659",
+      "out_of_order": false
+     },
+     "status": "delivered",
+     "agent": null,
+     "card": {
+      "kind": "docent",
+      "item_id": 507,
+      "place_id": "kto-1909659"
+     },
+     "seen_at": null,
+     "attempts": 0,
+     "last_error": null
+    }
+   ]
+  },
+  {
+   "at": "2026-10-10T13:30:00+09:00",
+   "kind": "poll",
+   "route": "/trip/plans/{plan_id}/events",
+   "query": {
+    "after": 0,
+    "limit": 200
+   },
+   "response": [
+    {
+     "id": 348,
+     "plan_id": 244,
+     "day": 1,
+     "type": "day_started",
+     "level": 0,
+     "severity": "info",
+     "created_at": "2026-10-09T14:38:10.031713Z",
+     "now": "2026-10-10T12:25:04.459934+09:00",
+     "item_ids": [],
+     "message": "1일차 여행을 시작했어요.",
+     "payload": {},
+     "status": "delivered",
+     "agent": null,
+     "card": null,
+     "seen_at": null,
+     "attempts": 0,
+     "last_error": null
+    },
+    {
+     "id": 349,
+     "plan_id": 244,
+     "day": 1,
+     "type": "arrived",
+     "level": 2,
+     "severity": "info",
+     "created_at": "2026-10-09T14:38:10.130998Z",
+     "now": "2026-10-10T12:30:00+09:00",
+     "item_ids": [
+      507
+     ],
+     "message": "구룡포 일본인 가옥거리에 도착했어요. 이야기 들어볼까요?",
+     "payload": {
+      "title": "구룡포 일본인 가옥거리",
+      "item_id": 507,
+      "place_id": "kto-1909659",
+      "out_of_order": false
+     },
+     "status": "delivered",
+     "agent": null,
+     "card": {
+      "kind": "docent",
+      "item_id": 507,
+      "place_id": "kto-1909659"
+     },
+     "seen_at": null,
+     "attempts": 0,
+     "last_error": null
+    }
+   ]
+  },
+  {
+   "at": "2026-10-10T13:30:30+09:00",
+   "kind": "location",
+   "body": {
+    "lat": 35.9906209551,
+    "lng": 129.5604550366,
+    "accuracy": 10,
+    "recorded_at": "2026-10-10T13:30:30+09:00",
+    "source": "replay"
+   },
+   "response": {
+    "state": {
+     "plan_id": 244,
+     "active": true,
+     "day": 1,
+     "date": "2026-10-10",
+     "started_at": "2026-10-10T12:25:04.459934+09:00",
+     "ended_at": null,
+     "ended_reason": null,
+     "now": "2026-10-10T12:25:05.021609+09:00",
+     "clock": "sim",
+     "location": {
+      "lat": 35.9906209551,
+      "lng": 129.5604550366,
+      "accuracy": 10.0,
+      "recorded_at": "2026-10-10T13:30:30+09:00",
+      "source": "replay"
+     },
+     "current": {
+      "item_id": 507,
+      "state": "visiting",
+      "since": "12:30"
+     },
+     "next": {
+      "item_id": 508,
+      "title": "구룡포항",
+      "planned_start": "13:40",
+      "eta": "13:40"
+     },
+     "delay_minutes": 0,
+     "session_id": "f71e291ef8354d6686c6ff163161500d"
+    },
+    "events": [],
+    "accepted": 1,
+    "ignored": 0
+   }
+  },
+  {
+   "at": "2026-10-10T13:31:00+09:00",
+   "kind": "location",
+   "body": {
+    "lat": 35.9906209551,
+    "lng": 129.5604550366,
+    "accuracy": 10,
+    "recorded_at": "2026-10-10T13:31:00+09:00",
+    "source": "replay"
+   },
+   "response": {
+    "state": {
+     "plan_id": 244,
+     "active": true,
+     "day": 1,
+     "date": "2026-10-10",
+     "started_at": "2026-10-10T12:25:04.459934+09:00",
+     "ended_at": null,
+     "ended_reason": null,
+     "now": "2026-10-10T12:25:05.046860+09:00",
+     "clock": "sim",
+     "location": {
+      "lat": 35.9906209551,
+      "lng": 129.5604550366,
+      "accuracy": 10.0,
+      "recorded_at": "2026-10-10T13:31:00+09:00",
+      "source": "replay"
+     },
+     "current": {
+      "item_id": 507,
+      "state": "visiting",
+      "since": "12:30"
+     },
+     "next": {
+      "item_id": 508,
+      "title": "구룡포항",
+      "planned_start": "13:40",
+      "eta": "13:41"
+     },
+     "delay_minutes": 1,
+     "session_id": "f71e291ef8354d6686c6ff163161500d"
+    },
+    "events": [],
+    "accepted": 1,
+    "ignored": 0
+   }
+  },
+  {
+   "at": "2026-10-10T13:31:30+09:00",
+   "kind": "location",
+   "body": {
+    "lat": 35.9906209551,
+    "lng": 129.5604550366,
+    "accuracy": 10,
+    "recorded_at": "2026-10-10T13:31:30+09:00",
+    "source": "replay"
+   },
+   "response": {
+    "state": {
+     "plan_id": 244,
+     "active": true,
+     "day": 1,
+     "date": "2026-10-10",
+     "started_at": "2026-10-10T12:25:04.459934+09:00",
+     "ended_at": null,
+     "ended_reason": null,
+     "now": "2026-10-10T12:25:05.070942+09:00",
+     "clock": "sim",
+     "location": {
+      "lat": 35.9906209551,
+      "lng": 129.5604550366,
+      "accuracy": 10.0,
+      "recorded_at": "2026-10-10T13:31:30+09:00",
+      "source": "replay"
+     },
+     "current": {
+      "item_id": 507,
+      "state": "visiting",
+      "since": "12:30"
+     },
+     "next": {
+      "item_id": 508,
+      "title": "구룡포항",
+      "planned_start": "13:40",
+      "eta": "13:41"
+     },
+     "delay_minutes": 1,
+     "session_id": "f71e291ef8354d6686c6ff163161500d"
+    },
+    "events": [],
+    "accepted": 1,
+    "ignored": 0
+   }
+  },
+  {
+   "at": "2026-10-10T13:32:00+09:00",
+   "kind": "location",
+   "body": {
+    "lat": 35.9906209551,
+    "lng": 129.5604550366,
+    "accuracy": 10,
+    "recorded_at": "2026-10-10T13:32:00+09:00",
+    "source": "replay"
+   },
+   "response": {
+    "state": {
+     "plan_id": 244,
+     "active": true,
+     "day": 1,
+     "date": "2026-10-10",
+     "started_at": "2026-10-10T12:25:04.459934+09:00",
+     "ended_at": null,
+     "ended_reason": null,
+     "now": "2026-10-10T12:25:05.093305+09:00",
+     "clock": "sim",
+     "location": {
+      "lat": 35.9906209551,
+      "lng": 129.5604550366,
+      "accuracy": 10.0,
+      "recorded_at": "2026-10-10T13:32:00+09:00",
+      "source": "replay"
+     },
+     "current": {
+      "item_id": 507,
+      "state": "visiting",
+      "since": "12:30"
+     },
+     "next": {
+      "item_id": 508,
+      "title": "구룡포항",
+      "planned_start": "13:40",
+      "eta": "13:42"
+     },
+     "delay_minutes": 2,
+     "session_id": "f71e291ef8354d6686c6ff163161500d"
+    },
+    "events": [],
+    "accepted": 1,
+    "ignored": 0
+   }
+  },
+  {
+   "at": "2026-10-10T13:32:30+09:00",
+   "kind": "location",
+   "body": {
+    "lat": 35.9906209551,
+    "lng": 129.5604550366,
+    "accuracy": 10,
+    "recorded_at": "2026-10-10T13:32:30+09:00",
+    "source": "replay"
+   },
+   "response": {
+    "state": {
+     "plan_id": 244,
+     "active": true,
+     "day": 1,
+     "date": "2026-10-10",
+     "started_at": "2026-10-10T12:25:04.459934+09:00",
+     "ended_at": null,
+     "ended_reason": null,
+     "now": "2026-10-10T12:25:05.118185+09:00",
+     "clock": "sim",
+     "location": {
+      "lat": 35.9906209551,
+      "lng": 129.5604550366,
+      "accuracy": 10.0,
+      "recorded_at": "2026-10-10T13:32:30+09:00",
+      "source": "replay"
+     },
+     "current": {
+      "item_id": 507,
+      "state": "visiting",
+      "since": "12:30"
+     },
+     "next": {
+      "item_id": 508,
+      "title": "구룡포항",
+      "planned_start": "13:40",
+      "eta": "13:42"
+     },
+     "delay_minutes": 2,
+     "session_id": "f71e291ef8354d6686c6ff163161500d"
+    },
+    "events": [],
+    "accepted": 1,
+    "ignored": 0
+   }
+  },
+  {
+   "at": "2026-10-10T13:33:00+09:00",
+   "kind": "location",
+   "body": {
+    "lat": 35.9906209551,
+    "lng": 129.5604550366,
+    "accuracy": 10,
+    "recorded_at": "2026-10-10T13:33:00+09:00",
+    "source": "replay"
+   },
+   "response": {
+    "state": {
+     "plan_id": 244,
+     "active": true,
+     "day": 1,
+     "date": "2026-10-10",
+     "started_at": "2026-10-10T12:25:04.459934+09:00",
+     "ended_at": null,
+     "ended_reason": null,
+     "now": "2026-10-10T12:25:05.148841+09:00",
+     "clock": "sim",
+     "location": {
+      "lat": 35.9906209551,
+      "lng": 129.5604550366,
+      "accuracy": 10.0,
+      "recorded_at": "2026-10-10T13:33:00+09:00",
+      "source": "replay"
+     },
+     "current": {
+      "item_id": 507,
+      "state": "visiting",
+      "since": "12:30"
+     },
+     "next": {
+      "item_id": 508,
+      "title": "구룡포항",
+      "planned_start": "13:40",
+      "eta": "13:43"
+     },
+     "delay_minutes": 3,
+     "session_id": "f71e291ef8354d6686c6ff163161500d"
+    },
+    "events": [],
+    "accepted": 1,
+    "ignored": 0
+   }
+  },
+  {
+   "at": "2026-10-10T13:38:00+09:00",
+   "kind": "location",
+   "body": {
+    "lat": 35.9906209551,
+    "lng": 129.5604550366,
+    "accuracy": 10,
+    "recorded_at": "2026-10-10T13:38:00+09:00",
+    "source": "replay"
+   },
+   "response": {
+    "state": {
+     "plan_id": 244,
+     "active": true,
+     "day": 1,
+     "date": "2026-10-10",
+     "started_at": "2026-10-10T12:25:04.459934+09:00",
+     "ended_at": null,
+     "ended_reason": null,
+     "now": "2026-10-10T12:25:05.184055+09:00",
+     "clock": "sim",
+     "location": {
+      "lat": 35.9906209551,
+      "lng": 129.5604550366,
+      "accuracy": 10.0,
+      "recorded_at": "2026-10-10T13:38:00+09:00",
+      "source": "replay"
+     },
+     "current": {
+      "item_id": 507,
+      "state": "visiting",
+      "since": "12:30"
+     },
+     "next": {
+      "item_id": 508,
+      "title": "구룡포항",
+      "planned_start": "13:40",
+      "eta": "13:48"
+     },
+     "delay_minutes": 8,
+     "session_id": "f71e291ef8354d6686c6ff163161500d"
+    },
+    "events": [],
+    "accepted": 1,
+    "ignored": 0
+   }
+  },
+  {
+   "at": "2026-10-10T13:43:00+09:00",
+   "kind": "location",
+   "body": {
+    "lat": 35.9906209551,
+    "lng": 129.5604550366,
+    "accuracy": 10,
+    "recorded_at": "2026-10-10T13:43:00+09:00",
+    "source": "replay"
+   },
+   "response": {
+    "state": {
+     "plan_id": 244,
+     "active": true,
+     "day": 1,
+     "date": "2026-10-10",
+     "started_at": "2026-10-10T12:25:04.459934+09:00",
+     "ended_at": null,
+     "ended_reason": null,
+     "now": "2026-10-10T12:25:05.211604+09:00",
+     "clock": "sim",
+     "location": {
+      "lat": 35.9906209551,
+      "lng": 129.5604550366,
+      "accuracy": 10.0,
+      "recorded_at": "2026-10-10T13:43:00+09:00",
+      "source": "replay"
+     },
+     "current": {
+      "item_id": 507,
+      "state": "visiting",
+      "since": "12:30"
+     },
+     "next": {
+      "item_id": 508,
+      "title": "구룡포항",
+      "planned_start": "13:40",
+      "eta": "13:53"
+     },
+     "delay_minutes": 13,
+     "session_id": "f71e291ef8354d6686c6ff163161500d"
+    },
+    "events": [],
+    "accepted": 1,
+    "ignored": 0
+   }
+  },
+  {
+   "at": "2026-10-10T13:48:00+09:00",
+   "kind": "location",
+   "body": {
+    "lat": 35.9906209551,
+    "lng": 129.5604550366,
+    "accuracy": 10,
+    "recorded_at": "2026-10-10T13:48:00+09:00",
+    "source": "replay"
+   },
+   "response": {
+    "state": {
+     "plan_id": 244,
+     "active": true,
+     "day": 1,
+     "date": "2026-10-10",
+     "started_at": "2026-10-10T12:25:04.459934+09:00",
+     "ended_at": null,
+     "ended_reason": null,
+     "now": "2026-10-10T12:25:05.239293+09:00",
+     "clock": "sim",
+     "location": {
+      "lat": 35.9906209551,
+      "lng": 129.5604550366,
+      "accuracy": 10.0,
+      "recorded_at": "2026-10-10T13:48:00+09:00",
+      "source": "replay"
+     },
+     "current": {
+      "item_id": 507,
+      "state": "visiting",
+      "since": "12:30"
+     },
+     "next": {
+      "item_id": 508,
+      "title": "구룡포항",
+      "planned_start": "13:40",
+      "eta": "13:58"
+     },
+     "delay_minutes": 18,
+     "session_id": "f71e291ef8354d6686c6ff163161500d"
+    },
+    "events": [],
+    "accepted": 1,
+    "ignored": 0
+   }
+  },
+  {
+   "at": "2026-10-10T13:53:00+09:00",
+   "kind": "location",
+   "body": {
+    "lat": 35.9906209551,
+    "lng": 129.5604550366,
+    "accuracy": 10,
+    "recorded_at": "2026-10-10T13:53:00+09:00",
+    "source": "replay"
+   },
+   "response": {
+    "state": {
+     "plan_id": 244,
+     "active": true,
+     "day": 1,
+     "date": "2026-10-10",
+     "started_at": "2026-10-10T12:25:04.459934+09:00",
+     "ended_at": null,
+     "ended_reason": null,
+     "now": "2026-10-10T12:25:05.268577+09:00",
+     "clock": "sim",
+     "location": {
+      "lat": 35.9906209551,
+      "lng": 129.5604550366,
+      "accuracy": 10.0,
+      "recorded_at": "2026-10-10T13:53:00+09:00",
+      "source": "replay"
+     },
+     "current": {
+      "item_id": 507,
+      "state": "visiting",
+      "since": "12:30"
+     },
+     "next": {
+      "item_id": 508,
+      "title": "구룡포항",
+      "planned_start": "13:40",
+      "eta": "14:03"
+     },
+     "delay_minutes": 23,
+     "session_id": "f71e291ef8354d6686c6ff163161500d"
+    },
+    "events": [
+     {
+      "id": 350,
+      "plan_id": 244,
+      "day": 1,
+      "type": "delay",
+      "level": 3,
+      "severity": "warning",
+      "created_at": "2026-10-09T14:38:10.817805Z",
+      "now": "2026-10-10T13:53:00+09:00",
+      "item_ids": [
+       511
+      ],
+      "message": "지금대로면 일정에 문제가 생겨요. 1일차 일정이 18:01 에 끝나 목표 종료 시각 18:00 을 1분 넘습니다. (그 밖에 1건)",
+      "payload": {
+       "new_violations": [
+        {
+         "code": "day_overflow",
+         "severity": "error",
+         "message": "1일차 일정이 18:01 에 끝나 목표 종료 시각 18:00 을 1분 넘습니다.",
+         "day": 1,
+         "item_id": 511,
+         "constraint_id": null
+        },
+        {
+         "code": "end_before",
+         "severity": "error",
+         "message": "1일차 일정이 18:01 에 끝나 18:00 전 종료 규칙을 어깁니다.",
+         "day": 1,
+         "item_id": null,
+         "constraint_id": 40
+        }
+       ],
+       "delay_minutes": 23,
+       "next": {
+        "item_id": 508,
+        "planned_start": "13:40",
+        "eta": "14:03",
+        "start_at": "14:03"
+       }
+      },
+      "status": "queued",
+      "agent": null,
+      "card": null,
+      "seen_at": null,
+      "attempts": 0,
+      "last_error": null
+     }
+    ],
+    "accepted": 1,
+    "ignored": 0
+   }
+  },
+  {
+   "at": "2026-10-10T13:58:00+09:00",
+   "kind": "location",
+   "body": {
+    "lat": 35.9906209551,
+    "lng": 129.5604550366,
+    "accuracy": 10,
+    "recorded_at": "2026-10-10T13:58:00+09:00",
+    "source": "replay"
+   },
+   "response": {
+    "state": {
+     "plan_id": 244,
+     "active": true,
+     "day": 1,
+     "date": "2026-10-10",
+     "started_at": "2026-10-10T12:25:04.459934+09:00",
+     "ended_at": null,
+     "ended_reason": null,
+     "now": "2026-10-10T12:25:05.306177+09:00",
+     "clock": "sim",
+     "location": {
+      "lat": 35.9906209551,
+      "lng": 129.5604550366,
+      "accuracy": 10.0,
+      "recorded_at": "2026-10-10T13:58:00+09:00",
+      "source": "replay"
+     },
+     "current": {
+      "item_id": 507,
+      "state": "visiting",
+      "since": "12:30"
+     },
+     "next": {
+      "item_id": 508,
+      "title": "구룡포항",
+      "planned_start": "13:40",
+      "eta": "14:08"
+     },
+     "delay_minutes": 28,
+     "session_id": "f71e291ef8354d6686c6ff163161500d"
+    },
+    "events": [],
+    "accepted": 1,
+    "ignored": 0
+   }
+  },
+  {
+   "at": "2026-10-10T14:00:00+09:00",
+   "kind": "location",
+   "body": {
+    "lat": 35.9906209551,
+    "lng": 129.5604550366,
+    "accuracy": 10,
+    "recorded_at": "2026-10-10T14:00:00+09:00",
+    "source": "replay"
+   },
+   "response": {
+    "state": {
+     "plan_id": 244,
+     "active": true,
+     "day": 1,
+     "date": "2026-10-10",
+     "started_at": "2026-10-10T12:25:04.459934+09:00",
+     "ended_at": null,
+     "ended_reason": null,
+     "now": "2026-10-10T12:25:05.338186+09:00",
+     "clock": "sim",
+     "location": {
+      "lat": 35.9906209551,
+      "lng": 129.5604550366,
+      "accuracy": 10.0,
+      "recorded_at": "2026-10-10T14:00:00+09:00",
+      "source": "replay"
+     },
+     "current": {
+      "item_id": 507,
+      "state": "visiting",
+      "since": "12:30"
+     },
+     "next": {
+      "item_id": 508,
+      "title": "구룡포항",
+      "planned_start": "13:40",
+      "eta": "14:10"
+     },
+     "delay_minutes": 30,
+     "session_id": "f71e291ef8354d6686c6ff163161500d"
+    },
+    "events": [],
+    "accepted": 1,
+    "ignored": 0
+   }
+  },
+  {
+   "at": "2026-10-10T14:00:00+09:00",
+   "kind": "poll",
+   "route": "/trip/plans/{plan_id}/events",
+   "query": {
+    "after": 0,
+    "limit": 200
+   },
+   "response": [
+    {
+     "id": 348,
+     "plan_id": 244,
+     "day": 1,
+     "type": "day_started",
+     "level": 0,
+     "severity": "info",
+     "created_at": "2026-10-09T14:38:10.031713Z",
+     "now": "2026-10-10T12:25:04.459934+09:00",
+     "item_ids": [],
+     "message": "1일차 여행을 시작했어요.",
+     "payload": {},
+     "status": "delivered",
+     "agent": null,
+     "card": null,
+     "seen_at": null,
+     "attempts": 0,
+     "last_error": null
+    },
+    {
+     "id": 349,
+     "plan_id": 244,
+     "day": 1,
+     "type": "arrived",
+     "level": 2,
+     "severity": "info",
+     "created_at": "2026-10-09T14:38:10.130998Z",
+     "now": "2026-10-10T12:30:00+09:00",
+     "item_ids": [
+      507
+     ],
+     "message": "구룡포 일본인 가옥거리에 도착했어요. 이야기 들어볼까요?",
+     "payload": {
+      "title": "구룡포 일본인 가옥거리",
+      "item_id": 507,
+      "place_id": "kto-1909659",
+      "out_of_order": false
+     },
+     "status": "delivered",
+     "agent": null,
+     "card": {
+      "kind": "docent",
+      "item_id": 507,
+      "place_id": "kto-1909659"
+     },
+     "seen_at": null,
+     "attempts": 0,
+     "last_error": null
+    },
+    {
+     "id": 350,
+     "plan_id": 244,
+     "day": 1,
+     "type": "delay",
+     "level": 3,
+     "severity": "warning",
+     "created_at": "2026-10-09T14:38:10.817805Z",
+     "now": "2026-10-10T13:53:00+09:00",
+     "item_ids": [
+      511
+     ],
+     "message": "지금대로면 일정에 문제가 생겨요. 1일차 일정이 18:01 에 끝나 목표 종료 시각 18:00 을 1분 넘습니다. (그 밖에 1건)",
+     "payload": {
+      "next": {
+       "eta": "14:03",
+       "item_id": 508,
+       "start_at": "14:03",
+       "planned_start": "13:40"
+      },
+      "delay_minutes": 23,
+      "new_violations": [
+       {
+        "day": 1,
+        "code": "day_overflow",
+        "item_id": 511,
+        "message": "1일차 일정이 18:01 에 끝나 목표 종료 시각 18:00 을 1분 넘습니다.",
+        "severity": "error",
+        "constraint_id": null
+       },
+       {
+        "day": 1,
+        "code": "end_before",
+        "item_id": null,
+        "message": "1일차 일정이 18:01 에 끝나 18:00 전 종료 규칙을 어깁니다.",
+        "severity": "error",
+        "constraint_id": 40
+       }
+      ]
+     },
+     "status": "delivered",
+     "agent": {
+      "message_id": 1093,
+      "session_id": "f71e291ef8354d6686c6ff163161500d",
+      "proposal_id": 120
+     },
+     "card": null,
+     "seen_at": null,
+     "attempts": 1,
+     "last_error": null
+    }
+   ]
+  },
+  {
+   "at": "2026-10-10T14:00:00+09:00",
+   "kind": "http",
+   "method": "GET",
+   "route": "/agent/sessions/{session_id}",
+   "status": 200,
+   "response": {
+    "id": "f71e291ef8354d6686c6ff163161500d",
+    "plan_id": 244,
+    "created_at": "2026-10-09T14:38:09.985341Z",
+    "updated_at": "2026-10-09T14:38:13.582378Z",
+    "messages": [
+     {
+      "id": 1093,
+      "role": "assistant",
+      "content": "가옥거리에서 머문 시간이 길어져 이대로면 카페파도에서 18시를 넘겨 끝나요. 과메기문화관을 빼면 16:53에 여유 있게 마칠 수 있어요. 다른 방법으로 구룡포항 점심을 줄여 과메기문화관을 유지할 수도 있어요.",
+      "created_at": "2026-10-09T14:38:13.583057Z",
+      "steps": [
+       {
+        "id": "s1",
+        "kind": "plan",
+        "status": "done",
+        "title": "일정 확인",
+        "detail": "일정 5곳"
+       },
+       {
+        "id": "s2",
+        "kind": "edit",
+        "status": "done",
+        "title": "일정 조정",
+        "detail": "구룡포과메기문화관 삭제 · 총 이동 -15분"
+       },
+       {
+        "id": "s3",
+        "kind": "review",
+        "status": "done",
+        "title": "일정 검토",
+        "detail": "문제 없음"
+       },
+       {
+        "id": "s4",
+        "kind": "proposal",
+        "status": "done",
+        "title": "변경안 만들기",
+        "detail": "변경 1건"
+       }
+      ],
+      "steps_summary": "4단계 완료 : 일정 확인, 일정 조정, 일정 검토, 변경안 만들기",
+      "cards": [
+       {
+        "type": "proposal",
+        "proposal": {
+         "id": 120,
+         "plan_id": 244,
+         "status": "pending",
+         "decision": null,
+         "summary": "가옥거리에서 머문 시간이 길어져 이대로면 카페파도에서 18시를 넘겨 끝나요. 과메기문화관을 빼면 16:53에 여유 있게 마칠 수 있어요. 다른 방법으로 구룡포항 점심을 줄여 과메기문화관을 유지할 수도 있어요.",
+         "source": "llm",
+         "origin": "f71e291ef8354d6686c6ff163161500d",
+         "base_version": 7,
+         "changes": [
+          {
+           "kind": "removed",
+           "message": "삭제: 1일차 '구룡포과메기문화관'",
+           "item_id": 509,
+           "day": 1
+          },
+          {
+           "kind": "day_end",
+           "message": "1일차 종료: 18:08 → 16:53",
+           "item_id": null,
+           "day": 1
+          }
+         ],
+         "created_at": "2026-10-09T14:38:13.558320Z",
+         "decided_at": null,
+         "request": "[이벤트] 일정 지연: 지금대로면 일정에 문제가 생겨요. 1일차 일정이 18:01 에 끝나 목표 종료 시각 18:00 을 1분 넘습니다. (그 밖에 1건)\n영향받는 항목 item_id: 511\n새로 생긴 문제:\n- 1일차 일정이 18:01 에 끝나 목표 종료 시각 18:00 을 1분 넘습니다.\n- 1일차 일정이 18:01 에 끝나 18:00 전 종료 규칙을 어깁니다.\n예상 지연: 23분\n근거: {\"next\": {\"eta\": \"14:03\", \"item_id\": 508, \"start_at\": \"14:03\", \"planned_start\": \"13:40\"}}\n할 일: 일정이 늦어져 남은 일정에 새 문제가 생겼다. 사용자에게 먼저 말을 거는 상황이다. 오늘 남은 일정을 고친 추천안을 만든다 (체류 줄이기, 순서 바꾸기, 영향받는 곳 빼기·다른 날로 옮기기, 가까운 대체 장소). 완료한 곳과 지금 머무는 곳의 지난 시간은 바꾸지 않는다. 변경안은 가장 무리 없는 추천안 하나만 변경 도구로 만든다 (대안을 여러 개 만들지 않는다). 답변은 현장에서 바로 듣기 좋게 짧은 세 문장으로: ① 무엇이 왜 문제인지 근거와 영향 ② 추천안 — 초안에 실제로 넣은 변경만 (제안 카드로 전달된다) ③ '다른 방법으로 …도 있어요' 한 줄 (도구로 만들지 않은 다른 선택지. 원하면 말로 바꿀 수 있다).",
+         "ops": [
+          {
+           "op": "remove_item",
+           "item_id": 509
+          }
+         ],
+         "before": {
+          "id": 244,
+          "user_id": "74bb7f62aa554ec1861a8a24288ff267",
+          "title": "엄마랑 구룡포",
+          "start_date": "2026-10-10",
+          "end_date": "2026-10-10",
+          "day_start": "12:30",
+          "day_end": "18:00",
+          "travel_mode": "walk",
+          "memo": "",
+          "version": 7,
+          "progress_version": 1,
+          "item_count": 5,
+          "created_at": "2026-10-09T14:38:09.911492Z",
+          "updated_at": "2026-10-09T14:38:09.963579Z",
+          "days": [
+           {
+            "day": 1,
+            "date": "2026-10-10",
+            "weekday": "토",
+            "end_at": "18:08",
+            "items": [
+             {
+              "id": 507,
+              "day": 1,
+              "order": 1,
+              "place_id": "kto-1909659",
+              "place": {
+               "id": "kto-1909659",
+               "title": "구룡포 일본인 가옥거리",
+               "content_type": "관광지",
+               "lat": 35.9906209551,
+               "lng": 129.5604550366,
+               "addr": "경상북도 포항시 남구 구룡포읍 호미로 277",
+               "open_hours": "상시 개방",
+               "rest_date": "연중무휴"
+              },
+              "stay_minutes": 60,
+              "start_time": null,
+              "memo": "",
+              "status": "visiting",
+              "travel_mode": null,
+              "leg_mode": null,
+              "travel_minutes": null,
+              "travel_distance_m": null,
+              "travel_source": null,
+              "travel_options": null,
+              "arrive_at": "12:30",
+              "start_at": "12:30",
+              "end_at": "14:00",
+              "arrived_at": "12:30",
+              "done_at": null
+             },
+             {
+              "id": 508,
+              "day": 1,
+              "order": 2,
+              "place_id": "kto-2610501",
+              "place": {
+               "id": "kto-2610501",
+               "title": "구룡포항",
+               "content_type": "관광지",
+               "lat": 35.9893051205,
+               "lng": 129.555641609,
+               "addr": "경상북도 포항시 남구 구룡포읍 호미로 222-1",
+               "open_hours": "상시 개방",
+               "rest_date": "연중무휴"
+              },
+              "stay_minutes": 50,
+              "start_time": null,
+              "memo": "",
+              "status": "planned",
+              "travel_mode": null,
+              "leg_mode": "walk",
+              "travel_minutes": 10,
+              "travel_distance_m": 632,
+              "travel_source": "road",
+              "travel_options": {
+               "car": {
+                "minutes": 7,
+                "distance_m": 631,
+                "source": "road"
+               },
+               "walk": {
+                "minutes": 10,
+                "distance_m": 632,
+                "source": "road"
+               }
+              },
+              "arrive_at": "14:10",
+              "start_at": "14:10",
+              "end_at": "15:00",
+              "arrived_at": null,
+              "done_at": null
+             },
+             {
+              "id": 509,
+              "day": 1,
+              "order": 3,
+              "place_id": "kto-2660046",
+              "place": {
+               "id": "kto-2660046",
+               "title": "구룡포과메기문화관",
+               "content_type": "문화시설",
+               "lat": 35.9927402978,
+               "lng": 129.5617992377,
+               "addr": "경상북도 포항시 남구 구룡포읍 구룡포길117번길 28-8",
+               "open_hours": "09:00~18:00 (입장 마감 17:30)",
+               "rest_date": "매주 월요일 / 공휴일 다음날 / 1월 1일 / 추석 당일"
+              },
+              "stay_minutes": 60,
+              "start_time": null,
+              "memo": "",
+              "status": "planned",
+              "travel_mode": null,
+              "leg_mode": "walk",
+              "travel_minutes": 17,
+              "travel_distance_m": 1006,
+              "travel_source": "road",
+              "travel_options": {
+               "car": {
+                "minutes": 9,
+                "distance_m": 1471,
+                "source": "road"
+               },
+               "walk": {
+                "minutes": 17,
+                "distance_m": 1006,
+                "source": "road"
+               }
+              },
+              "arrive_at": "15:17",
+              "start_at": "15:17",
+              "end_at": "16:17",
+              "arrived_at": null,
+              "done_at": null
+             },
+             {
+              "id": 510,
+              "day": 1,
+              "order": 4,
+              "place_id": "poi-gr-breakwater-north",
+              "place": {
+               "id": "poi-gr-breakwater-north",
+               "title": "구룡포 북방파제",
+               "content_type": "관광지",
+               "lat": 35.988078,
+               "lng": 129.559279,
+               "addr": "경상북도 포항시 남구 구룡포읍 구룡포리 (구룡포항 북방파제)",
+               "open_hours": "상시 개방 (기상 악화 시 출입 자제)",
+               "rest_date": "연중무휴"
+              },
+              "stay_minutes": 40,
+              "start_time": null,
+              "memo": "",
+              "status": "planned",
+              "travel_mode": null,
+              "leg_mode": "walk",
+              "travel_minutes": 13,
+              "travel_distance_m": 886,
+              "travel_source": "road",
+              "travel_options": {
+               "car": {
+                "minutes": 10,
+                "distance_m": 1138,
+                "source": "road"
+               },
+               "walk": {
+                "minutes": 13,
+                "distance_m": 886,
+                "source": "road"
+               }
+              },
+              "arrive_at": "16:30",
+              "start_at": "16:30",
+              "end_at": "17:10",
+              "arrived_at": null,
+              "done_at": null
+             },
+             {
+              "id": 511,
+              "day": 1,
+              "order": 5,
+              "place_id": "kto-2834344",
+              "place": {
+               "id": "kto-2834344",
+               "title": "카페파도",
+               "content_type": "음식점",
+               "lat": 35.9768342269,
+               "lng": 129.5514895569,
+               "addr": "경상북도 포항시 남구 구룡포읍 하정로172번길 2",
+               "open_hours": "10:00~21:00 (마지막 주문 20:30)",
+               "rest_date": "연중무휴"
+              },
+              "stay_minutes": 45,
+              "start_time": null,
+              "memo": "",
+              "status": "planned",
+              "travel_mode": "car",
+              "leg_mode": "car",
+              "travel_minutes": 13,
+              "travel_distance_m": 3265,
+              "travel_source": "road",
+              "travel_options": {
+               "car": {
+                "minutes": 13,
+                "distance_m": 3265,
+                "source": "road"
+               },
+               "walk": {
+                "minutes": 45,
+                "distance_m": 2922,
+                "source": "road"
+               }
+              },
+              "arrive_at": "17:23",
+              "start_at": "17:23",
+              "end_at": "18:08",
+              "arrived_at": null,
+              "done_at": null
+             }
+            ]
+           }
+          ],
+          "constraints": [
+           {
+            "id": 40,
+            "type": "end_before",
+            "params": {
+             "time": "18:00"
+            },
+            "hard": true,
+            "source": "user",
+            "note": "18시 전에 끝내기"
+           }
+          ],
+          "violations": [
+           {
+            "code": "day_overflow",
+            "severity": "error",
+            "message": "1일차 일정이 18:08 에 끝나 목표 종료 시각 18:00 을 8분 넘습니다.",
+            "day": 1,
+            "item_id": 511,
+            "constraint_id": null
+           },
+           {
+            "code": "end_before",
+            "severity": "error",
+            "message": "1일차 일정이 18:08 에 끝나 18:00 전 종료 규칙을 어깁니다.",
+            "day": 1,
+            "item_id": null,
+            "constraint_id": 40
+           }
+          ]
+         },
+         "after": {
+          "id": 244,
+          "user_id": "74bb7f62aa554ec1861a8a24288ff267",
+          "title": "엄마랑 구룡포",
+          "start_date": "2026-10-10",
+          "end_date": "2026-10-10",
+          "day_start": "12:30",
+          "day_end": "18:00",
+          "travel_mode": "walk",
+          "memo": "",
+          "version": 7,
+          "progress_version": 1,
+          "item_count": 4,
+          "created_at": "2026-10-09T14:38:09.911492Z",
+          "updated_at": "2026-10-09T14:38:13.560457Z",
+          "days": [
+           {
+            "day": 1,
+            "date": "2026-10-10",
+            "weekday": "토",
+            "end_at": "16:53",
+            "items": [
+             {
+              "id": 507,
+              "day": 1,
+              "order": 1,
+              "place_id": "kto-1909659",
+              "place": {
+               "id": "kto-1909659",
+               "title": "구룡포 일본인 가옥거리",
+               "content_type": "관광지",
+               "lat": 35.9906209551,
+               "lng": 129.5604550366,
+               "addr": "경상북도 포항시 남구 구룡포읍 호미로 277",
+               "open_hours": "상시 개방",
+               "rest_date": "연중무휴"
+              },
+              "stay_minutes": 60,
+              "start_time": null,
+              "memo": "",
+              "status": "visiting",
+              "travel_mode": null,
+              "leg_mode": null,
+              "travel_minutes": null,
+              "travel_distance_m": null,
+              "travel_source": null,
+              "travel_options": null,
+              "arrive_at": "12:30",
+              "start_at": "12:30",
+              "end_at": "14:00",
+              "arrived_at": "12:30",
+              "done_at": null
+             },
+             {
+              "id": 508,
+              "day": 1,
+              "order": 2,
+              "place_id": "kto-2610501",
+              "place": {
+               "id": "kto-2610501",
+               "title": "구룡포항",
+               "content_type": "관광지",
+               "lat": 35.9893051205,
+               "lng": 129.555641609,
+               "addr": "경상북도 포항시 남구 구룡포읍 호미로 222-1",
+               "open_hours": "상시 개방",
+               "rest_date": "연중무휴"
+              },
+              "stay_minutes": 50,
+              "start_time": null,
+              "memo": "",
+              "status": "planned",
+              "travel_mode": null,
+              "leg_mode": "walk",
+              "travel_minutes": 10,
+              "travel_distance_m": 632,
+              "travel_source": "road",
+              "travel_options": {
+               "car": {
+                "minutes": 7,
+                "distance_m": 631,
+                "source": "road"
+               },
+               "walk": {
+                "minutes": 10,
+                "distance_m": 632,
+                "source": "road"
+               }
+              },
+              "arrive_at": "14:10",
+              "start_at": "14:10",
+              "end_at": "15:00",
+              "arrived_at": null,
+              "done_at": null
+             },
+             {
+              "id": 510,
+              "day": 1,
+              "order": 3,
+              "place_id": "poi-gr-breakwater-north",
+              "place": {
+               "id": "poi-gr-breakwater-north",
+               "title": "구룡포 북방파제",
+               "content_type": "관광지",
+               "lat": 35.988078,
+               "lng": 129.559279,
+               "addr": "경상북도 포항시 남구 구룡포읍 구룡포리 (구룡포항 북방파제)",
+               "open_hours": "상시 개방 (기상 악화 시 출입 자제)",
+               "rest_date": "연중무휴"
+              },
+              "stay_minutes": 40,
+              "start_time": null,
+              "memo": "",
+              "status": "planned",
+              "travel_mode": null,
+              "leg_mode": "walk",
+              "travel_minutes": 15,
+              "travel_distance_m": 1009,
+              "travel_source": "road",
+              "travel_options": {
+               "car": {
+                "minutes": 10,
+                "distance_m": 1067,
+                "source": "road"
+               },
+               "walk": {
+                "minutes": 15,
+                "distance_m": 1009,
+                "source": "road"
+               }
+              },
+              "arrive_at": "15:15",
+              "start_at": "15:15",
+              "end_at": "15:55",
+              "arrived_at": null,
+              "done_at": null
+             },
+             {
+              "id": 511,
+              "day": 1,
+              "order": 4,
+              "place_id": "kto-2834344",
+              "place": {
+               "id": "kto-2834344",
+               "title": "카페파도",
+               "content_type": "음식점",
+               "lat": 35.9768342269,
+               "lng": 129.5514895569,
+               "addr": "경상북도 포항시 남구 구룡포읍 하정로172번길 2",
+               "open_hours": "10:00~21:00 (마지막 주문 20:30)",
+               "rest_date": "연중무휴"
+              },
+              "stay_minutes": 45,
+              "start_time": null,
+              "memo": "",
+              "status": "planned",
+              "travel_mode": "car",
+              "leg_mode": "car",
+              "travel_minutes": 13,
+              "travel_distance_m": 3265,
+              "travel_source": "road",
+              "travel_options": {
+               "car": {
+                "minutes": 13,
+                "distance_m": 3265,
+                "source": "road"
+               },
+               "walk": {
+                "minutes": 45,
+                "distance_m": 2922,
+                "source": "road"
+               }
+              },
+              "arrive_at": "16:08",
+              "start_at": "16:08",
+              "end_at": "16:53",
+              "arrived_at": null,
+              "done_at": null
+             }
+            ]
+           }
+          ],
+          "constraints": [
+           {
+            "id": 40,
+            "type": "end_before",
+            "params": {
+             "time": "18:00"
+            },
+            "hard": true,
+            "source": "user",
+            "note": "18시 전에 끝내기"
+           }
+          ],
+          "violations": []
+         },
+         "current_version": 7,
+         "base_changed": false,
+         "progress_changed": []
+        }
+       }
+      ]
+     }
+    ]
+   },
+   "for_event": 350
+  },
+  {
+   "at": "2026-10-10T14:00:19+09:00",
+   "kind": "location",
+   "body": {
+    "lat": 35.990542376461335,
+    "lng": 129.56022063695107,
+    "accuracy": 10,
+    "recorded_at": "2026-10-10T14:00:19+09:00",
+    "source": "replay"
+   },
+   "response": {
+    "state": {
+     "plan_id": 244,
+     "active": true,
+     "day": 1,
+     "date": "2026-10-10",
+     "started_at": "2026-10-10T12:25:04.459934+09:00",
+     "ended_at": null,
+     "ended_reason": null,
+     "now": "2026-10-10T14:00:02.980842+09:00",
+     "clock": "sim",
+     "location": {
+      "lat": 35.990542376461335,
+      "lng": 129.56022063695107,
+      "accuracy": 10.0,
+      "recorded_at": "2026-10-10T14:00:19+09:00",
+      "source": "replay"
+     },
+     "current": {
+      "item_id": 507,
+      "state": "visiting",
+      "since": "12:30"
+     },
+     "next": {
+      "item_id": 508,
+      "title": "구룡포항",
+      "planned_start": "13:40",
+      "eta": "14:10"
+     },
+     "delay_minutes": 30,
+     "session_id": "f71e291ef8354d6686c6ff163161500d"
+    },
+    "events": [],
+    "accepted": 1,
+    "ignored": 0
+   }
+  },
+  {
+   "at": "2026-10-10T14:00:48+09:00",
+   "kind": "location",
+   "body": {
+    "lat": 35.990668883004474,
+    "lng": 129.5598649006874,
+    "accuracy": 10,
+    "recorded_at": "2026-10-10T14:00:48+09:00",
+    "source": "replay"
+   },
+   "response": {
+    "state": {
+     "plan_id": 244,
+     "active": true,
+     "day": 1,
+     "date": "2026-10-10",
+     "started_at": "2026-10-10T12:25:04.459934+09:00",
+     "ended_at": null,
+     "ended_reason": null,
+     "now": "2026-10-10T14:00:03.004102+09:00",
+     "clock": "sim",
+     "location": {
+      "lat": 35.990668883004474,
+      "lng": 129.5598649006874,
+      "accuracy": 10.0,
+      "recorded_at": "2026-10-10T14:00:48+09:00",
+      "source": "replay"
+     },
+     "current": {
+      "item_id": 507,
+      "state": "visiting",
+      "since": "12:30"
+     },
+     "next": {
+      "item_id": 508,
+      "title": "구룡포항",
+      "planned_start": "13:40",
+      "eta": "14:10"
+     },
+     "delay_minutes": 30,
+     "session_id": "f71e291ef8354d6686c6ff163161500d"
+    },
+    "events": [],
+    "accepted": 1,
+    "ignored": 0
+   }
+  },
+  {
+   "at": "2026-10-10T14:01:17+09:00",
+   "kind": "location",
+   "body": {
+    "lat": 35.99079555214632,
+    "lng": 129.55950924816992,
+    "accuracy": 10,
+    "recorded_at": "2026-10-10T14:01:17+09:00",
+    "source": "replay"
+   },
+   "response": {
+    "state": {
+     "plan_id": 244,
+     "active": true,
+     "day": 1,
+     "date": "2026-10-10",
+     "started_at": "2026-10-10T12:25:04.459934+09:00",
+     "ended_at": null,
+     "ended_reason": null,
+     "now": "2026-10-10T14:00:03.029496+09:00",
+     "clock": "sim",
+     "location": {
+      "lat": 35.99079555214632,
+      "lng": 129.55950924816992,
+      "accuracy": 10.0,
+      "recorded_at": "2026-10-10T14:01:17+09:00",
+      "source": "replay"
+     },
+     "current": {
+      "item_id": 507,
+      "state": "visiting",
+      "since": "12:30"
+     },
+     "next": {
+      "item_id": 508,
+      "title": "구룡포항",
+      "planned_start": "13:40",
+      "eta": "14:11"
+     },
+     "delay_minutes": 31,
+     "session_id": "f71e291ef8354d6686c6ff163161500d"
+    },
+    "events": [],
+    "accepted": 1,
+    "ignored": 0
+   }
+  },
+  {
+   "at": "2026-10-10T14:01:47+09:00",
+   "kind": "location",
+   "body": {
+    "lat": 35.990923890075216,
+    "lng": 129.5591545089716,
+    "accuracy": 10,
+    "recorded_at": "2026-10-10T14:01:47+09:00",
+    "source": "replay"
+   },
+   "response": {
+    "state": {
+     "plan_id": 244,
+     "active": true,
+     "day": 1,
+     "date": "2026-10-10",
+     "started_at": "2026-10-10T12:25:04.459934+09:00",
+     "ended_at": null,
+     "ended_reason": null,
+     "now": "2026-10-10T14:00:03.052123+09:00",
+     "clock": "sim",
+     "location": {
+      "lat": 35.990923890075216,
+      "lng": 129.5591545089716,
+      "accuracy": 10.0,
+      "recorded_at": "2026-10-10T14:01:47+09:00",
+      "source": "replay"
+     },
+     "current": {
+      "item_id": 507,
+      "state": "visiting",
+      "since": "12:30"
+     },
+     "next": {
+      "item_id": 508,
+      "title": "구룡포항",
+      "planned_start": "13:40",
+      "eta": "14:11"
+     },
+     "delay_minutes": 31,
+     "session_id": "f71e291ef8354d6686c6ff163161500d"
+    },
+    "events": [],
+    "accepted": 1,
+    "ignored": 0
+   }
+  },
+  {
+   "at": "2026-10-10T14:02:16+09:00",
+   "kind": "location",
+   "body": {
+    "lat": 35.99105157509817,
+    "lng": 129.55879941032592,
+    "accuracy": 10,
+    "recorded_at": "2026-10-10T14:02:16+09:00",
+    "source": "replay"
+   },
+   "response": {
+    "state": {
+     "plan_id": 244,
+     "active": true,
+     "day": 1,
+     "date": "2026-10-10",
+     "started_at": "2026-10-10T12:25:04.459934+09:00",
+     "ended_at": null,
+     "ended_reason": null,
+     "now": "2026-10-10T14:00:03.075659+09:00",
+     "clock": "sim",
+     "location": {
+      "lat": 35.99105157509817,
+      "lng": 129.55879941032592,
+      "accuracy": 10.0,
+      "recorded_at": "2026-10-10T14:02:16+09:00",
+      "source": "replay"
+     },
+     "current": {
+      "item_id": 507,
+      "state": "visiting",
+      "since": "12:30"
+     },
+     "next": {
+      "item_id": 508,
+      "title": "구룡포항",
+      "planned_start": "13:40",
+      "eta": "14:12"
+     },
+     "delay_minutes": 32,
+     "session_id": "f71e291ef8354d6686c6ff163161500d"
+    },
+    "events": [],
+    "accepted": 1,
+    "ignored": 0
+   }
+  },
+  {
+   "at": "2026-10-10T14:02:41+09:00",
+   "kind": "location",
+   "body": {
+    "lat": 35.99111359890019,
+    "lng": 129.55847204879234,
+    "accuracy": 10,
+    "recorded_at": "2026-10-10T14:02:41+09:00",
+    "source": "replay"
+   },
+   "response": {
+    "state": {
+     "plan_id": 244,
+     "active": true,
+     "day": 1,
+     "date": "2026-10-10",
+     "started_at": "2026-10-10T12:25:04.459934+09:00",
+     "ended_at": null,
+     "ended_reason": null,
+     "now": "2026-10-10T14:00:03.105952+09:00",
+     "clock": "sim",
+     "location": {
+      "lat": 35.99111359890019,
+      "lng": 129.55847204879234,
+      "accuracy": 10.0,
+      "recorded_at": "2026-10-10T14:02:41+09:00",
+      "source": "replay"
+     },
+     "current": {
+      "item_id": 507,
+      "state": "visiting",
+      "since": "12:30"
+     },
+     "next": {
+      "item_id": 508,
+      "title": "구룡포항",
+      "planned_start": "13:40",
+      "eta": "14:12"
+     },
+     "delay_minutes": 32,
+     "session_id": "f71e291ef8354d6686c6ff163161500d"
+    },
+    "events": [],
+    "accepted": 1,
+    "ignored": 0
+   }
+  },
+  {
+   "at": "2026-10-10T14:03:02+09:00",
+   "kind": "location",
+   "body": {
+    "lat": 35.99103336958344,
+    "lng": 129.55821419541522,
+    "accuracy": 10,
+    "recorded_at": "2026-10-10T14:03:02+09:00",
+    "source": "replay"
+   },
+   "response": {
+    "state": {
+     "plan_id": 244,
+     "active": true,
+     "day": 1,
+     "date": "2026-10-10",
+     "started_at": "2026-10-10T12:25:04.459934+09:00",
+     "ended_at": null,
+     "ended_reason": null,
+     "now": "2026-10-10T14:00:03.133432+09:00",
+     "clock": "sim",
+     "location": {
+      "lat": 35.99103336958344,
+      "lng": 129.55821419541522,
+      "accuracy": 10.0,
+      "recorded_at": "2026-10-10T14:03:02+09:00",
+      "source": "replay"
+     },
+     "current": {
+      "item_id": 507,
+      "state": "visiting",
+      "since": "12:30"
+     },
+     "next": {
+      "item_id": 508,
+      "title": "구룡포항",
+      "planned_start": "13:40",
+      "eta": "14:13"
+     },
+     "delay_minutes": 33,
+     "session_id": "f71e291ef8354d6686c6ff163161500d"
+    },
+    "events": [],
+    "accepted": 1,
+    "ignored": 0
+   }
+  },
+  {
+   "at": "2026-10-10T14:03:31+09:00",
+   "kind": "location",
+   "body": {
+    "lat": 35.99100728489696,
+    "lng": 129.55782708170173,
+    "accuracy": 10,
+    "recorded_at": "2026-10-10T14:03:31+09:00",
+    "source": "replay"
+   },
+   "response": {
+    "state": {
+     "plan_id": 244,
+     "active": true,
+     "day": 1,
+     "date": "2026-10-10",
+     "started_at": "2026-10-10T12:25:04.459934+09:00",
+     "ended_at": null,
+     "ended_reason": null,
+     "now": "2026-10-10T14:00:03.176059+09:00",
+     "clock": "sim",
+     "location": {
+      "lat": 35.99100728489696,
+      "lng": 129.55782708170173,
+      "accuracy": 10.0,
+      "recorded_at": "2026-10-10T14:03:31+09:00",
+      "source": "replay"
+     },
+     "current": {
+      "item_id": 507,
+      "state": "moving",
+      "since": "14:01"
+     },
+     "next": {
+      "item_id": 508,
+      "title": "구룡포항",
+      "planned_start": "13:40",
+      "eta": "14:09"
+     },
+     "delay_minutes": 29,
+     "session_id": "f71e291ef8354d6686c6ff163161500d"
+    },
+    "events": [
+     {
+      "id": 351,
+      "plan_id": 244,
+      "day": 1,
+      "type": "departed",
+      "level": 1,
+      "severity": "info",
+      "created_at": "2026-10-09T14:38:14.055601Z",
+      "now": "2026-10-10T14:01:17+09:00",
+      "item_ids": [
+       507
+      ],
+      "message": "구룡포 일본인 가옥거리을(를) 떠났어요. 다음은 구룡포항, 도보 약 8분 (14:09 도착 예정).",
+      "payload": {
+       "item_id": 507,
+       "title": "구룡포 일본인 가옥거리",
+       "stayed_minutes": 91
+      },
+      "status": "delivered",
+      "agent": null,
+      "card": null,
+      "seen_at": null,
+      "attempts": 0,
+      "last_error": null
+     }
+    ],
+    "accepted": 1,
+    "ignored": 0
+   }
+  },
+  {
+   "at": "2026-10-10T14:04:00+09:00",
+   "kind": "location",
+   "body": {
+    "lat": 35.9909776697471,
+    "lng": 129.55744027085765,
+    "accuracy": 10,
+    "recorded_at": "2026-10-10T14:04:00+09:00",
+    "source": "replay"
+   },
+   "response": {
+    "state": {
+     "plan_id": 244,
+     "active": true,
+     "day": 1,
+     "date": "2026-10-10",
+     "started_at": "2026-10-10T12:25:04.459934+09:00",
+     "ended_at": null,
+     "ended_reason": null,
+     "now": "2026-10-10T14:00:03.206416+09:00",
+     "clock": "sim",
+     "location": {
+      "lat": 35.9909776697471,
+      "lng": 129.55744027085765,
+      "accuracy": 10.0,
+      "recorded_at": "2026-10-10T14:04:00+09:00",
+      "source": "replay"
+     },
+     "current": {
+      "item_id": 507,
+      "state": "moving",
+      "since": "14:01"
+     },
+     "next": {
+      "item_id": 508,
+      "title": "구룡포항",
+      "planned_start": "13:40",
+      "eta": "14:09"
+     },
+     "delay_minutes": 29,
+     "session_id": "f71e291ef8354d6686c6ff163161500d"
+    },
+    "events": [],
+    "accepted": 1,
+    "ignored": 0
+   }
+  },
+  {
+   "at": "2026-10-10T14:04:29+09:00",
+   "kind": "location",
+   "body": {
+    "lat": 35.99093772367577,
+    "lng": 129.5570548337651,
+    "accuracy": 10,
+    "recorded_at": "2026-10-10T14:04:29+09:00",
+    "source": "replay"
+   },
+   "response": {
+    "state": {
+     "plan_id": 244,
+     "active": true,
+     "day": 1,
+     "date": "2026-10-10",
+     "started_at": "2026-10-10T12:25:04.459934+09:00",
+     "ended_at": null,
+     "ended_reason": null,
+     "now": "2026-10-10T14:00:03.237903+09:00",
+     "clock": "sim",
+     "location": {
+      "lat": 35.99093772367577,
+      "lng": 129.5570548337651,
+      "accuracy": 10.0,
+      "recorded_at": "2026-10-10T14:04:29+09:00",
+      "source": "replay"
+     },
+     "current": {
+      "item_id": 507,
+      "state": "moving",
+      "since": "14:01"
+     },
+     "next": {
+      "item_id": 508,
+      "title": "구룡포항",
+      "planned_start": "13:40",
+      "eta": "14:09"
+     },
+     "delay_minutes": 29,
+     "session_id": "f71e291ef8354d6686c6ff163161500d"
+    },
+    "events": [],
+    "accepted": 1,
+    "ignored": 0
+   }
+  },
+  {
+   "at": "2026-10-10T14:04:59+09:00",
+   "kind": "location",
+   "body": {
+    "lat": 35.99089777760443,
+    "lng": 129.5566693966726,
+    "accuracy": 10,
+    "recorded_at": "2026-10-10T14:04:59+09:00",
+    "source": "replay"
+   },
+   "response": {
+    "state": {
+     "plan_id": 244,
+     "active": true,
+     "day": 1,
+     "date": "2026-10-10",
+     "started_at": "2026-10-10T12:25:04.459934+09:00",
+     "ended_at": null,
+     "ended_reason": null,
+     "now": "2026-10-10T14:00:03.268044+09:00",
+     "clock": "sim",
+     "location": {
+      "lat": 35.99089777760443,
+      "lng": 129.5566693966726,
+      "accuracy": 10.0,
+      "recorded_at": "2026-10-10T14:04:59+09:00",
+      "source": "replay"
+     },
+     "current": {
+      "item_id": 507,
+      "state": "moving",
+      "since": "14:01"
+     },
+     "next": {
+      "item_id": 508,
+      "title": "구룡포항",
+      "planned_start": "13:40",
+      "eta": "14:08"
+     },
+     "delay_minutes": 28,
+     "session_id": "f71e291ef8354d6686c6ff163161500d"
+    },
+    "events": [],
+    "accepted": 1,
+    "ignored": 0
+   }
+  },
+  {
+   "at": "2026-10-10T14:05:24+09:00",
+   "kind": "location",
+   "body": {
+    "lat": 35.99078870059268,
+    "lng": 129.55637296968314,
+    "accuracy": 10,
+    "recorded_at": "2026-10-10T14:05:24+09:00",
+    "source": "replay"
+   },
+   "response": {
+    "state": {
+     "plan_id": 244,
+     "active": true,
+     "day": 1,
+     "date": "2026-10-10",
+     "started_at": "2026-10-10T12:25:04.459934+09:00",
+     "ended_at": null,
+     "ended_reason": null,
+     "now": "2026-10-10T14:00:03.300039+09:00",
+     "clock": "sim",
+     "location": {
+      "lat": 35.99078870059268,
+      "lng": 129.55637296968314,
+      "accuracy": 10.0,
+      "recorded_at": "2026-10-10T14:05:24+09:00",
+      "source": "replay"
+     },
+     "current": {
+      "item_id": 507,
+      "state": "moving",
+      "since": "14:01"
+     },
+     "next": {
+      "item_id": 508,
+      "title": "구룡포항",
+      "planned_start": "13:40",
+      "eta": "14:09"
+     },
+     "delay_minutes": 29,
+     "session_id": "f71e291ef8354d6686c6ff163161500d"
+    },
+    "events": [],
+    "accepted": 1,
+    "ignored": 0
+   }
+  },
+  {
+   "at": "2026-10-10T14:05:52+09:00",
+   "kind": "location",
+   "body": {
+    "lat": 35.990555119317555,
+    "lng": 129.55614188743115,
+    "accuracy": 10,
+    "recorded_at": "2026-10-10T14:05:52+09:00",
+    "source": "replay"
+   },
+   "response": {
+    "state": {
+     "plan_id": 244,
+     "active": true,
+     "day": 1,
+     "date": "2026-10-10",
+     "started_at": "2026-10-10T12:25:04.459934+09:00",
+     "ended_at": null,
+     "ended_reason": null,
+     "now": "2026-10-10T14:00:03.332228+09:00",
+     "clock": "sim",
+     "location": {
+      "lat": 35.990555119317555,
+      "lng": 129.55614188743115,
+      "accuracy": 10.0,
+      "recorded_at": "2026-10-10T14:05:52+09:00",
+      "source": "replay"
+     },
+     "current": {
+      "item_id": 507,
+      "state": "moving",
+      "since": "14:01"
+     },
+     "next": {
+      "item_id": 508,
+      "title": "구룡포항",
+      "planned_start": "13:40",
+      "eta": "14:08"
+     },
+     "delay_minutes": 28,
+     "session_id": "f71e291ef8354d6686c6ff163161500d"
+    },
+    "events": [],
+    "accepted": 1,
+    "ignored": 0
+   }
+  },
+  {
+   "at": "2026-10-10T14:06:22+09:00",
+   "kind": "location",
+   "body": {
+    "lat": 35.990317226036744,
+    "lng": 129.55588781740724,
+    "accuracy": 10,
+    "recorded_at": "2026-10-10T14:06:22+09:00",
+    "source": "replay"
+   },
+   "response": {
+    "state": {
+     "plan_id": 244,
+     "active": true,
+     "day": 1,
+     "date": "2026-10-10",
+     "started_at": "2026-10-10T12:25:04.459934+09:00",
+     "ended_at": null,
+     "ended_reason": null,
+     "now": "2026-10-10T14:00:03.367176+09:00",
+     "clock": "sim",
+     "location": {
+      "lat": 35.990317226036744,
+      "lng": 129.55588781740724,
+      "accuracy": 10.0,
+      "recorded_at": "2026-10-10T14:06:22+09:00",
+      "source": "replay"
+     },
+     "current": {
+      "item_id": 507,
+      "state": "moving",
+      "since": "14:01"
+     },
+     "next": {
+      "item_id": 508,
+      "title": "구룡포항",
+      "planned_start": "13:40",
+      "eta": "14:09"
+     },
+     "delay_minutes": 29,
+     "session_id": "f71e291ef8354d6686c6ff163161500d"
+    },
+    "events": [],
+    "accepted": 1,
+    "ignored": 0
+   }
+  },
+  {
+   "at": "2026-10-10T14:06:51+09:00",
+   "kind": "location",
+   "body": {
+    "lat": 35.990091183049316,
+    "lng": 129.55561817428378,
+    "accuracy": 10,
+    "recorded_at": "2026-10-10T14:06:51+09:00",
+    "source": "replay"
+   },
+   "response": {
+    "state": {
+     "plan_id": 244,
+     "active": true,
+     "day": 1,
+     "date": "2026-10-10",
+     "started_at": "2026-10-10T12:25:04.459934+09:00",
+     "ended_at": null,
+     "ended_reason": null,
+     "now": "2026-10-10T14:00:03.400757+09:00",
+     "clock": "sim",
+     "location": {
+      "lat": 35.990091183049316,
+      "lng": 129.55561817428378,
+      "accuracy": 10.0,
+      "recorded_at": "2026-10-10T14:06:51+09:00",
+      "source": "replay"
+     },
+     "current": {
+      "item_id": 507,
+      "state": "moving",
+      "since": "14:01"
+     },
+     "next": {
+      "item_id": 508,
+      "title": "구룡포항",
+      "planned_start": "13:40",
+      "eta": "14:08"
+     },
+     "delay_minutes": 28,
+     "session_id": "f71e291ef8354d6686c6ff163161500d"
+    },
+    "events": [],
+    "accepted": 1,
+    "ignored": 0
+   }
+  },
+  {
+   "at": "2026-10-10T14:07:21+09:00",
+   "kind": "location",
+   "body": {
+    "lat": 35.989871399584665,
+    "lng": 129.5553403051892,
+    "accuracy": 10,
+    "recorded_at": "2026-10-10T14:07:21+09:00",
+    "source": "replay"
+   },
+   "response": {
+    "state": {
+     "plan_id": 244,
+     "active": true,
+     "day": 1,
+     "date": "2026-10-10",
+     "started_at": "2026-10-10T12:25:04.459934+09:00",
+     "ended_at": null,
+     "ended_reason": null,
+     "now": "2026-10-10T14:00:03.436529+09:00",
+     "clock": "sim",
+     "location": {
+      "lat": 35.989871399584665,
+      "lng": 129.5553403051892,
+      "accuracy": 10.0,
+      "recorded_at": "2026-10-10T14:07:21+09:00",
+      "source": "replay"
+     },
+     "current": {
+      "item_id": 507,
+      "state": "moving",
+      "since": "14:01"
+     },
+     "next": {
+      "item_id": 508,
+      "title": "구룡포항",
+      "planned_start": "13:40",
+      "eta": "14:09"
+     },
+     "delay_minutes": 29,
+     "session_id": "f71e291ef8354d6686c6ff163161500d"
+    },
+    "events": [],
+    "accepted": 1,
+    "ignored": 0
+   }
+  },
+  {
+   "at": "2026-10-10T14:07:44+09:00",
+   "kind": "location",
+   "body": {
+    "lat": 35.989647136445825,
+    "lng": 129.55546972461858,
+    "accuracy": 10,
+    "recorded_at": "2026-10-10T14:07:44+09:00",
+    "source": "replay"
+   },
+   "response": {
+    "state": {
+     "plan_id": 244,
+     "active": true,
+     "day": 1,
+     "date": "2026-10-10",
+     "started_at": "2026-10-10T12:25:04.459934+09:00",
+     "ended_at": null,
+     "ended_reason": null,
+     "now": "2026-10-10T14:00:03.470865+09:00",
+     "clock": "sim",
+     "location": {
+      "lat": 35.989647136445825,
+      "lng": 129.55546972461858,
+      "accuracy": 10.0,
+      "recorded_at": "2026-10-10T14:07:44+09:00",
+      "source": "replay"
+     },
+     "current": {
+      "item_id": 507,
+      "state": "moving",
+      "since": "14:01"
+     },
+     "next": {
+      "item_id": 508,
+      "title": "구룡포항",
+      "planned_start": "13:40",
+      "eta": "14:08"
+     },
+     "delay_minutes": 28,
+     "session_id": "f71e291ef8354d6686c6ff163161500d"
+    },
+    "events": [],
+    "accepted": 1,
+    "ignored": 0
+   }
+  },
+  {
+   "at": "2026-10-10T14:08:13+09:00",
+   "kind": "location",
+   "body": {
+    "lat": 35.989383700511745,
+    "lng": 129.5556688614166,
+    "accuracy": 10,
+    "recorded_at": "2026-10-10T14:08:13+09:00",
+    "source": "replay"
+   },
+   "response": {
+    "state": {
+     "plan_id": 244,
+     "active": true,
+     "day": 1,
+     "date": "2026-10-10",
+     "started_at": "2026-10-10T12:25:04.459934+09:00",
+     "ended_at": null,
+     "ended_reason": null,
+     "now": "2026-10-10T14:00:03.504078+09:00",
+     "clock": "sim",
+     "location": {
+      "lat": 35.989383700511745,
+      "lng": 129.5556688614166,
+      "accuracy": 10.0,
+      "recorded_at": "2026-10-10T14:08:13+09:00",
+      "source": "replay"
+     },
+     "current": {
+      "item_id": 507,
+      "state": "moving",
+      "since": "14:01"
+     },
+     "next": {
+      "item_id": 508,
+      "title": "구룡포항",
+      "planned_start": "13:40",
+      "eta": "14:09"
+     },
+     "delay_minutes": 29,
+     "session_id": "f71e291ef8354d6686c6ff163161500d"
+    },
+    "events": [],
+    "accepted": 1,
+    "ignored": 0
+   }
+  },
+  {
+   "at": "2026-10-10T14:08:17+09:00",
+   "kind": "location",
+   "body": {
+    "lat": 35.989352,
+    "lng": 129.555705,
+    "accuracy": 10,
+    "recorded_at": "2026-10-10T14:08:17+09:00",
+    "source": "replay"
+   },
+   "response": {
+    "state": {
+     "plan_id": 244,
+     "active": true,
+     "day": 1,
+     "date": "2026-10-10",
+     "started_at": "2026-10-10T12:25:04.459934+09:00",
+     "ended_at": null,
+     "ended_reason": null,
+     "now": "2026-10-10T14:00:03.543301+09:00",
+     "clock": "sim",
+     "location": {
+      "lat": 35.989352,
+      "lng": 129.555705,
+      "accuracy": 10.0,
+      "recorded_at": "2026-10-10T14:08:17+09:00",
+      "source": "replay"
+     },
+     "current": {
+      "item_id": 507,
+      "state": "moving",
+      "since": "14:01"
+     },
+     "next": {
+      "item_id": 508,
+      "title": "구룡포항",
+      "planned_start": "13:40",
+      "eta": "14:08"
+     },
+     "delay_minutes": 28,
+     "session_id": "f71e291ef8354d6686c6ff163161500d"
+    },
+    "events": [],
+    "accepted": 1,
+    "ignored": 0
+   }
+  },
+  {
+   "at": "2026-10-10T14:08:47+09:00",
+   "kind": "location",
+   "body": {
+    "lat": 35.989352,
+    "lng": 129.555705,
+    "accuracy": 10,
+    "recorded_at": "2026-10-10T14:08:47+09:00",
+    "source": "replay"
+   },
+   "response": {
+    "state": {
+     "plan_id": 244,
+     "active": true,
+     "day": 1,
+     "date": "2026-10-10",
+     "started_at": "2026-10-10T12:25:04.459934+09:00",
+     "ended_at": null,
+     "ended_reason": null,
+     "now": "2026-10-10T14:00:03.569465+09:00",
+     "clock": "sim",
+     "location": {
+      "lat": 35.989352,
+      "lng": 129.555705,
+      "accuracy": 10.0,
+      "recorded_at": "2026-10-10T14:08:47+09:00",
+      "source": "replay"
+     },
+     "current": {
+      "item_id": 507,
+      "state": "moving",
+      "since": "14:01"
+     },
+     "next": {
+      "item_id": 508,
+      "title": "구룡포항",
+      "planned_start": "13:40",
+      "eta": "14:08"
+     },
+     "delay_minutes": 28,
+     "session_id": "f71e291ef8354d6686c6ff163161500d"
+    },
+    "events": [],
+    "accepted": 1,
+    "ignored": 0
+   }
+  },
+  {
+   "at": "2026-10-10T14:09:17+09:00",
+   "kind": "location",
+   "body": {
+    "lat": 35.989352,
+    "lng": 129.555705,
+    "accuracy": 10,
+    "recorded_at": "2026-10-10T14:09:17+09:00",
+    "source": "replay"
+   },
+   "response": {
+    "state": {
+     "plan_id": 244,
+     "active": true,
+     "day": 1,
+     "date": "2026-10-10",
+     "started_at": "2026-10-10T12:25:04.459934+09:00",
+     "ended_at": null,
+     "ended_reason": null,
+     "now": "2026-10-10T14:00:03.605206+09:00",
+     "clock": "sim",
+     "location": {
+      "lat": 35.989352,
+      "lng": 129.555705,
+      "accuracy": 10.0,
+      "recorded_at": "2026-10-10T14:09:17+09:00",
+      "source": "replay"
+     },
+     "current": {
+      "item_id": 508,
+      "state": "visiting",
+      "since": "14:07"
+     },
+     "next": {
+      "item_id": 509,
+      "title": "구룡포과메기문화관",
+      "planned_start": "14:47",
+      "eta": "15:14"
+     },
+     "delay_minutes": 27,
+     "session_id": "f71e291ef8354d6686c6ff163161500d"
+    },
+    "events": [
+     {
+      "id": 352,
+      "plan_id": 244,
+      "day": 1,
+      "type": "arrived",
+      "level": 2,
+      "severity": "info",
+      "created_at": "2026-10-09T14:38:14.491938Z",
+      "now": "2026-10-10T14:07:21+09:00",
+      "item_ids": [
+       508
+      ],
+      "message": "구룡포항에 도착했어요. 이야기 들어볼까요?",
+      "payload": {
+       "item_id": 508,
+       "place_id": "kto-2610501",
+       "title": "구룡포항",
+       "out_of_order": false
+      },
+      "status": "delivered",
+      "agent": null,
+      "card": {
+       "kind": "docent",
+       "place_id": "kto-2610501",
+       "item_id": 508
+      },
+      "seen_at": null,
+      "attempts": 0,
+      "last_error": null
+     }
+    ],
+    "accepted": 1,
+    "ignored": 0
+   }
+  },
+  {
+   "at": "2026-10-10T14:09:47+09:00",
+   "kind": "location",
+   "body": {
+    "lat": 35.989352,
+    "lng": 129.555705,
+    "accuracy": 10,
+    "recorded_at": "2026-10-10T14:09:47+09:00",
+    "source": "replay"
+   },
+   "response": {
+    "state": {
+     "plan_id": 244,
+     "active": true,
+     "day": 1,
+     "date": "2026-10-10",
+     "started_at": "2026-10-10T12:25:04.459934+09:00",
+     "ended_at": null,
+     "ended_reason": null,
+     "now": "2026-10-10T14:00:03.630947+09:00",
+     "clock": "sim",
+     "location": {
+      "lat": 35.989352,
+      "lng": 129.555705,
+      "accuracy": 10.0,
+      "recorded_at": "2026-10-10T14:09:47+09:00",
+      "source": "replay"
+     },
+     "current": {
+      "item_id": 508,
+      "state": "visiting",
+      "since": "14:07"
+     },
+     "next": {
+      "item_id": 509,
+      "title": "구룡포과메기문화관",
+      "planned_start": "14:47",
+      "eta": "15:14"
+     },
+     "delay_minutes": 27,
+     "session_id": "f71e291ef8354d6686c6ff163161500d"
+    },
+    "events": [],
+    "accepted": 1,
+    "ignored": 0
+   }
+  },
+  {
+   "at": "2026-10-10T14:10:17+09:00",
+   "kind": "location",
+   "body": {
+    "lat": 35.989352,
+    "lng": 129.555705,
+    "accuracy": 10,
+    "recorded_at": "2026-10-10T14:10:17+09:00",
+    "source": "replay"
+   },
+   "response": {
+    "state": {
+     "plan_id": 244,
+     "active": true,
+     "day": 1,
+     "date": "2026-10-10",
+     "started_at": "2026-10-10T12:25:04.459934+09:00",
+     "ended_at": null,
+     "ended_reason": null,
+     "now": "2026-10-10T14:00:03.654925+09:00",
+     "clock": "sim",
+     "location": {
+      "lat": 35.989352,
+      "lng": 129.555705,
+      "accuracy": 10.0,
+      "recorded_at": "2026-10-10T14:10:17+09:00",
+      "source": "replay"
+     },
+     "current": {
+      "item_id": 508,
+      "state": "visiting",
+      "since": "14:07"
+     },
+     "next": {
+      "item_id": 509,
+      "title": "구룡포과메기문화관",
+      "planned_start": "14:47",
+      "eta": "15:14"
+     },
+     "delay_minutes": 27,
+     "session_id": "f71e291ef8354d6686c6ff163161500d"
+    },
+    "events": [],
+    "accepted": 1,
+    "ignored": 0
+   }
+  },
+  {
+   "at": "2026-10-10T14:10:47+09:00",
+   "kind": "location",
+   "body": {
+    "lat": 35.989352,
+    "lng": 129.555705,
+    "accuracy": 10,
+    "recorded_at": "2026-10-10T14:10:47+09:00",
+    "source": "replay"
+   },
+   "response": {
+    "state": {
+     "plan_id": 244,
+     "active": true,
+     "day": 1,
+     "date": "2026-10-10",
+     "started_at": "2026-10-10T12:25:04.459934+09:00",
+     "ended_at": null,
+     "ended_reason": null,
+     "now": "2026-10-10T14:00:03.681347+09:00",
+     "clock": "sim",
+     "location": {
+      "lat": 35.989352,
+      "lng": 129.555705,
+      "accuracy": 10.0,
+      "recorded_at": "2026-10-10T14:10:47+09:00",
+      "source": "replay"
+     },
+     "current": {
+      "item_id": 508,
+      "state": "visiting",
+      "since": "14:07"
+     },
+     "next": {
+      "item_id": 509,
+      "title": "구룡포과메기문화관",
+      "planned_start": "14:47",
+      "eta": "15:14"
+     },
+     "delay_minutes": 27,
+     "session_id": "f71e291ef8354d6686c6ff163161500d"
+    },
+    "events": [],
+    "accepted": 1,
+    "ignored": 0
+   }
+  },
+  {
+   "at": "2026-10-10T14:11:17+09:00",
+   "kind": "location",
+   "body": {
+    "lat": 35.989352,
+    "lng": 129.555705,
+    "accuracy": 10,
+    "recorded_at": "2026-10-10T14:11:17+09:00",
+    "source": "replay"
+   },
+   "response": {
+    "state": {
+     "plan_id": 244,
+     "active": true,
+     "day": 1,
+     "date": "2026-10-10",
+     "started_at": "2026-10-10T12:25:04.459934+09:00",
+     "ended_at": null,
+     "ended_reason": null,
+     "now": "2026-10-10T14:00:03.709367+09:00",
+     "clock": "sim",
+     "location": {
+      "lat": 35.989352,
+      "lng": 129.555705,
+      "accuracy": 10.0,
+      "recorded_at": "2026-10-10T14:11:17+09:00",
+      "source": "replay"
+     },
+     "current": {
+      "item_id": 508,
+      "state": "visiting",
+      "since": "14:07"
+     },
+     "next": {
+      "item_id": 509,
+      "title": "구룡포과메기문화관",
+      "planned_start": "14:47",
+      "eta": "15:14"
+     },
+     "delay_minutes": 27,
+     "session_id": "f71e291ef8354d6686c6ff163161500d"
+    },
+    "events": [],
+    "accepted": 1,
+    "ignored": 0
+   }
+  },
+  {
+   "at": "2026-10-10T14:13:17+09:00",
+   "kind": "location",
+   "body": {
+    "lat": 35.989352,
+    "lng": 129.555705,
+    "accuracy": 10,
+    "recorded_at": "2026-10-10T14:13:17+09:00",
+    "source": "replay"
+   },
+   "response": {
+    "state": {
+     "plan_id": 244,
+     "active": true,
+     "day": 1,
+     "date": "2026-10-10",
+     "started_at": "2026-10-10T12:25:04.459934+09:00",
+     "ended_at": null,
+     "ended_reason": null,
+     "now": "2026-10-10T14:00:03.733978+09:00",
+     "clock": "sim",
+     "location": {
+      "lat": 35.989352,
+      "lng": 129.555705,
+      "accuracy": 10.0,
+      "recorded_at": "2026-10-10T14:13:17+09:00",
+      "source": "replay"
+     },
+     "current": {
+      "item_id": 508,
+      "state": "visiting",
+      "since": "14:07"
+     },
+     "next": {
+      "item_id": 509,
+      "title": "구룡포과메기문화관",
+      "planned_start": "14:47",
+      "eta": "15:14"
+     },
+     "delay_minutes": 27,
+     "session_id": "f71e291ef8354d6686c6ff163161500d"
+    },
+    "events": [],
+    "accepted": 1,
+    "ignored": 0
+   }
+  },
+  {
+   "at": "2026-10-10T14:13:17+09:00",
+   "kind": "poll",
+   "route": "/trip/plans/{plan_id}/events",
+   "query": {
+    "after": 0,
+    "limit": 200
+   },
+   "response": [
+    {
+     "id": 348,
+     "plan_id": 244,
+     "day": 1,
+     "type": "day_started",
+     "level": 0,
+     "severity": "info",
+     "created_at": "2026-10-09T14:38:10.031713Z",
+     "now": "2026-10-10T12:25:04.459934+09:00",
+     "item_ids": [],
+     "message": "1일차 여행을 시작했어요.",
+     "payload": {},
+     "status": "delivered",
+     "agent": null,
+     "card": null,
+     "seen_at": null,
+     "attempts": 0,
+     "last_error": null
+    },
+    {
+     "id": 349,
+     "plan_id": 244,
+     "day": 1,
+     "type": "arrived",
+     "level": 2,
+     "severity": "info",
+     "created_at": "2026-10-09T14:38:10.130998Z",
+     "now": "2026-10-10T12:30:00+09:00",
+     "item_ids": [
+      507
+     ],
+     "message": "구룡포 일본인 가옥거리에 도착했어요. 이야기 들어볼까요?",
+     "payload": {
+      "title": "구룡포 일본인 가옥거리",
+      "item_id": 507,
+      "place_id": "kto-1909659",
+      "out_of_order": false
+     },
+     "status": "delivered",
+     "agent": null,
+     "card": {
+      "kind": "docent",
+      "item_id": 507,
+      "place_id": "kto-1909659"
+     },
+     "seen_at": null,
+     "attempts": 0,
+     "last_error": null
+    },
+    {
+     "id": 350,
+     "plan_id": 244,
+     "day": 1,
+     "type": "delay",
+     "level": 3,
+     "severity": "warning",
+     "created_at": "2026-10-09T14:38:10.817805Z",
+     "now": "2026-10-10T13:53:00+09:00",
+     "item_ids": [
+      511
+     ],
+     "message": "지금대로면 일정에 문제가 생겨요. 1일차 일정이 18:01 에 끝나 목표 종료 시각 18:00 을 1분 넘습니다. (그 밖에 1건)",
+     "payload": {
+      "next": {
+       "eta": "14:03",
+       "item_id": 508,
+       "start_at": "14:03",
+       "planned_start": "13:40"
+      },
+      "delay_minutes": 23,
+      "new_violations": [
+       {
+        "day": 1,
+        "code": "day_overflow",
+        "item_id": 511,
+        "message": "1일차 일정이 18:01 에 끝나 목표 종료 시각 18:00 을 1분 넘습니다.",
+        "severity": "error",
+        "constraint_id": null
+       },
+       {
+        "day": 1,
+        "code": "end_before",
+        "item_id": null,
+        "message": "1일차 일정이 18:01 에 끝나 18:00 전 종료 규칙을 어깁니다.",
+        "severity": "error",
+        "constraint_id": 40
+       }
+      ]
+     },
+     "status": "delivered",
+     "agent": {
+      "message_id": 1093,
+      "session_id": "f71e291ef8354d6686c6ff163161500d",
+      "proposal_id": 120
+     },
+     "card": null,
+     "seen_at": null,
+     "attempts": 1,
+     "last_error": null
+    },
+    {
+     "id": 351,
+     "plan_id": 244,
+     "day": 1,
+     "type": "departed",
+     "level": 1,
+     "severity": "info",
+     "created_at": "2026-10-09T14:38:14.055601Z",
+     "now": "2026-10-10T14:01:17+09:00",
+     "item_ids": [
+      507
+     ],
+     "message": "구룡포 일본인 가옥거리을(를) 떠났어요. 다음은 구룡포항, 도보 약 8분 (14:09 도착 예정).",
+     "payload": {
+      "title": "구룡포 일본인 가옥거리",
+      "item_id": 507,
+      "stayed_minutes": 91
+     },
+     "status": "delivered",
+     "agent": null,
+     "card": null,
+     "seen_at": null,
+     "attempts": 0,
+     "last_error": null
+    },
+    {
+     "id": 352,
+     "plan_id": 244,
+     "day": 1,
+     "type": "arrived",
+     "level": 2,
+     "severity": "info",
+     "created_at": "2026-10-09T14:38:14.491938Z",
+     "now": "2026-10-10T14:07:21+09:00",
+     "item_ids": [
+      508
+     ],
+     "message": "구룡포항에 도착했어요. 이야기 들어볼까요?",
+     "payload": {
+      "title": "구룡포항",
+      "item_id": 508,
+      "place_id": "kto-2610501",
+      "out_of_order": false
+     },
+     "status": "delivered",
+     "agent": null,
+     "card": {
+      "kind": "docent",
+      "item_id": 508,
+      "place_id": "kto-2610501"
+     },
+     "seen_at": null,
+     "attempts": 0,
+     "last_error": null
+    }
+   ]
+  }
+ ],
+ "final": {
+  "events": [
+   {
+    "id": 348,
+    "plan_id": 244,
+    "day": 1,
+    "type": "day_started",
+    "level": 0,
+    "severity": "info",
+    "created_at": "2026-10-09T14:38:10.031713Z",
+    "now": "2026-10-10T12:25:04.459934+09:00",
+    "item_ids": [],
+    "message": "1일차 여행을 시작했어요.",
+    "payload": {},
+    "status": "delivered",
+    "agent": null,
+    "card": null,
+    "seen_at": null,
+    "attempts": 0,
+    "last_error": null
+   },
+   {
+    "id": 349,
+    "plan_id": 244,
+    "day": 1,
+    "type": "arrived",
+    "level": 2,
+    "severity": "info",
+    "created_at": "2026-10-09T14:38:10.130998Z",
+    "now": "2026-10-10T12:30:00+09:00",
+    "item_ids": [
+     507
+    ],
+    "message": "구룡포 일본인 가옥거리에 도착했어요. 이야기 들어볼까요?",
+    "payload": {
+     "title": "구룡포 일본인 가옥거리",
+     "item_id": 507,
+     "place_id": "kto-1909659",
+     "out_of_order": false
+    },
+    "status": "delivered",
+    "agent": null,
+    "card": {
+     "kind": "docent",
+     "item_id": 507,
+     "place_id": "kto-1909659"
+    },
+    "seen_at": null,
+    "attempts": 0,
+    "last_error": null
+   },
+   {
+    "id": 350,
+    "plan_id": 244,
+    "day": 1,
+    "type": "delay",
+    "level": 3,
+    "severity": "warning",
+    "created_at": "2026-10-09T14:38:10.817805Z",
+    "now": "2026-10-10T13:53:00+09:00",
+    "item_ids": [
+     511
+    ],
+    "message": "지금대로면 일정에 문제가 생겨요. 1일차 일정이 18:01 에 끝나 목표 종료 시각 18:00 을 1분 넘습니다. (그 밖에 1건)",
+    "payload": {
+     "next": {
+      "eta": "14:03",
+      "item_id": 508,
+      "start_at": "14:03",
+      "planned_start": "13:40"
+     },
+     "delay_minutes": 23,
+     "new_violations": [
+      {
+       "day": 1,
+       "code": "day_overflow",
+       "item_id": 511,
+       "message": "1일차 일정이 18:01 에 끝나 목표 종료 시각 18:00 을 1분 넘습니다.",
+       "severity": "error",
+       "constraint_id": null
+      },
+      {
+       "day": 1,
+       "code": "end_before",
+       "item_id": null,
+       "message": "1일차 일정이 18:01 에 끝나 18:00 전 종료 규칙을 어깁니다.",
+       "severity": "error",
+       "constraint_id": 40
+      }
+     ]
+    },
+    "status": "delivered",
+    "agent": {
+     "message_id": 1093,
+     "session_id": "f71e291ef8354d6686c6ff163161500d",
+     "proposal_id": 120
+    },
+    "card": null,
+    "seen_at": null,
+    "attempts": 1,
+    "last_error": null
+   },
+   {
+    "id": 351,
+    "plan_id": 244,
+    "day": 1,
+    "type": "departed",
+    "level": 1,
+    "severity": "info",
+    "created_at": "2026-10-09T14:38:14.055601Z",
+    "now": "2026-10-10T14:01:17+09:00",
+    "item_ids": [
+     507
+    ],
+    "message": "구룡포 일본인 가옥거리을(를) 떠났어요. 다음은 구룡포항, 도보 약 8분 (14:09 도착 예정).",
+    "payload": {
+     "title": "구룡포 일본인 가옥거리",
+     "item_id": 507,
+     "stayed_minutes": 91
+    },
+    "status": "delivered",
+    "agent": null,
+    "card": null,
+    "seen_at": null,
+    "attempts": 0,
+    "last_error": null
+   },
+   {
+    "id": 352,
+    "plan_id": 244,
+    "day": 1,
+    "type": "arrived",
+    "level": 2,
+    "severity": "info",
+    "created_at": "2026-10-09T14:38:14.491938Z",
+    "now": "2026-10-10T14:07:21+09:00",
+    "item_ids": [
+     508
+    ],
+    "message": "구룡포항에 도착했어요. 이야기 들어볼까요?",
+    "payload": {
+     "title": "구룡포항",
+     "item_id": 508,
+     "place_id": "kto-2610501",
+     "out_of_order": false
+    },
+    "status": "delivered",
+    "agent": null,
+    "card": {
+     "kind": "docent",
+     "item_id": 508,
+     "place_id": "kto-2610501"
+    },
+    "seen_at": null,
+    "attempts": 0,
+    "last_error": null
+   }
+  ],
+  "state": {
+   "plan_id": 244,
+   "active": true,
+   "day": 1,
+   "date": "2026-10-10",
+   "started_at": "2026-10-10T12:25:04.459934+09:00",
+   "ended_at": null,
+   "ended_reason": null,
+   "now": "2026-10-10T14:00:03.754929+09:00",
+   "clock": "sim",
+   "location": {
+    "lat": 35.989352,
+    "lng": 129.555705,
+    "accuracy": 10.0,
+    "recorded_at": "2026-10-10T14:13:17+09:00",
+    "source": "replay"
+   },
+   "current": {
+    "item_id": 508,
+    "state": "visiting",
+    "since": "14:07"
+   },
+   "next": {
+    "item_id": 509,
+    "title": "구룡포과메기문화관",
+    "planned_start": "14:47",
+    "eta": "15:14"
+   },
+   "delay_minutes": 27,
+   "session_id": "f71e291ef8354d6686c6ff163161500d"
+  }
+ }
+}

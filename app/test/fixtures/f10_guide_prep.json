@@ -1,0 +1,701 @@
+{
+ "flow": "F10",
+ "title": "가이드 준비 (여행 전)",
+ "screens": "32·17",
+ "recorded_at": "2026-10-09T23:37:59+09:00",
+ "backend": {
+  "agent_provider": "scripted:scripts",
+  "safety_source": "mock",
+  "git": "6a7d484"
+ },
+ "exchanges": [
+  {
+   "name": "notes_before",
+   "method": "GET",
+   "route": "/docent/plans/{plan_id}/notes",
+   "path": "/docent/plans/240/notes",
+   "query": {},
+   "body": null,
+   "status": 200,
+   "elapsed_ms": 19,
+   "response": []
+  },
+  {
+   "name": "prepare",
+   "method": "POST",
+   "route": "/agent/plans/{plan_id}/guide/prepare",
+   "path": "/agent/plans/240/guide/prepare",
+   "query": {},
+   "body": {},
+   "status": 202,
+   "elapsed_ms": 132,
+   "response": {
+    "job_id": "a27e58ef83cc47e5a7260b73c7080e47",
+    "plan_id": 240,
+    "status": "running",
+    "total": 5,
+    "finished": 0,
+    "ready": 0,
+    "failed": 0,
+    "current": null,
+    "eta_sec": 100,
+    "places": [
+     {
+      "place_id": "kto-1909659",
+      "title": "구룡포 일본인 가옥거리",
+      "status": "pending",
+      "error": "",
+      "sources": 0,
+      "web_searches": 0,
+      "seconds": null,
+      "usage": null
+     },
+     {
+      "place_id": "kto-2610501",
+      "title": "구룡포항",
+      "status": "pending",
+      "error": "",
+      "sources": 0,
+      "web_searches": 0,
+      "seconds": null,
+      "usage": null
+     },
+     {
+      "place_id": "kto-2660046",
+      "title": "구룡포과메기문화관",
+      "status": "pending",
+      "error": "",
+      "sources": 0,
+      "web_searches": 0,
+      "seconds": null,
+      "usage": null
+     },
+     {
+      "place_id": "poi-gr-breakwater-north",
+      "title": "구룡포 북방파제",
+      "status": "pending",
+      "error": "",
+      "sources": 0,
+      "web_searches": 0,
+      "seconds": null,
+      "usage": null
+     },
+     {
+      "place_id": "kto-2834344",
+      "title": "카페파도",
+      "status": "pending",
+      "error": "",
+      "sources": 0,
+      "web_searches": 0,
+      "seconds": null,
+      "usage": null
+     }
+    ],
+    "started_at": "2026-10-09T14:37:53.238721Z",
+    "finished_at": null,
+    "usage": {
+     "input": 0,
+     "cached": 0,
+     "output": 0,
+     "reasoning": 0,
+     "calls": 0
+    }
+   }
+  },
+  {
+   "name": "job_poll_1",
+   "method": "GET",
+   "route": "/agent/plans/{plan_id}/guide/jobs/{job_id}",
+   "path": "/agent/plans/240/guide/jobs/a27e58ef83cc47e5a7260b73c7080e47",
+   "query": {},
+   "body": null,
+   "status": 200,
+   "elapsed_ms": 9,
+   "response": {
+    "job_id": "a27e58ef83cc47e5a7260b73c7080e47",
+    "plan_id": 240,
+    "status": "running",
+    "total": 5,
+    "finished": 0,
+    "ready": 0,
+    "failed": 0,
+    "current": "kto-1909659",
+    "eta_sec": 100,
+    "places": [
+     {
+      "place_id": "kto-1909659",
+      "title": "구룡포 일본인 가옥거리",
+      "status": "preparing",
+      "error": "",
+      "sources": 0,
+      "web_searches": 0,
+      "seconds": null,
+      "usage": null
+     },
+     {
+      "place_id": "kto-2610501",
+      "title": "구룡포항",
+      "status": "pending",
+      "error": "",
+      "sources": 0,
+      "web_searches": 0,
+      "seconds": null,
+      "usage": null
+     },
+     {
+      "place_id": "kto-2660046",
+      "title": "구룡포과메기문화관",
+      "status": "pending",
+      "error": "",
+      "sources": 0,
+      "web_searches": 0,
+      "seconds": null,
+      "usage": null
+     },
+     {
+      "place_id": "poi-gr-breakwater-north",
+      "title": "구룡포 북방파제",
+      "status": "pending",
+      "error": "",
+      "sources": 0,
+      "web_searches": 0,
+      "seconds": null,
+      "usage": null
+     },
+     {
+      "place_id": "kto-2834344",
+      "title": "카페파도",
+      "status": "pending",
+      "error": "",
+      "sources": 0,
+      "web_searches": 0,
+      "seconds": null,
+      "usage": null
+     }
+    ],
+    "started_at": "2026-10-09T14:37:53.238721Z",
+    "finished_at": null,
+    "usage": {
+     "input": 0,
+     "cached": 0,
+     "output": 0,
+     "reasoning": 0,
+     "calls": 0
+    }
+   }
+  },
+  {
+   "name": "job_poll_2",
+   "method": "GET",
+   "route": "/agent/plans/{plan_id}/guide/jobs/{job_id}",
+   "path": "/agent/plans/240/guide/jobs/a27e58ef83cc47e5a7260b73c7080e47",
+   "query": {},
+   "body": null,
+   "status": 200,
+   "elapsed_ms": 8,
+   "response": {
+    "job_id": "a27e58ef83cc47e5a7260b73c7080e47",
+    "plan_id": 240,
+    "status": "running",
+    "total": 5,
+    "finished": 1,
+    "ready": 1,
+    "failed": 0,
+    "current": "kto-2610501",
+    "eta_sec": 11,
+    "places": [
+     {
+      "place_id": "kto-1909659",
+      "title": "구룡포 일본인 가옥거리",
+      "status": "ready",
+      "error": "",
+      "sources": 2,
+      "web_searches": 0,
+      "seconds": 2.8,
+      "usage": {
+       "input": 0,
+       "cached": 0,
+       "output": 0,
+       "reasoning": 0,
+       "calls": 2
+      }
+     },
+     {
+      "place_id": "kto-2610501",
+      "title": "구룡포항",
+      "status": "preparing",
+      "error": "",
+      "sources": 0,
+      "web_searches": 0,
+      "seconds": null,
+      "usage": null
+     },
+     {
+      "place_id": "kto-2660046",
+      "title": "구룡포과메기문화관",
+      "status": "pending",
+      "error": "",
+      "sources": 0,
+      "web_searches": 0,
+      "seconds": null,
+      "usage": null
+     },
+     {
+      "place_id": "poi-gr-breakwater-north",
+      "title": "구룡포 북방파제",
+      "status": "pending",
+      "error": "",
+      "sources": 0,
+      "web_searches": 0,
+      "seconds": null,
+      "usage": null
+     },
+     {
+      "place_id": "kto-2834344",
+      "title": "카페파도",
+      "status": "pending",
+      "error": "",
+      "sources": 0,
+      "web_searches": 0,
+      "seconds": null,
+      "usage": null
+     }
+    ],
+    "started_at": "2026-10-09T14:37:53.238721Z",
+    "finished_at": null,
+    "usage": {
+     "input": 0,
+     "cached": 0,
+     "output": 0,
+     "reasoning": 0,
+     "calls": 2
+    }
+   }
+  },
+  {
+   "name": "job_poll_3",
+   "method": "GET",
+   "route": "/agent/plans/{plan_id}/guide/jobs/{job_id}",
+   "path": "/agent/plans/240/guide/jobs/a27e58ef83cc47e5a7260b73c7080e47",
+   "query": {},
+   "body": null,
+   "status": 200,
+   "elapsed_ms": 17,
+   "response": {
+    "job_id": "a27e58ef83cc47e5a7260b73c7080e47",
+    "plan_id": 240,
+    "status": "running",
+    "total": 5,
+    "finished": 3,
+    "ready": 3,
+    "failed": 0,
+    "current": "poi-gr-breakwater-north",
+    "eta_sec": 3,
+    "places": [
+     {
+      "place_id": "kto-1909659",
+      "title": "구룡포 일본인 가옥거리",
+      "status": "ready",
+      "error": "",
+      "sources": 2,
+      "web_searches": 0,
+      "seconds": 2.8,
+      "usage": {
+       "input": 0,
+       "cached": 0,
+       "output": 0,
+       "reasoning": 0,
+       "calls": 2
+      }
+     },
+     {
+      "place_id": "kto-2610501",
+      "title": "구룡포항",
+      "status": "ready",
+      "error": "",
+      "sources": 2,
+      "web_searches": 0,
+      "seconds": 0.6,
+      "usage": {
+       "input": 0,
+       "cached": 0,
+       "output": 0,
+       "reasoning": 0,
+       "calls": 1
+      }
+     },
+     {
+      "place_id": "kto-2660046",
+      "title": "구룡포과메기문화관",
+      "status": "ready",
+      "error": "",
+      "sources": 2,
+      "web_searches": 0,
+      "seconds": 0.8,
+      "usage": {
+       "input": 0,
+       "cached": 0,
+       "output": 0,
+       "reasoning": 0,
+       "calls": 1
+      }
+     },
+     {
+      "place_id": "poi-gr-breakwater-north",
+      "title": "구룡포 북방파제",
+      "status": "preparing",
+      "error": "",
+      "sources": 0,
+      "web_searches": 0,
+      "seconds": null,
+      "usage": null
+     },
+     {
+      "place_id": "kto-2834344",
+      "title": "카페파도",
+      "status": "pending",
+      "error": "",
+      "sources": 0,
+      "web_searches": 0,
+      "seconds": null,
+      "usage": null
+     }
+    ],
+    "started_at": "2026-10-09T14:37:53.238721Z",
+    "finished_at": null,
+    "usage": {
+     "input": 0,
+     "cached": 0,
+     "output": 0,
+     "reasoning": 0,
+     "calls": 4
+    }
+   }
+  },
+  {
+   "name": "job_poll_4",
+   "method": "GET",
+   "route": "/agent/plans/{plan_id}/guide/jobs/{job_id}",
+   "path": "/agent/plans/240/guide/jobs/a27e58ef83cc47e5a7260b73c7080e47",
+   "query": {},
+   "body": null,
+   "status": 200,
+   "elapsed_ms": 4,
+   "response": {
+    "job_id": "a27e58ef83cc47e5a7260b73c7080e47",
+    "plan_id": 240,
+    "status": "done",
+    "total": 5,
+    "finished": 5,
+    "ready": 5,
+    "failed": 0,
+    "current": null,
+    "eta_sec": 0,
+    "places": [
+     {
+      "place_id": "kto-1909659",
+      "title": "구룡포 일본인 가옥거리",
+      "status": "ready",
+      "error": "",
+      "sources": 2,
+      "web_searches": 0,
+      "seconds": 2.8,
+      "usage": {
+       "input": 0,
+       "cached": 0,
+       "output": 0,
+       "reasoning": 0,
+       "calls": 2
+      }
+     },
+     {
+      "place_id": "kto-2610501",
+      "title": "구룡포항",
+      "status": "ready",
+      "error": "",
+      "sources": 2,
+      "web_searches": 0,
+      "seconds": 0.6,
+      "usage": {
+       "input": 0,
+       "cached": 0,
+       "output": 0,
+       "reasoning": 0,
+       "calls": 1
+      }
+     },
+     {
+      "place_id": "kto-2660046",
+      "title": "구룡포과메기문화관",
+      "status": "ready",
+      "error": "",
+      "sources": 2,
+      "web_searches": 0,
+      "seconds": 0.8,
+      "usage": {
+       "input": 0,
+       "cached": 0,
+       "output": 0,
+       "reasoning": 0,
+       "calls": 1
+      }
+     },
+     {
+      "place_id": "poi-gr-breakwater-north",
+      "title": "구룡포 북방파제",
+      "status": "ready",
+      "error": "",
+      "sources": 1,
+      "web_searches": 0,
+      "seconds": 0.5,
+      "usage": {
+       "input": 0,
+       "cached": 0,
+       "output": 0,
+       "reasoning": 0,
+       "calls": 1
+      }
+     },
+     {
+      "place_id": "kto-2834344",
+      "title": "카페파도",
+      "status": "ready",
+      "error": "",
+      "sources": 1,
+      "web_searches": 0,
+      "seconds": 0.5,
+      "usage": {
+       "input": 0,
+       "cached": 0,
+       "output": 0,
+       "reasoning": 0,
+       "calls": 1
+      }
+     }
+    ],
+    "started_at": "2026-10-09T14:37:53.238721Z",
+    "finished_at": "2026-10-09T14:37:59.441761Z",
+    "usage": {
+     "input": 0,
+     "cached": 0,
+     "output": 0,
+     "reasoning": 0,
+     "calls": 6
+    }
+   }
+  },
+  {
+   "name": "notes_after",
+   "method": "GET",
+   "route": "/docent/plans/{plan_id}/notes",
+   "path": "/docent/plans/240/notes",
+   "query": {},
+   "body": null,
+   "status": 200,
+   "elapsed_ms": 14,
+   "response": [
+    {
+     "plan_id": 240,
+     "place_id": "kto-1909659",
+     "status": "ready",
+     "memory_version": 1,
+     "prepared_at": "2026-10-09T14:37:56.027138Z",
+     "updated_at": "2026-10-09T14:37:56.027117Z"
+    },
+    {
+     "plan_id": 240,
+     "place_id": "kto-2610501",
+     "status": "ready",
+     "memory_version": 1,
+     "prepared_at": "2026-10-09T14:37:57.037447Z",
+     "updated_at": "2026-10-09T14:37:57.037426Z"
+    },
+    {
+     "plan_id": 240,
+     "place_id": "kto-2660046",
+     "status": "ready",
+     "memory_version": 1,
+     "prepared_at": "2026-10-09T14:37:58.402533Z",
+     "updated_at": "2026-10-09T14:37:58.402514Z"
+    },
+    {
+     "plan_id": 240,
+     "place_id": "poi-gr-breakwater-north",
+     "status": "ready",
+     "memory_version": 1,
+     "prepared_at": "2026-10-09T14:37:58.935849Z",
+     "updated_at": "2026-10-09T14:37:58.935829Z"
+    },
+    {
+     "plan_id": 240,
+     "place_id": "kto-2834344",
+     "status": "ready",
+     "memory_version": 1,
+     "prepared_at": "2026-10-09T14:37:59.434697Z",
+     "updated_at": "2026-10-09T14:37:59.434678Z"
+    }
+   ]
+  },
+  {
+   "name": "note_house_street",
+   "method": "GET",
+   "route": "/docent/plans/{plan_id}/notes/{place_id}",
+   "path": "/docent/plans/240/notes/kto-1909659",
+   "query": {},
+   "body": null,
+   "status": 200,
+   "elapsed_ms": 15,
+   "response": {
+    "short": "일제강점기 구룡포에 정착한 일본인들이 살던 거리예요. 지금도 일본식 목조 건물 47채가 남아 있고, 2010년 포항시가 역사를 기억하는 교육장으로 거리를 정비했어요.",
+    "long": "구룡포는 일제강점기 동해안 어업의 전진기지였어요. 어장이 워낙 풍요로워 일본인 어부와 상인들이 이곳에 정착했고, 조선인들의 어업권을 빼앗으며 부를 쌓았어요. 그들이 세운 백화점과 약국, 공원 같은 근대 시설이 이 일대에 들어섰지요. 해방 뒤 일본인들이 떠나면서 집들은 그대로 남았고, 지금도 일본식 목조 건물 47채가 있어요. 포항시는 2010년 이 거리를 아픈 역사를 기억하는 산 교육장으로 정비했어요. 거리 안의 구룡포근대역사관은 하시모토 젠기치가 살던 집으로 당시 생활상을 볼 수 있어요. 공원 계단에서 내려다보는 어촌 풍경도 꼭 보세요.",
+    "for_you": [
+     "어머니와 천천히 걸으며 옛 가옥의 창살과 지붕을 비교해 보세요"
+    ],
+    "highlights": [
+     "공원 계단에서 내려다보는 구룡포 어촌 풍경",
+     "구룡포근대역사관(하시모토 젠기치 가옥)",
+     "옛 요리점을 그대로 쓰는 찻집"
+    ],
+    "companion_tips": [
+     "공원으로 오르는 계단이 가팔라요. 힘들면 아래 거리만 걸어도 충분해요"
+    ],
+    "cautions": [
+     "근대역사관은 월요일에 쉬어요"
+    ],
+    "qa": [
+     {
+      "q": "집들은 언제 지어졌어요?",
+      "a": "일제강점기에 구룡포에 정착한 일본인들이 지은 집들이에요. 근대역사관 건물은 1920년대에 지어졌어요."
+     },
+     {
+      "q": "몇 채나 남아 있어요?",
+      "a": "일본식 목조 건물 47채가 남아 있어요."
+     },
+     {
+      "q": "왜 보존했어요?",
+      "a": "포항시가 2010년 아픈 역사를 기억하는 교육장으로 거리를 정비했어요."
+     }
+    ],
+    "sources": [
+     {
+      "title": "한국관광공사 소개 · 구룡포 일본인 가옥거리",
+      "url": "https://api.visitkorea.or.kr/",
+      "tier": "official"
+     },
+     {
+      "title": "한국관광공사 오디오 가이드 · 일본인가옥거리(근대문화역사거리) - 포항 일본인가옥거리(근대문화역사거리)",
+      "url": "https://api.visitkorea.or.kr/",
+      "tier": "official"
+     }
+    ],
+    "plan_id": 240,
+    "place_id": "kto-1909659",
+    "status": "ready",
+    "error": "",
+    "memory_version": 1,
+    "model": "scripted",
+    "prepared_at": "2026-10-09T14:37:56.027138Z",
+    "updated_at": "2026-10-09T14:37:56.027117Z"
+   }
+  },
+  {
+   "name": "note_breakwater",
+   "method": "GET",
+   "route": "/docent/plans/{plan_id}/notes/{place_id}",
+   "path": "/docent/plans/240/notes/poi-gr-breakwater-north",
+   "query": {},
+   "body": null,
+   "status": 200,
+   "elapsed_ms": 15,
+   "response": {
+    "short": "구룡포항을 감싸는 약 600미터 길이의 북쪽 방파제예요. 항구의 어선과 마을, 동해를 한눈에 볼 수 있어요.",
+    "long": "북방파제는 구룡포항을 감싸는 두 방파제 가운데 북쪽 방파제로 길이가 약 600미터예요. 구룡포항은 1923년 부두를 만들고 방파제를 쌓으면서 항구의 모습을 갖췄어요. 방파제를 따라 걸으면 항구에 정박한 어선과 구룡포 마을, 탁 트인 동해가 한눈에 들어와요. 바닷바람과 파도를 그대로 맞는 곳이라 날씨가 좋을 때만 가는 게 좋아요. 방파제에는 위험구역 접근과 실족을 감지하는 AI CCTV가 있어요.",
+    "for_you": [
+     "어머니와 바다를 배경으로 사진을 남기기 좋아요"
+    ],
+    "highlights": [
+     "방파제에서 보는 구룡포항과 마을",
+     "탁 트인 동해"
+    ],
+    "companion_tips": [
+     "난간이 없는 구간이 있어 안쪽으로 걸으세요"
+    ],
+    "cautions": [
+     "강풍·풍랑 특보나 높은 파도가 있으면 들어가지 마세요"
+    ],
+    "qa": [
+     {
+      "q": "얼마나 길어요?",
+      "a": "약 600미터예요."
+     },
+     {
+      "q": "언제 만들었어요?",
+      "a": "1923년 부두를 만들 때 방파제도 쌓았어요."
+     }
+    ],
+    "sources": [
+     {
+      "title": "구룡메이트 장소 정보 · 구룡포 북방파제",
+      "url": "",
+      "tier": "unknown"
+     }
+    ],
+    "plan_id": 240,
+    "place_id": "poi-gr-breakwater-north",
+    "status": "ready",
+    "error": "",
+    "memory_version": 1,
+    "model": "scripted",
+    "prepared_at": "2026-10-09T14:37:58.935849Z",
+    "updated_at": "2026-10-09T14:37:58.935829Z"
+   }
+  },
+  {
+   "name": "prepare_again_nothing_to_do",
+   "method": "POST",
+   "route": "/agent/plans/{plan_id}/guide/prepare",
+   "path": "/agent/plans/240/guide/prepare",
+   "query": {},
+   "body": {},
+   "status": 202,
+   "elapsed_ms": 26,
+   "response": {
+    "job_id": "e4bd540547244a5aaa8caa21d2fe1cea",
+    "plan_id": 240,
+    "status": "done",
+    "total": 0,
+    "finished": 0,
+    "ready": 0,
+    "failed": 0,
+    "current": null,
+    "eta_sec": 0,
+    "places": [],
+    "started_at": "2026-10-09T14:38:00.093388Z",
+    "finished_at": "2026-10-09T14:38:00.093392Z",
+    "usage": {
+     "input": 0,
+     "cached": 0,
+     "output": 0,
+     "reasoning": 0,
+     "calls": 0
+    }
+   }
+  },
+  {
+   "name": "job_not_found",
+   "method": "GET",
+   "route": "/agent/plans/{plan_id}/guide/jobs/{job_id}",
+   "path": "/agent/plans/240/guide/jobs/00000000000000000000000000000000",
+   "query": {},
+   "body": null,
+   "status": 404,
+   "elapsed_ms": 3,
+   "response": {
+    "detail": {
+     "code": "job_not_found",
+     "message": "가이드 준비 작업 00000000000000000000000000000000 을(를) 찾을 수 없습니다."
+    }
+   }
+  }
+ ]
+}

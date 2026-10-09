@@ -1,0 +1,565 @@
+{
+ "flow": "F4",
+ "title": "도착 -> 해설 카드 -> 가이드 노트 -> 추가 질문 -> 더 짧게 (장면 ②)",
+ "screens": "14·16·17·18",
+ "recorded_at": "2026-10-09T23:38:09+09:00",
+ "backend": {
+  "agent_provider": "scripted:scripts",
+  "safety_source": "mock",
+  "git": "6a7d484"
+ },
+ "exchanges": [
+  {
+   "name": "note",
+   "method": "GET",
+   "route": "/docent/plans/{plan_id}/notes/{place_id}",
+   "path": "/docent/plans/243/notes/kto-1909659",
+   "query": {},
+   "body": null,
+   "status": 200,
+   "elapsed_ms": 21,
+   "response": {
+    "short": "일제강점기 구룡포에 정착한 일본인들이 살던 거리예요. 지금도 일본식 목조 건물 47채가 남아 있고, 2010년 포항시가 역사를 기억하는 교육장으로 거리를 정비했어요.",
+    "long": "구룡포는 일제강점기 동해안 어업의 전진기지였어요. 어장이 워낙 풍요로워 일본인 어부와 상인들이 이곳에 정착했고, 조선인들의 어업권을 빼앗으며 부를 쌓았어요. 그들이 세운 백화점과 약국, 공원 같은 근대 시설이 이 일대에 들어섰지요. 해방 뒤 일본인들이 떠나면서 집들은 그대로 남았고, 지금도 일본식 목조 건물 47채가 있어요. 포항시는 2010년 이 거리를 아픈 역사를 기억하는 산 교육장으로 정비했어요. 거리 안의 구룡포근대역사관은 하시모토 젠기치가 살던 집으로 당시 생활상을 볼 수 있어요. 공원 계단에서 내려다보는 어촌 풍경도 꼭 보세요.",
+    "for_you": [
+     "어머니와 천천히 걸으며 옛 가옥의 창살과 지붕을 비교해 보세요"
+    ],
+    "highlights": [
+     "공원 계단에서 내려다보는 구룡포 어촌 풍경",
+     "구룡포근대역사관(하시모토 젠기치 가옥)",
+     "옛 요리점을 그대로 쓰는 찻집"
+    ],
+    "companion_tips": [
+     "공원으로 오르는 계단이 가팔라요. 힘들면 아래 거리만 걸어도 충분해요"
+    ],
+    "cautions": [
+     "근대역사관은 월요일에 쉬어요"
+    ],
+    "qa": [
+     {
+      "q": "집들은 언제 지어졌어요?",
+      "a": "일제강점기에 구룡포에 정착한 일본인들이 지은 집들이에요. 근대역사관 건물은 1920년대에 지어졌어요."
+     },
+     {
+      "q": "몇 채나 남아 있어요?",
+      "a": "일본식 목조 건물 47채가 남아 있어요."
+     },
+     {
+      "q": "왜 보존했어요?",
+      "a": "포항시가 2010년 아픈 역사를 기억하는 교육장으로 거리를 정비했어요."
+     }
+    ],
+    "sources": [
+     {
+      "title": "한국관광공사 소개 · 구룡포 일본인 가옥거리",
+      "url": "https://api.visitkorea.or.kr/",
+      "tier": "official"
+     },
+     {
+      "title": "한국관광공사 오디오 가이드 · 일본인가옥거리(근대문화역사거리) - 포항 일본인가옥거리(근대문화역사거리)",
+      "url": "https://api.visitkorea.or.kr/",
+      "tier": "official"
+     }
+    ],
+    "plan_id": 243,
+    "place_id": "kto-1909659",
+    "status": "ready",
+    "error": "",
+    "memory_version": 1,
+    "model": "scripted",
+    "prepared_at": "2026-10-09T14:38:02.808606Z",
+    "updated_at": "2026-10-09T14:38:02.808586Z"
+   }
+  },
+  {
+   "name": "memory_before",
+   "method": "GET",
+   "route": "/docent/memory",
+   "path": "/docent/memory",
+   "query": {
+    "plan_id": 243
+   },
+   "body": null,
+   "status": 200,
+   "elapsed_ms": 18,
+   "response": {
+    "items": [],
+    "memory_version": 1,
+    "style_length": null
+   }
+  },
+  {
+   "name": "event_seen",
+   "method": "POST",
+   "route": "/trip/plans/{plan_id}/events/{event_id}/seen",
+   "path": "/trip/plans/243/events/346/seen",
+   "query": {},
+   "body": null,
+   "status": 200,
+   "elapsed_ms": 14,
+   "response": {
+    "id": 346,
+    "plan_id": 243,
+    "day": 1,
+    "type": "arrived",
+    "level": 2,
+    "severity": "info",
+    "created_at": "2026-10-09T14:38:06.879816Z",
+    "now": "2026-10-10T12:30:00+09:00",
+    "item_ids": [
+     502
+    ],
+    "message": "구룡포 일본인 가옥거리에 도착했어요. 이야기 들어볼까요?",
+    "payload": {
+     "title": "구룡포 일본인 가옥거리",
+     "item_id": 502,
+     "place_id": "kto-1909659",
+     "out_of_order": false
+    },
+    "status": "handled",
+    "agent": null,
+    "card": {
+     "kind": "docent",
+     "item_id": 502,
+     "place_id": "kto-1909659"
+    },
+    "seen_at": "2026-10-10T12:25:01.572088+09:00",
+    "attempts": 0,
+    "last_error": null
+   }
+  },
+  {
+   "name": "chat_question",
+   "method": "POST",
+   "route": "/agent/sessions/{session_id}/chat",
+   "path": "/agent/sessions/23defa46080b4dd99bc1da53e24e8751/chat",
+   "query": {},
+   "body": {
+    "message": "언제 지어진 집들이에요?"
+   },
+   "status": 200,
+   "elapsed_ms": 1791,
+   "content_type": "text/event-stream",
+   "sse": [
+    {
+     "t_ms": 7,
+     "event": "start",
+     "data": {
+      "session_id": "23defa46080b4dd99bc1da53e24e8751"
+     }
+    },
+    {
+     "t_ms": 428,
+     "event": "status",
+     "data": {
+      "text": "가이드 노트를 확인하고 있어요."
+     }
+    },
+    {
+     "t_ms": 428,
+     "event": "step",
+     "data": {
+      "id": "s1",
+      "kind": "guide",
+      "status": "running",
+      "title": "가이드 노트 확인",
+      "detail": ""
+     }
+    },
+    {
+     "t_ms": 443,
+     "event": "step",
+     "data": {
+      "id": "s1",
+      "kind": "guide",
+      "status": "done",
+      "title": "가이드 노트 확인",
+      "detail": "준비됨"
+     }
+    },
+    {
+     "t_ms": 839,
+     "event": "status",
+     "data": {
+      "text": "자료를 찾고 있어요."
+     }
+    },
+    {
+     "t_ms": 839,
+     "event": "step",
+     "data": {
+      "id": "s2",
+      "kind": "research",
+      "status": "running",
+      "title": "자료 찾기",
+      "detail": ""
+     }
+    },
+    {
+     "t_ms": 902,
+     "event": "step",
+     "data": {
+      "id": "s2",
+      "kind": "research",
+      "status": "done",
+      "title": "자료 찾기",
+      "detail": "근거 3개"
+     }
+    },
+    {
+     "t_ms": 1311,
+     "event": "text",
+     "data": {
+      "delta": "일제강점기 "
+     }
+    },
+    {
+     "t_ms": 1342,
+     "event": "text",
+     "data": {
+      "delta": "구룡포에 정"
+     }
+    },
+    {
+     "t_ms": 1373,
+     "event": "text",
+     "data": {
+      "delta": "착한 일본인"
+     }
+    },
+    {
+     "t_ms": 1404,
+     "event": "text",
+     "data": {
+      "delta": " 어부와 상"
+     }
+    },
+    {
+     "t_ms": 1436,
+     "event": "text",
+     "data": {
+      "delta": "인들이 살던"
+     }
+    },
+    {
+     "t_ms": 1467,
+     "event": "text",
+     "data": {
+      "delta": " 집들이에요"
+     }
+    },
+    {
+     "t_ms": 1499,
+     "event": "text",
+     "data": {
+      "delta": ". 지금도 "
+     }
+    },
+    {
+     "t_ms": 1530,
+     "event": "text",
+     "data": {
+      "delta": "일본식 목조"
+     }
+    },
+    {
+     "t_ms": 1562,
+     "event": "text",
+     "data": {
+      "delta": " 건물 47"
+     }
+    },
+    {
+     "t_ms": 1593,
+     "event": "text",
+     "data": {
+      "delta": "채가 남아 "
+     }
+    },
+    {
+     "t_ms": 1624,
+     "event": "text",
+     "data": {
+      "delta": "있고, 20"
+     }
+    },
+    {
+     "t_ms": 1655,
+     "event": "text",
+     "data": {
+      "delta": "10년 포항"
+     }
+    },
+    {
+     "t_ms": 1687,
+     "event": "text",
+     "data": {
+      "delta": "시가 거리를"
+     }
+    },
+    {
+     "t_ms": 1718,
+     "event": "text",
+     "data": {
+      "delta": " 정비해 지"
+     }
+    },
+    {
+     "t_ms": 1752,
+     "event": "text",
+     "data": {
+      "delta": "금 모습이 "
+     }
+    },
+    {
+     "t_ms": 1783,
+     "event": "text",
+     "data": {
+      "delta": "됐어요."
+     }
+    },
+    {
+     "t_ms": 1791,
+     "event": "steps_done",
+     "data": {
+      "count": 2,
+      "summary": "2단계 완료 : 가이드 노트 확인, 자료 찾기"
+     }
+    },
+    {
+     "t_ms": 1791,
+     "event": "done",
+     "data": {
+      "text": "일제강점기 구룡포에 정착한 일본인 어부와 상인들이 살던 집들이에요. 지금도 일본식 목조 건물 47채가 남아 있고, 2010년 포항시가 거리를 정비해 지금 모습이 됐어요.",
+      "cards": [],
+      "usage": {
+       "input": 0,
+       "cached": 0,
+       "output": 0,
+       "reasoning": 0,
+       "calls": 3
+      },
+      "message_id": 1081,
+      "mode": "guide"
+     }
+    }
+   ]
+  },
+  {
+   "name": "chat_shorter",
+   "method": "POST",
+   "route": "/agent/sessions/{session_id}/chat",
+   "path": "/agent/sessions/23defa46080b4dd99bc1da53e24e8751/chat",
+   "query": {},
+   "body": {
+    "message": "다음부터는 더 짧게 해줘요"
+   },
+   "status": 200,
+   "elapsed_ms": 1017,
+   "content_type": "text/event-stream",
+   "sse": [
+    {
+     "t_ms": 6,
+     "event": "start",
+     "data": {
+      "session_id": "23defa46080b4dd99bc1da53e24e8751"
+     }
+    },
+    {
+     "t_ms": 439,
+     "event": "status",
+     "data": {
+      "text": "기억해 두고 있어요."
+     }
+    },
+    {
+     "t_ms": 439,
+     "event": "step",
+     "data": {
+      "id": "s1",
+      "kind": "memory",
+      "status": "running",
+      "title": "기억하기",
+      "detail": ""
+     }
+    },
+    {
+     "t_ms": 465,
+     "event": "step",
+     "data": {
+      "id": "s1",
+      "kind": "memory",
+      "status": "done",
+      "title": "기억하기",
+      "detail": "해설은 핵심만 짧게"
+     }
+    },
+    {
+     "t_ms": 886,
+     "event": "text",
+     "data": {
+      "delta": "알겠어요. "
+     }
+    },
+    {
+     "t_ms": 918,
+     "event": "text",
+     "data": {
+      "delta": "앞으로 해설"
+     }
+    },
+    {
+     "t_ms": 949,
+     "event": "text",
+     "data": {
+      "delta": "은 핵심만 "
+     }
+    },
+    {
+     "t_ms": 980,
+     "event": "text",
+     "data": {
+      "delta": "짧게 할게요"
+     }
+    },
+    {
+     "t_ms": 1012,
+     "event": "text",
+     "data": {
+      "delta": "."
+     }
+    },
+    {
+     "t_ms": 1017,
+     "event": "steps_done",
+     "data": {
+      "count": 1,
+      "summary": "1단계 완료 : 기억하기"
+     }
+    },
+    {
+     "t_ms": 1017,
+     "event": "done",
+     "data": {
+      "text": "알겠어요. 앞으로 해설은 핵심만 짧게 할게요.",
+      "cards": [],
+      "usage": {
+       "input": 0,
+       "cached": 0,
+       "output": 0,
+       "reasoning": 0,
+       "calls": 2
+      },
+      "message_id": 1085,
+      "mode": "guide"
+     }
+    }
+   ]
+  },
+  {
+   "name": "memory_after",
+   "method": "GET",
+   "route": "/docent/memory",
+   "path": "/docent/memory",
+   "query": {
+    "plan_id": 243
+   },
+   "body": null,
+   "status": 200,
+   "elapsed_ms": 14,
+   "response": {
+    "items": [
+     {
+      "id": 40,
+      "scope": "user",
+      "plan_id": null,
+      "category": "style",
+      "text": "해설은 핵심만 짧게",
+      "source": "chat:23defa46080b4dd99bc1da53e24e8751",
+      "created_at": "2026-10-09T14:38:09.316458Z",
+      "updated_at": "2026-10-09T14:38:09.316458Z"
+     }
+    ],
+    "memory_version": 2,
+    "style_length": "short"
+   }
+  },
+  {
+   "name": "session_detail",
+   "method": "GET",
+   "route": "/agent/sessions/{session_id}",
+   "path": "/agent/sessions/23defa46080b4dd99bc1da53e24e8751",
+   "query": {},
+   "body": null,
+   "status": 200,
+   "elapsed_ms": 8,
+   "response": {
+    "id": "23defa46080b4dd99bc1da53e24e8751",
+    "plan_id": 243,
+    "created_at": "2026-10-09T14:38:01.522496Z",
+    "updated_at": "2026-10-09T14:38:09.867895Z",
+    "messages": [
+     {
+      "id": 1076,
+      "role": "user",
+      "content": "언제 지어진 집들이에요?",
+      "created_at": "2026-10-09T14:38:08.880265Z",
+      "steps": [],
+      "steps_summary": null,
+      "cards": []
+     },
+     {
+      "id": 1081,
+      "role": "assistant",
+      "content": "일제강점기 구룡포에 정착한 일본인 어부와 상인들이 살던 집들이에요. 지금도 일본식 목조 건물 47채가 남아 있고, 2010년 포항시가 거리를 정비해 지금 모습이 됐어요.",
+      "created_at": "2026-10-09T14:38:08.880265Z",
+      "steps": [
+       {
+        "id": "s1",
+        "kind": "guide",
+        "status": "done",
+        "title": "가이드 노트 확인",
+        "detail": "준비됨"
+       },
+       {
+        "id": "s2",
+        "kind": "research",
+        "status": "done",
+        "title": "자료 찾기",
+        "detail": "근거 3개"
+       }
+      ],
+      "steps_summary": "2단계 완료 : 가이드 노트 확인, 자료 찾기",
+      "cards": []
+     },
+     {
+      "id": 1082,
+      "role": "user",
+      "content": "다음부터는 더 짧게 해줘요",
+      "created_at": "2026-10-09T14:38:09.868641Z",
+      "steps": [],
+      "steps_summary": null,
+      "cards": []
+     },
+     {
+      "id": 1085,
+      "role": "assistant",
+      "content": "알겠어요. 앞으로 해설은 핵심만 짧게 할게요.",
+      "created_at": "2026-10-09T14:38:09.868641Z",
+      "steps": [
+       {
+        "id": "s1",
+        "kind": "memory",
+        "status": "done",
+        "title": "기억하기",
+        "detail": "해설은 핵심만 짧게"
+       }
+      ],
+      "steps_summary": "1단계 완료 : 기억하기",
+      "cards": []
+     }
+    ]
+   }
+  }
+ ]
+}
