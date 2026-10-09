@@ -1,7 +1,8 @@
-"""GuryongMate API 클라이언트 (planner·places·agent·trip·safety). CLI 가 쓰고, 다른 Python 도구에서도 재사용할 수 있다.
+"""GuryongMate API 클라이언트 (planner·places·agent·trip·safety·routing·docent). CLI 가 쓰고, 다른 Python 도구에서도 재사용할 수 있다.
 
 메서드는 API 응답 JSON(dict)을 그대로 돌려준다. 오류는 PlannerApiError (code·message·detail).
-명세: docs/planner/README.md, docs/agent/README.md, docs/account/README.md, docs/trip/README.md
+명세: docs/planner/README.md, docs/agent/README.md, docs/account/README.md, docs/trip/README.md,
+      docs/docent/README.md §5, docs/safety/README.md §1, docs/routing/README.md §1, docs/places/README.md
 """
 import json
 import os
@@ -174,6 +175,18 @@ class PlannerClient:
     def get_place(self, place_id: str) -> dict:
         return self._req("GET", f"/places/{place_id}")
 
+    def passages(self, q: str, place_id: str | None = None, kind: str | None = None, lat: float | None = None,
+                 lng: float | None = None, radius_m: float | None = None, limit: int = 5) -> list[dict]:
+        params = {"q": q, "place_id": place_id, "kind": kind, "lat": lat, "lng": lng, "radius_m": radius_m, "limit": limit}
+        return self._req("GET", "/places/passages", params={k: v for k, v in params.items() if v is not None})
+
+    def stories(self, place_id: str) -> list[dict]:
+        return self._req("GET", f"/places/{place_id}/stories")
+
+    def stories_near(self, lat: float, lng: float, radius_m: float | None = None, limit: int | None = None) -> list[dict]:
+        params = {"lat": lat, "lng": lng, "radius_m": radius_m, "limit": limit}
+        return self._req("GET", "/places/stories/near", params={k: v for k, v in params.items() if v is not None})
+
     # ----- 계획 -----
     def list_plans(self) -> list[dict]:
         return self._req("GET", "/planner/plans")
@@ -211,12 +224,31 @@ class PlannerClient:
     def delete_item(self, plan_id: int, item_id: int) -> dict:
         return self._req("DELETE", f"/planner/plans/{plan_id}/items/{item_id}")
 
+    # ----- 여행 중: 진행 상태 · 현재 기준 재계산 (§8) -----
+    def progress(self, plan_id: int, item_id: int, status: str, at: str | None = None) -> dict:
+        """status: visiting | done | planned. version 은 그대로 (progress_version 만 오른다)."""
+        body = {"status": status} | ({"at": at} if at else {})
+        return self._req("POST", f"/planner/plans/{plan_id}/items/{item_id}/progress", json=body)
+
+    def projection(self, plan_id: int, day: int | None = None, now: str | None = None,
+                   position: dict | None = None) -> dict:
+        """position: {"state": "visiting", "item_id", "arrived_at"?} | {"state": "moving", "lat", "lng"} | None (저장된 진행 상태)."""
+        body = {k: v for k, v in {"day": day, "now": now, "position": position}.items() if v is not None}
+        return self._req("POST", f"/planner/plans/{plan_id}/projection", json=body)
+
     # ----- 안전 점검 -----
     def check_safety(self, plan_id: int) -> dict:
         return self._req("GET", f"/planner/plans/{plan_id}/safety")
 
     def safety_alerts(self, plan_id: int, status: str | None = None) -> list[dict]:
         return self._req("GET", f"/planner/plans/{plan_id}/safety/alerts", params={"status": status} if status else None)
+
+    def safety_alert_seen(self, plan_id: int, alert_id: int) -> dict:
+        return self._req("POST", f"/planner/plans/{plan_id}/safety/alerts/{alert_id}/seen")
+
+    def safety_preview(self, plan_id: int, ops: list[dict]) -> dict:
+        """ops 를 적용했다고 치고 안전 점검 (저장 안 함) -> SafetyCheck."""
+        return self._req("POST", f"/planner/plans/{plan_id}/safety/preview", json={"ops": ops})
 
     # ----- 규칙 -----
     def list_constraints(self, plan_id: int) -> list[dict]:
@@ -283,6 +315,34 @@ class PlannerClient:
         """action: add | remove"""
         return self._req("POST", f"/agent/sessions/{session_id}/recommendations/{rec_id}/candidates/{cand_id}/{action}")
 
+    # ----- 가이드 준비 (agent) -----
+    def guide_prepare(self, plan_id: int, place_ids: list[str] | None = None, force: bool = False) -> dict:
+        body = {"force": force} | ({"place_ids": place_ids} if place_ids else {})
+        return self._req("POST", f"/agent/plans/{plan_id}/guide/prepare", json=body)
+
+    def guide_job(self, plan_id: int, job_id: str) -> dict:
+        return self._req("GET", f"/agent/plans/{plan_id}/guide/jobs/{job_id}")
+
+    # ----- 메모리 · 가이드 노트 (docent) -----
+    def memory(self, plan_id: int | None = None) -> dict:
+        return self._req("GET", "/docent/memory", params={"plan_id": plan_id} if plan_id is not None else None)
+
+    def remember(self, scope: str, category: str, text: str, plan_id: int | None = None,
+                 source: str = "user_edit") -> dict:
+        body = {"scope": scope, "category": category, "text": text, "source": source}
+        if plan_id is not None:
+            body["plan_id"] = plan_id
+        return self._req("POST", "/docent/memory", json=body)
+
+    def forget(self, memory_id: int) -> None:
+        self._req("DELETE", f"/docent/memory/{memory_id}")
+
+    def notes(self, plan_id: int) -> list[dict]:
+        return self._req("GET", f"/docent/plans/{plan_id}/notes")
+
+    def note(self, plan_id: int, place_id: str) -> dict:
+        return self._req("GET", f"/docent/plans/{plan_id}/notes/{place_id}")
+
     # ----- 여행 중 (trip) -----
     def trip_start(self, plan_id: int, session_id: str | None = None) -> dict:
         return self._req("POST", f"/trip/plans/{plan_id}/start", json={"session_id": session_id} if session_id else None)
@@ -304,6 +364,9 @@ class PlannerClient:
     def trip_tick(self, plan_id: int, now: str | None = None) -> dict:
         return self._req("POST", f"/trip/plans/{plan_id}/tick", params={"now": now} if now else None)
 
+    def trip_event_seen(self, plan_id: int, event_id: int) -> dict:
+        return self._req("POST", f"/trip/plans/{plan_id}/events/{event_id}/seen")
+
     # ----- 가상 상황·시각 (safety, SAFETY_SOURCE=mock) -----
     def sim(self) -> dict:
         return self._req("GET", "/safety/sim")
@@ -318,7 +381,42 @@ class PlannerClient:
         """planner 안전 점검을 지금 한 번 (개발 모드에서만)."""
         return self._req("POST", "/planner/safety/scan", params={"force": str(force).lower()})
 
-    # ----- 길찾기 -----
-    def route(self, stops: list[tuple[float, float]], mode: str = "walk") -> dict:
-        body = {"mode": mode, "stops": [{"lat": a, "lng": b} for a, b in stops], "steps": False}
+    # ----- 안전 정보 (safety) -----
+    def outlook(self, date: str, start: str | None = None, end: str | None = None) -> dict:
+        params = {"date": date, "start": start, "end": end}
+        return self._req("GET", "/safety/outlook", params={k: v for k, v in params.items() if v is not None})
+
+    def safety_status(self) -> dict:
+        return self._req("GET", "/safety/status")
+
+    def safety_zones(self) -> list[dict]:
+        return self._req("GET", "/safety/zones")
+
+    def safety_situation(self) -> dict:
+        return self._req("GET", "/safety/situation")
+
+    def safety_avoid(self, min_risk: str = "caution") -> dict:
+        return self._req("GET", "/safety/avoid", params={"min_risk": min_risk})
+
+    # ----- 길찾기 (routing) -----
+    @staticmethod
+    def _pt(p: tuple[float, float]) -> dict:
+        return {"lat": p[0], "lng": p[1]}
+
+    def route(self, stops: list[tuple[float, float]], mode: str = "walk", hazards: str = "ignore",
+              steps: bool = False) -> dict:
+        """hazards: ignore | report | avoid (위험 구역 우회)."""
+        body = {"mode": mode, "stops": [self._pt(p) for p in stops], "steps": steps, "hazards": hazards}
         return self._req("POST", "/routing/route", json=body)
+
+    def legs(self, legs: list[tuple[tuple[float, float], tuple[float, float]]], mode: str = "walk") -> dict:
+        body = {"mode": mode, "legs": [{"from": self._pt(a), "to": self._pt(b)} for a, b in legs]}
+        return self._req("POST", "/routing/legs", json=body)
+
+    def matrix(self, sources: list[tuple[float, float]], targets: list[tuple[float, float]],
+               mode: str = "walk") -> dict:
+        body = {"mode": mode, "sources": [self._pt(p) for p in sources], "targets": [self._pt(p) for p in targets]}
+        return self._req("POST", "/routing/matrix", json=body)
+
+    def routing_status(self) -> dict:
+        return self._req("GET", "/routing/status")
