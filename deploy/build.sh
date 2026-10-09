@@ -10,7 +10,7 @@ TAG=$(current_tag)
 for name in "${IMAGES[@]}"; do
   log "빌드 guryongmate/$name:$TAG"
   docker build -q -f "$ROOT/$(image_dockerfile "$name")" --label "guryong.src=$(src_hash "$name")" \
-    --label "guryong.commit=$TAG" -t "guryongmate/$name:$TAG" "$ROOT/$(image_context "$name")" >/dev/null
+    -t "guryongmate/$name:$TAG" "$ROOT/$(image_context "$name")" >/dev/null
 done
 # 노트북에 오래된 태그가 쌓이지 않게: 이미지마다 최근 KEEP_LOCAL_IMAGES 개만 남긴다
 for name in "${IMAGES[@]}"; do

@@ -77,9 +77,9 @@ current_tag() { git -C "$ROOT" rev-parse --short=10 HEAD; }
 VM_HEALTH_PATHS="/health /places/docs /planner/docs /agent/docs /safety/docs /routing/docs /trip/docs /docent/docs /account/docs /agent/info /routing/status"
 vm_health() {
   local tries=${1:-30} out
-  out=$(vm "port=$API_PORT; for i in \$(seq 1 $tries); do curl -fsS -o /dev/null http://127.0.0.1:\$port/health && break; sleep 2; done
+  out=$(vm "port=$API_PORT; for i in \$(seq 1 $tries); do curl -fsS http://127.0.0.1:\$port/health >/dev/null && break; sleep 2; done
     fail=0; for p in $VM_HEALTH_PATHS; do
-      code=\$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 http://127.0.0.1:\$port\$p); echo \"\$code \$p\"; [ \"\$code\" = 200 ] || fail=1
+      code=\$(curl -s -w '\n%{http_code}' --max-time 10 http://127.0.0.1:\$port\$p | tail -1); echo \"\$code \$p\"; [ \"\$code\" = 200 ] || fail=1
     done
     echo \"agent \$(curl -s --max-time 5 http://127.0.0.1:\$port/agent/info)\"
     echo \"valhalla \$(curl -s --max-time 5 http://127.0.0.1:\$port/routing/status | head -c 200)\"
