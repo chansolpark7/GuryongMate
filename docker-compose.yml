@@ -42,6 +42,7 @@ services:
       - "${API_PORT:-8000}:80"
     volumes:
       - ./infra/gateway/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./infra/gateway/routes.caddy:/etc/caddy/routes.caddy:ro
     depends_on:
       - places
       - planner
