@@ -62,6 +62,7 @@ LLM: 호스트의 Ollama(host.docker.internal:11434) 또는 OpenAI API — Docke
 - 서비스끼리도 **게이트웨이 주소(`http://gateway`)로 호출**한다. compose가 `PLANNER_PLACES_BASE_URL`, `AGENT_API_BASE_URL` 등을 이 주소로 넣어 준다. 서비스 위치가 바뀌어도 호출 코드는 그대로다.
 - **장소 식별자**: 장소는 `place_id`(문자열, 예: `kto-126128`)로만 참조한다. 상세는 `GET /places/{place_id}`.
 - **다른 서비스의 테이블을 직접 읽거나 쓰지 않는다.** DB는 하나지만 테이블 접두사가 소유 경계다.
+- **API 를 추가·변경하면 같은 브랜치에서 CLI 명령과 `docs/planner/README.md` §11 CLI 목록도 갱신한다.** (`scripts/planner/`, trip 은 `scripts/trip/`)
 
 ## 3. 인증
 

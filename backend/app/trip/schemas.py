@@ -75,12 +75,13 @@ class EventView(BaseModel):
     item_ids: list[int]
     message: str
     payload: dict[str, Any]
-    status: Literal["queued", "delivered", "suppressed", "handled"]
+    status: Literal["queued", "delivered", "suppressed", "handled", "failed"] = Field(
+        description="failed: 단계 3 선제 턴 전송이 TRIP_PROACTIVE_MAX_ATTEMPTS 번 실패해 더 보내지 않음 (last_error 에 사유)")
     agent: dict[str, Any] | None = Field(description="단계 3: Agent 결과 {session_id, message_id, proposal_id}. 아니면 null")
     card: dict[str, Any] | None = Field(description="단계 2: 카드 정보. 아니면 null")
     seen_at: datetime | None = None
-    attempts: int = Field(0, description="단계 3 전송 시도 수")
-    last_error: str | None = Field(None, description="마지막 전송 실패 사유 (큐에 남아 다시 보낸다)")
+    attempts: int = Field(0, description="단계 3 전송 시도 수 (agent_busy 로 기다린 것은 세지 않는다)")
+    last_error: str | None = Field(None, description="마지막 전송 실패 사유 (queued 면 간격을 늘려 다시 보낸다, failed 면 끝)")
 
 
 class LocationResult(BaseModel):

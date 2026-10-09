@@ -5,8 +5,9 @@
     python scripts/planner/cli.py chat 1         # Planner Agent 와 대화 (응답 실시간 스트리밍)
     python scripts/planner/cli.py login seoyun   # 로그인 (이후 요청은 토큰으로). 로그인 안 했으면 --user 가 X-User-Id
     python scripts/planner/cli.py trip replay new scene3_delay   # 여행 중 재생 (trip·sim 명령: scripts/trip/trip_cli.py)
+    python scripts/planner/cli.py route kto-1909659 kto-2610501 --avoid   # docent·safety·routing·places: services_cli.py
 
-환경변수 GURYONG_API_URL, GURYONG_USER 로 기본값을 바꿀 수 있다. 명령 목록은 -h 참고.
+환경변수 GURYONG_API_URL, GURYONG_USER 로 기본값을 바꿀 수 있다. 명령 목록은 -h 참고 (docs/planner/README.md §11).
 """
 import argparse
 import getpass
@@ -14,12 +15,13 @@ import json
 import os
 import shlex
 import sys
-import unicodedata
 from pathlib import Path
 
 import httpx
 
+import services_cli
 from client import PlannerApiError, PlannerClient
+from fmt import LEVEL, dump, latlng, table
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "trip"))
 import trip_cli  # noqa: E402  trip·sim 명령 (scripts/trip/)
@@ -28,20 +30,6 @@ MODE = {"walk": "도보", "car": "차량"}
 
 
 # ---------- 출력 ----------
-
-def width(s: str) -> int:
-    return sum(2 if unicodedata.east_asian_width(c) in "WF" else 1 for c in s)
-
-
-def pad(s: str, n: int) -> str:
-    return s + " " * max(0, n - width(s))
-
-
-def table(headers: list[str], rows: list[list[str]], indent: str = "  ") -> None:
-    cols = [max(width(str(x)) for x in col) for col in zip(headers, *rows)]
-    for row in [headers, *rows]:
-        print(indent + "  ".join(pad(str(x), w) for x, w in zip(row, cols)).rstrip())
-
 
 def print_plan(p: dict) -> None:
     print(f"[계획 #{p['id']}] {p['title']}  |  {p['start_date']} ~ {p['end_date']}  |  "
@@ -156,6 +144,9 @@ def cmd_add(c, a):
 
 
 def cmd_edit(c, a):
+    if a.status in ("visiting", "done"):
+        raise SystemExit(f"--status {a.status} 는 일정 변경(version 이 오름)이라 대기 중인 제안이 base_changed 가 됩니다.\n"
+                         f"여행 중 도착·완료는 progress 를 쓰세요: progress {a.plan} {a.item} {a.status} [--at HH:MM]")
     changes = {k: v for k, v in {"day": a.day, "order": a.order, "stay_minutes": a.stay, "memo": a.memo,
                                  "status": a.status}.items() if v is not None}
     if a.at is not None:
@@ -167,11 +158,11 @@ def cmd_edit(c, a):
     print_plan(c.update_item(a.plan, a.item, **changes))
 
 
-LEVEL = {"safe": "안전", "caution": "주의", "danger": "위험", None: "판단 안 함"}
-
-
 def cmd_safety(c, a):
-    r = c.check_safety(a.plan)
+    print_safety(c.check_safety(a.plan))
+
+
+def print_safety(r: dict) -> None:
     print(f"안전 점검 ({r['checked_at'][:16]}): 전체 {LEVEL[r['overall_risk']]}  {r['counts']}")
     for i in r["items"]:
         what = f"이동({'도보' if i['mode'] == 'walk' else '차량'}) {i['title']}" if i["kind"] == "travel" else i["title"]
@@ -185,13 +176,103 @@ def cmd_safety(c, a):
 
 
 def cmd_alerts(c, a):
+    if a.seen is not None:
+        x = c.safety_alert_seen(a.plan, a.seen)
+        if a.json:
+            return dump(x)
+        print(f"경고 #{x['id']} 확인 표시 ({x['status']})")
+        return
     alerts = c.safety_alerts(a.plan, a.status)
+    if a.json:
+        return dump(alerts)
     if not alerts:
         print("경고 없음")
     for x in alerts:
         print(f"#{x['id']} {x['created_at'][:16]} [{x['status']}] {LEVEL[x['level']]}"
               + (" (조치 필요)" if x["needs_action"] else ""))
         print("   " + x["message"].replace("\n", "\n   "))
+
+
+def cmd_safety_preview(c, a):
+    """ops 를 적용했다고 치고 안전 점검. --ops 파일 ({"ops": [...]} 또는 [...]) 이 없으면 대기 중인 제안(또는 --proposal)의 ops."""
+    if a.ops:
+        data = json.loads(Path(a.ops).read_text(encoding="utf-8"))
+        ops, label = (data["ops"] if isinstance(data, dict) else data), Path(a.ops).name
+    else:
+        pid = a.proposal
+        if pid is None:
+            pending = c.list_proposals(a.plan, "pending")
+            if not pending:
+                raise SystemExit("대기 중인 제안이 없습니다. --proposal ID 또는 --ops 파일을 주세요.")
+            pid = pending[0]["id"]
+        p = c.get_proposal(a.plan, pid)
+        ops, label = p["ops"], f"제안 #{pid} ({short_summary(p)})"
+    r = c.safety_preview(a.plan, ops)
+    if a.json:
+        return dump(r)
+    print(f"{label} 를 반영하면 (저장 안 함, 새 항목 id 는 음수)")
+    print_safety(r)
+
+
+def short_summary(p: dict) -> str:
+    return (p.get("summary") or "").replace("\n", " ")[:40] or f"변경 {len(p.get('changes', []))}건"
+
+
+# ---------- 여행 중: 진행 상태 · 현재 기준 재계산 (docs/planner/README.md §8) ----------
+
+def _item_line(p: dict, item_id: int) -> str:
+    for d in p["days"]:
+        for i in d["items"]:
+            if i["id"] == item_id:
+                title = i["place"]["title"] if i["place"] else i["place_id"]
+                return (f"{d['day']}일차 #{i['id']} {title}: {i['status']}"
+                        f" (도착 {i.get('arrived_at') or '-'}, 완료 {i.get('done_at') or '-'}) · 계획 {i['start_at']}~{i['end_at']}")
+    return f"#{item_id}"
+
+
+def cmd_progress(c, a):
+    p = c.progress(a.plan, a.item, a.status, a.at)
+    if a.json:
+        return dump(p)
+    print(f"진행 상태 반영 · version v{p['version']} 그대로, progress v{p.get('progress_version', '-')}")
+    print("  " + _item_line(p, a.item))
+
+
+def cmd_projection(c, a):
+    position = None
+    if a.at_item is not None and a.moving:
+        raise SystemExit("--at-item 과 --moving 은 함께 쓸 수 없습니다.")
+    if a.at_item is not None:
+        position = {"state": "visiting", "item_id": a.at_item} | ({"arrived_at": a.arrived} if a.arrived else {})
+    elif a.moving:
+        lat, lng = latlng(a.moving)
+        position = {"state": "moving", "lat": lat, "lng": lng}
+    r = c.projection(a.plan, a.day, a.now, position)
+    if a.json:
+        return dump(r)
+    d = r["delay_minutes"]
+    late = "-" if d is None else (f"{d}분 늦음" if d > 0 else f"{-d}분 여유" if d < 0 else "예정대로")
+    print(f"현재 기준 재계산 — {r['day']}일차 지금 {r['now']} · 지연 {late}")
+    n = r["next"]
+    if n:
+        print(f"  다음: #{n['item_id']} {n['planned_start'] or '-'} 예정 → 예상 도착 {n['eta'] or '-'}, 시작 {n['start_at'] or '-'}")
+    else:
+        print("  다음: 없음 (남은 일정 없음)")
+    day = next((x for x in r["plan"]["days"] if x["day"] == r["day"]), None)
+    if day and day["items"]:
+        table(["순서", "id", "도착", "시간", "장소", "상태"],
+              [[str(i["order"]), str(i["id"]), i["arrive_at"] or "-",
+                "건너뜀" if i["status"] == "skipped" else f"{i['start_at']}~{i['end_at']}",
+                i["place"]["title"] if i["place"] else i["place_id"], i["status"]] for i in day["items"]])
+        print(f"  예상 종료 {day['end_at']}")
+    if r["new_violations"]:
+        print("\n 새로 생긴 위반 (trip 의 delay 판정 기준)")
+        for v in r["new_violations"]:
+            print(f"  [{'E' if v['severity'] == 'error' else 'W'}] {v['code']}: {v['message']}")
+    else:
+        print("\n 새로 생긴 위반 없음 (가벼운 지연이면 알리지 않음)")
+    if r["baseline_violations"]:
+        print(f" 기준 일정 위반 {len(r['baseline_violations'])}건 (원래 있던 것)")
 
 
 def cmd_rm(c, a):
@@ -681,15 +762,40 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--stay", type=int)
     p.add_argument("--at", help="시작 시각 고정 HH:MM, 'none' 이면 해제")
     p.add_argument("--memo")
-    p.add_argument("--status", choices=["planned", "visiting", "done", "skipped"])
+    p.add_argument("--status", choices=["planned", "visiting", "done", "skipped"],
+                   help="planned·skipped (일정 변경). 여행 중 도착·완료(visiting·done)는 progress 명령으로")
     p.add_argument("--mode", choices=["walk", "car", "default"], help="여기까지 오는 수단 (default: 계획 기본으로)")
 
     p = add("safety", cmd_safety, "안전 점검 (방문·이동 구간별 위험 단계)")
     p.add_argument("plan", type=int)
 
-    p = add("alerts", cmd_alerts, "안전 경고 목록")
+    p = add("alerts", cmd_alerts, "안전 경고 목록 (--seen ID: 확인 표시)")
     p.add_argument("plan", type=int)
     p.add_argument("--status", choices=["new", "seen"])
+    p.add_argument("--seen", type=int, metavar="ID", help="이 경고를 확인 표시")
+    p.add_argument("--json", action="store_true", help="API 응답 JSON 그대로 출력")
+
+    p = add("safety-preview", cmd_safety_preview, "변경안을 적용했다고 치고 안전 점검 (대기 중인 제안 또는 ops 파일)")
+    p.add_argument("plan", type=int)
+    p.add_argument("--proposal", type=int, help="이 제안의 ops (생략: 가장 최근 대기 중 제안)")
+    p.add_argument("--ops", help='ops JSON 파일 ({"ops": [...]} 또는 [...], docs/planner/README.md §4 PlanOp)')
+    p.add_argument("--json", action="store_true", help="API 응답 JSON 그대로 출력")
+
+    p = add("progress", cmd_progress, "여행 중 진행 상태 (version 은 그대로)  예) progress 1 7 visiting --at 14:05")
+    p.add_argument("plan", type=int)
+    p.add_argument("item", type=int, help="일정 항목 id")
+    p.add_argument("status", choices=["visiting", "done", "planned"])
+    p.add_argument("--at", help="HH:MM (생략: planner 의 지금). planned 면 무시")
+    p.add_argument("--json", action="store_true", help="API 응답 JSON 그대로 출력")
+
+    p = add("projection", cmd_projection, "현재 기준 재계산: 지연·다음 항목·새 위반 (저장 안 함)")
+    p.add_argument("plan", type=int)
+    p.add_argument("--day", type=int, help="생략: planner 의 오늘")
+    p.add_argument("--now", help="HH:MM (생략: planner 의 지금)")
+    p.add_argument("--at-item", type=int, metavar="ID", help="이 항목에 머무는 중으로 본다")
+    p.add_argument("--arrived", help="--at-item 의 도착 시각 HH:MM (생략: 기록된 도착, 없으면 now)")
+    p.add_argument("--moving", metavar="LAT,LNG", help="이 위치에서 다음 항목으로 이동 중으로 본다")
+    p.add_argument("--json", action="store_true", help="API 응답 JSON 그대로 출력")
 
     p = add("rm", cmd_rm, "일정 삭제")
     p.add_argument("plan", type=int)
@@ -769,6 +875,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("-m", "--message", action="append",
                    help="이 메시지만 보내고 종료 (여러 번 지정 가능, /accept 같은 명령도 가능)")
 
+    services_cli.register(add)
     trip_cli.register(sub)
 
     add("shell", None, "대화형 모드")

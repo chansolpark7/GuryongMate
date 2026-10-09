@@ -4,7 +4,7 @@
     trip loc 3 35.987 129.558 [--acc 10] [--at 14:20]     위치 한 점
     trip goto 3 kto-2660046 [--wait 120]  그 장소 좌표로 보내고 머무름 시간만큼 시계를 진행 (도착 판정 확인용)
     trip replay 3 scene3_delay.json [--speed 10]          경로 재생 (plan 자리에 new: 재생 파일의 계획을 새로 만듦)
-    trip events 3 [--follow]              이벤트 보기 (--follow: 폴링)
+    trip events 3 [--follow] [--seen 41]  이벤트 보기 (--follow: 폴링, --seen: 확인 표시)
     trip tick 3                           틱(지연·안전 경고·자동 종료)을 지금 한 번
     sim / sim scenario storm / sim now 2026-10-10T14:00 / sim reset    safety 가상 상황·시각
 """
@@ -47,7 +47,9 @@ def print_event(e: dict) -> None:
     if e.get("agent"):
         extra = f" → Agent 메시지 {e['agent'].get('message_id')}, 제안 {e['agent'].get('proposal_id')}"
     elif e["status"] == "queued" and e.get("last_error"):
-        extra = f" (대기: {e['last_error'][:60]})"
+        extra = f" (대기, 시도 {e['attempts']}번: {e['last_error'][:60]})"
+    elif e["status"] == "failed":
+        extra = f" (전송 실패 {e['attempts']}번: {(e.get('last_error') or '')[:60]})"
     if e.get("card"):
         extra += f" [카드 {e['card']['kind']}]"
     print(f"  {color}#{e['id']} {e['now'][11:16]} {e['type']} (단계 {e['level']}, {e['status']}){RESET} {e['message']}{DIM}{extra}{RESET}")
@@ -129,6 +131,9 @@ def cmd_goto(c, a):
 
 
 def cmd_events(c, a):
+    if a.seen is not None:
+        print_event(c.trip_event_seen(a.plan, a.seen))
+        return
     after = a.after
     while True:
         for e in c.trip_events(a.plan, after, 200):
@@ -161,7 +166,9 @@ def _create_plan(c, spec: dict) -> int:
                       spec.get("travel_mode", "walk"))
     for it in spec["items"]:
         c.add_item(p["id"], it["place_id"], it.get("day", 1), stay_minutes=it.get("stay_minutes", 60),
-                   start_time=it.get("start_time"))
+                   start_time=it.get("start_time"), travel_mode=it.get("travel_mode"))
+    for r in spec.get("constraints", []):
+        c.add_constraint(p["id"], r["type"], r["params"], hard=r.get("hard", True), note=r.get("note", ""))
     print(f"계획 #{p['id']} 를 만들었습니다 ({spec['title']}, {len(spec['items'])}곳)")
     return p["id"]
 
@@ -180,11 +187,11 @@ def cmd_replay(c, a):
             places[pid] = (p["lat"], p["lng"])
         return places[pid]
 
-    def path(src, dst):
+    def path(src, dst, mode="walk"):
         try:
-            return [(lat, lng) for lng, lat in c.route([src, dst])["geometry"]["coordinates"]]
+            return [(lat, lng) for lng, lat in c.route([src, dst], mode)["geometry"]["coordinates"]]
         except Exception as e:
-            print(f"{DIM}  (경로선을 못 받아 직선으로 걷습니다: {e}){RESET}")
+            print(f"{DIM}  (경로선을 못 받아 직선으로 갑니다: {e}){RESET}")
             return None
 
     actions = expand(data, coords, path)
@@ -214,6 +221,15 @@ def cmd_replay(c, a):
                 print(f"{DIM}{act.at:%H:%M:%S} {act.lat:.6f}, {act.lng:.6f}{RESET}")
             for e in r["events"]:
                 print_event(e)
+        elif act.kind == "skip":
+            _wait_proactive(c, plan)
+            item = next((i for d in c.get_plan(plan)["days"] for i in d["items"]
+                         if i["place_id"] == act.data["place_id"] and i["status"] == "planned"), None)
+            if item is None:
+                print(f"{YELLOW}건너뛸 항목이 없습니다: {act.data['place_id']}{RESET}")
+            else:
+                c.update_item(plan, item["id"], status="skipped")
+                print(f"{DIM}{act.at:%H:%M:%S}{RESET} 일정에서 뺌: {item['place']['title'] if item['place'] else item['place_id']}")
         elif act.kind == "tick":
             _tick(c, plan, act.at, wait=sim_ok and a.speed == 0)
         elif act.kind == "expect":
@@ -239,6 +255,17 @@ def _tick(c, plan: int, at: datetime, wait: bool = False) -> None:
     except Exception:
         pass
     _print_result(c.trip_tick(plan, at.isoformat()), quiet=True)
+
+
+def _wait_proactive(c, plan: int, limit_sec: float = 120) -> None:
+    """보내는 중인 선제 턴(단계 3 queued)이 끝날 때까지 기다린다. 사용자는 Agent 의 말을 보고 일정을 바꾸므로,
+    기다리지 않는 재생(--speed 0)에서 일정 변경(skip)이 응답 도중에 끼어들어 제안이 버려지지 않게 한다."""
+    end = _time.monotonic() + limit_sec
+    while _time.monotonic() < end:
+        if not any(e["status"] == "queued" and e["level"] == 3 for e in c.trip_events(plan, 0, 200)):
+            return
+        _time.sleep(2)
+    print(f"{YELLOW}선제 턴이 {limit_sec:.0f}초 안에 끝나지 않았습니다. 그대로 진행합니다.{RESET}")
 
 
 def _wait_clock(c, plan: int, target: datetime, limit_sec: float = 10) -> None:
@@ -308,8 +335,9 @@ def register(sub) -> None:
     p.add_argument("scene", help="파일 경로 또는 scenes/ 안의 이름 (예: scene3_delay)")
     p.add_argument("--speed", type=float, default=10, help="배속 (기본 10, 0 이면 기다리지 않음)")
     p.add_argument("-v", "--verbose", action="store_true", help="보내는 점도 출력")
-    p = add("events", cmd_events, "이벤트 보기")
+    p = add("events", cmd_events, "이벤트 보기 (failed: 선제 턴 전송을 여러 번 실패해 더 보내지 않음)")
     p.add_argument("--after", type=int, default=0)
+    p.add_argument("--seen", type=int, metavar="ID", help="이 이벤트를 확인 표시 (delivered -> handled)")
     p.add_argument("--follow", "-f", action="store_true", help="계속 폴링 (Ctrl+C 로 끝)")
     p.add_argument("--interval", type=float, default=3)
     p = add("tick", cmd_tick, "틱을 지금 한 번 (지연 재판정·안전 경고 수집·자동 종료·선제 턴 전송)")

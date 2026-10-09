@@ -657,17 +657,71 @@ search 구룡포 --type 관광지 / place kto-2660046
 new "엄마랑 구룡포" --start 2026-10-10 --from 12:30 --to 18:00 [--end ..] [--car]
 plans / show 1 [--json] / set 1 --end 2026-10-11 --mode car / drop 1
 add 1 kto-2660046 --stay 60 [--day 1] [--order 2] [--at 15:00] [--memo ..] [--mode car]
-edit 1 7 --order 1 | --day 2 | --stay 40 | --at 15:00 | --at none | --status skipped | --mode car | --mode default
+edit 1 7 --order 1 | --day 2 | --stay 40 | --at 15:00 | --at none | --status skipped|planned | --mode car | --mode default
+     (--status visiting|done 은 version 이 올라 막는다 → progress)
 rm 1 7
 rule 1 must_include place_id=kto-2660046 --note "엄마가 꼭 보고 싶어함" / rules 1 / unrule 1 3 / check 1
 proposals 1 [--status pending] / proposal 1 5 [--full] / accept 1 5 [--overwrite] / reject 1 5
 recs 1 / rec 1 2 / rec-add 1 2 11 / rec-remove 1 2 11
-safety 1 / alerts 1 [--status new]            안전 점검 (방문·이동 구간) / 주기 점검 경고
+safety 1 / alerts 1 [--status new] [--seen 3]   안전 점검 (방문·이동 구간) / 주기 점검 경고 (--seen: 확인 표시)
+safety-preview 1 [--proposal 5 | --ops ops.json] 변경안을 적용했다고 치고 안전 점검 (생략: 가장 최근 대기 중 제안의 ops)
 chat 1                                          Planner Agent 와 대화 (docs/agent/README.md)
+
+# 여행 중 (§8)
+progress 1 7 visiting|done|planned [--at 14:05]  진행 상태 (version 그대로, progress_version 만 오른다)
+projection 1 [--day 1] [--now 15:05] [--at-item 7 [--arrived 14:05] | --moving 35.99,129.56]
+                                                현재 기준 재계산: 지연(delay_minutes)·다음 항목(next)·새 위반(new_violations)·재계산 일정
+trip …  / sim …                                 여행일·위치·이벤트·재생, safety 가상 상황 (docs/trip/README.md §8)
+
+# 사용자 메모리·가이드 노트 (docs/docent/README.md §1·§3·§5, docs/agent/README.md §12)
+memory [--plan 1]                               메모리 (user + 그 계획의 plan 범위, 해설 길이 선호)
+remember --scope user|plan [--plan 1] --cat interest|style|companion|food|avoid|known|feedback "텍스트"
+forget 12
+notes 1                                         가이드 노트 목록 (상태·출처 수·메모리 버전)
+note 1 kto-1909659 [--long]                     짧게/자세히 해설, 맞춤 포인트(for_you)·동행 팁·주의·질문, 출처 등급
+guide-prepare 1 [--places kto-1,kto-2] [--force] [--wait]   가이드 준비 작업 (LLM). --wait: 장소별 진행·토큰 usage
+
+# 안전 정보 (docs/safety/README.md §1)
+outlook 2026-10-10 [--from 12:00 --to 18:00]    그날 전망: 요약·위험 신호·신호 없는 시간대·물때
+status / zones / situation                      지금 구역·센서·CCTV·특보 / 구역 위치 / 상황 요약·fingerprint
+avoid [--min caution|danger]                    길찾기에서 피할 구역
+
+# 길찾기 (docs/routing/README.md §1). 장소는 place_id 또는 LAT,LNG
+route kto-1909659 kto-2610501 [...] [--car] [--avoid]   거리·시간·한국어 안내·지나는(막힌) 구역·우회 시간
+legs kto-1 kto-2 kto-3 [--car] / matrix kto-1 kto-2 [--to kto-3 kto-4] [--car]   이동시간만
+rstatus                                         엔진 상태
+
+# 장소 근거 (docs/places/README.md)
+passages "일제강점기 어업" [--place kto-…] [--kind place|story] [--near 35.99,129.56 --radius 300] [--limit 5]
+stories kto-1909659 / stories-near 35.9906,129.5604 [--radius 300]
 ```
+- 새로 추가한 명령(여행 중·메모리·가이드·안전·길찾기·근거)은 모두 `--json` 이면 API 응답을 그대로 출력하고, `shell` 모드에서도 같다. `명령 -h` 로 옵션을 본다.
+- 출력 예 (`SAFETY_SOURCE=mock`, 데모 계획):
+  ```text
+  > projection 1 --now 14:00 --at-item 1
+  현재 기준 재계산 — 1일차 지금 14:00 · 지연 30분 늦음
+    다음: #2 13:40 예정 → 예상 도착 14:10, 시작 14:10
+    …
+    5     5   17:24  17:24~18:09  카페파도                planned
+    예상 종료 18:09
+   새로 생긴 위반 (trip 의 delay 판정 기준)
+    [E] day_overflow: 1일차 일정이 18:09 에 끝나 목표 종료 시각 18:00 을 9분 넘습니다.
+    [E] end_before: 1일차 일정이 18:09 에 끝나 18:00 전 종료 규칙을 어깁니다.
+  > guide-prepare 1 --places kto-1909659,kto-2660046 --wait      (Claude Haiku 5.5)
+  가이드 준비 #e071310a 계획 #1: 끝 — 2/2곳 (준비됨 2, 실패 0)
+    장소         이름                    상태    출처  웹 검색  초  토큰
+    kto-1909659  구룡포 일본인 가옥거리  준비됨  2     0        20  in 7,612 (캐시 4,354) · out 4,409 · 호출 1
+    kto-2660046  구룡포과메기문화관      준비됨  3     1        28  in 22,982 (캐시 11,109) · out 5,624 · 호출 1
+  > route kto-2603493 kto-2834344 --car --avoid      (storm)
+  구룡포 근대문화역사관 → 카페파도
+    차량 55분 · 39,226m
+    우회한 구역: 구룡포수협_스마트맨홀 주변(위험)
+    우회 전 6분 · 3,096m → 우회하면 49분 더
+  ```
+- 코드: `scripts/planner/cli.py`(계획·제안·여행 중 planner 명령), `services_cli.py`(docent·가이드·safety·routing·places), `scripts/trip/trip_cli.py`(trip·sim),
+  `client.py`(API 클라이언트), `fmt.py`(표·JSON 출력). **API 를 추가·변경하면 같은 브랜치에서 CLI 명령과 이 목록도 갱신한다** (`docs/COLLABORATION.md` §2).
 
 ## 12. 다음 단계
 - 운영시간·휴무 구조화: places가 파싱해 제공하면 `validation.py`를 그 값으로 바꾼다.
 - 걷기 편한 길: routing의 `easy_walk`(계단·언덕 회피, 3.6km/h)를 계획 설정으로 노출한다 ("오래 걷기 부담" 사용자).
-- CLI 에 진행 상태·재계산 명령 추가 (trip CLI 와 함께, `docs/trip/README.md` §8).
 - 경고 → Guide Agent 호출 (`needs_action` 경고). Planning Agent 는 §7.2 를 `check_safety` 도구·검토 관문으로 이미 쓴다 (`docs/agent/README.md` §5).
