@@ -259,7 +259,7 @@ LLM은 일정을 직접 바꾸지 않는다. 결과는 두 종류의 **카드**�
 | `AGENT_OPENAI_MODEL` | `gpt-5.4-mini` | |
 | `AGENT_OPENAI_REASONING_EFFORT` | `low` | |
 | `AGENT_CLAUDE_API_KEY` | (`ANTHROPIC_API_KEY`도 읽음) | Claude API 키. 비우면 SDK 가 `ant auth login` 프로필 등에서 찾는다 |
-| `AGENT_CLAUDE_MODEL` | `claude-sonnet-5-5` | `claude-haiku-5-5`로 바꿀 수 있다 |
+| `AGENT_CLAUDE_MODEL` | `claude-haiku-5-5` | 기본 (2026-10-09 결정: 아래 비교에서 품질이 같고 비용 약 1/17). `claude-sonnet-5-5`로 바꿀 수 있다 |
 | `AGENT_CLAUDE_EFFORT` | `medium` | `low`·`medium`·`high`·`xhigh`·`max`. 기본값에 기대지 않고 항상 보낸다 (§7.1) |
 | `AGENT_CLAUDE_MAX_TOKENS` | `64000` | 응답 하나의 최대 토큰 (thinking 포함, 스트리밍) |
 | `AGENT_CLAUDE_THINKING_MISMATCH` | `drop_block` | 기록이 바뀌어 thinking 블록이 무효일 때 `drop_block`(버리고 계속, 경고 로그) 또는 `error`(400) |
@@ -362,7 +362,7 @@ Sonnet 5.5 의 thinking 블록도 읽지 못한다. Haiku 5.5 에는 서버측 f
 **확인 절차 (실제 API 는 키를 넣은 뒤에만)**
 
 1. 키: 저장소 밖에 두고 `backend/.env`에 `AGENT_PROVIDER=claude`, `AGENT_CLAUDE_API_KEY=…` (또는 `ANTHROPIC_API_KEY`). `docker compose up -d --build agent`.
-   `GET /agent/info` → `{"provider": "claude:claude-sonnet-5-5"}`.
+   `GET /agent/info` → `{"provider": "claude:claude-haiku-5-5"}`.
 2. chat 한 턴: `python scripts/planner/cli.py chat 1 --new --thinking -m "점심 넣어줘"`. 확인할 것 — 텍스트·thinking 이 스트리밍되고, 제안 카드가 생기고,
    로그 `[agent] session=… usage`에 `calls` ≥ 2 이면 두 번째 호출부터 `cached` > 0. `thinking 블록` 경고 로그(기록 편집)가 없어야 한다.
 3. 장면 ③ 선제 턴: `backend/.env`에 `SAFETY_SOURCE=mock`, `AUTH_REQUIRED=false`로 `python scripts/planner/cli.py trip replay new scene3_delay --speed 0`.

@@ -27,7 +27,7 @@ class AgentSettings(BaseSettings):
 
     # Claude API (anthropic SDK). docs/agent/README.md §7.1
     claude_api_key: str = Field("", validation_alias=AliasChoices("AGENT_CLAUDE_API_KEY", "ANTHROPIC_API_KEY"))
-    claude_model: str = Field("claude-sonnet-5-5", description="claude-sonnet-5-5 | claude-haiku-5-5")
+    claude_model: str = Field("claude-haiku-5-5", description="claude-haiku-5-5 (기본, 2026-10-09 실측 비교 §7.1) | claude-sonnet-5-5")
     # 한 턴이 도구를 여러 번 쓰는 작업(찾기 -> 초안 -> 검토 -> 수정)이라 두 모델 모두 medium 에서 시작한다.
     # (Sonnet 5.5: 기본 high, 도구를 여러 번 쓰는 작업은 medium 권장 / Haiku 5.5: 기본·권장 모두 medium)
     claude_effort: str = Field("medium", description="low | medium | high | xhigh | max (항상 명시적으로 보낸다)")
