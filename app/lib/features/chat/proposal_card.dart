@@ -119,6 +119,9 @@ class ProposalCard extends StatelessWidget {
     if (state == ProposalState.superseded) return _Compact(entry: entry);
     final rows = p.before != null ? buildChangeRows(p) : <ChangeRow>[];
     final count = rows.isNotEmpty ? rows.length : p.changes.length;
+    final trip = context.read<PlanController>().tripActive;
+    final chat = context.read<ChatController>();
+    final safetyEvent = chat.proactive.values.any((e) => e.type == 'safety_raised' && e.agent?.proposalId == p.id);
     return Opacity(
       opacity: state == ProposalState.rejected ? 0.7 : 1,
       child: Container(
@@ -136,7 +139,12 @@ class ProposalCard extends StatelessWidget {
             if (i > 0) const Divider(height: 1, color: AppColors.line),
             ChangeRowView(row: r),
           ],
-          if (p.before != null && p.after != null) RouteImpact(proposal: p),
+          // 동행 중 (19·20·22): 종료 시각 행(이전 취소선 → 이후 Purple) + 영향 박스("18:00 전 종료 ✓" / "위험한 곳 1 → 0")
+          if (trip && p.before != null && p.after != null) ...[
+            if (dayEndChange(p).$1 != null && dayEndChange(p).$2 != null) ...[const Divider(height: 1, color: AppColors.line), EndRow(proposal: p)],
+            if (safetyEvent) SafetyImpact(proposal: p) else RouteImpact(proposal: p, trip: true),
+          ] else if (p.before != null && p.after != null)
+            RouteImpact(proposal: p),
           if (state == ProposalState.pending && p.progressChanged.isNotEmpty)
             const _Note(text: '그사이 다녀온 곳이 있어 이 제안을 그대로 반영할 수 없어요')
           else if (state == ProposalState.pending && p.baseChanged)
@@ -240,8 +248,11 @@ class ChangeRowView extends StatelessWidget {
 
 /// Route Impact 박스: 이동 시간 변화 · 종료 시각(day_end) · 남은 위반.
 class RouteImpact extends StatelessWidget {
-  const RouteImpact({super.key, required this.proposal});
+  const RouteImpact({super.key, required this.proposal, this.trip = false});
   final ProposalDetail proposal;
+
+  /// 동행 중: 규칙(end_before)이 있으면 "18:00 전 종료" 로 (19 영향 박스).
+  final bool trip;
 
   @override
   Widget build(BuildContext context) {
@@ -253,6 +264,8 @@ class RouteImpact extends StatelessWidget {
     final errors = after.violations.where((v) => v.isError && (v.day == null || v.day == day)).length;
     final (_, endTo) = dayEndChange(proposal);
     final end = endTo ?? a.endAt;
+    final endBefore = after.constraints.where((c) => c.type == 'end_before' && c.hard).map((c) => '${c.params['time'] ?? ''}').where((t) => t.isNotEmpty).firstOrNull;
+    final endLabel = trip && endBefore != null ? '$endBefore 전 종료' : '$end 종료';
     return Container(
       margin: const EdgeInsets.only(top: 8),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
@@ -271,9 +284,69 @@ class RouteImpact extends StatelessWidget {
         ] else if (end != null) ...[
           const Icon(Icons.check, size: 16, color: AppColors.success),
           const SizedBox(width: 4),
-          Text('$end 종료', style: AppText.caption.copyWith(color: AppColors.success, fontWeight: FontWeight.w700)),
+          Text(endLabel, style: AppText.caption.copyWith(color: AppColors.success, fontWeight: FontWeight.w700)),
         ],
       ]),
+    );
+  }
+}
+
+/// 종료 시각 행 (19·20): 배지 "종료" · 이전(취소선) › 이후(Purple Bold).
+class EndRow extends StatelessWidget {
+  const EndRow({super.key, required this.proposal});
+  final ProposalDetail proposal;
+
+  @override
+  Widget build(BuildContext context) {
+    final (from, to) = dayEndChange(proposal);
+    return Padding(
+      key: const ValueKey('end-row'),
+      padding: const EdgeInsets.symmetric(vertical: 10),
+      child: Row(children: [
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+          decoration: BoxDecoration(color: AppColors.primarySoft, borderRadius: BorderRadius.circular(6)),
+          child: Text('종료', style: AppText.caption.copyWith(color: AppColors.primary, fontWeight: FontWeight.w700)),
+        ),
+        const SizedBox(width: 10),
+        Text(from ?? '-', style: AppText.label.copyWith(color: AppColors.text3, decoration: TextDecoration.lineThrough)),
+        const Padding(padding: EdgeInsets.symmetric(horizontal: 6), child: Icon(Icons.chevron_right, size: 16, color: AppColors.text3)),
+        Text(to ?? '-', style: AppText.label.copyWith(color: AppColors.ai, fontWeight: FontWeight.w700)),
+      ]),
+    );
+  }
+}
+
+/// 22 영향 박스: "위험한 곳 n → m · HH:MM 종료". 지금 일정 점검(기존안)과 ops 미리보기(수정안)의 남은 방문 중 주의·위험 수.
+class SafetyImpact extends StatelessWidget {
+  const SafetyImpact({super.key, required this.proposal});
+  final ProposalDetail proposal;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.read<PlanController>();
+    final (_, endTo) = dayEndChange(proposal);
+    final end = endTo ?? proposal.after?.dayOf(proposal.day)?.endAt;
+    return FutureBuilder<(int, int)?>(
+      future: c.safetyImpact(proposal),
+      builder: (context, snap) {
+        final v = snap.data;
+        return Container(
+          key: const ValueKey('safety-impact'),
+          margin: const EdgeInsets.only(top: 8),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          decoration: BoxDecoration(color: AppColors.background, borderRadius: BorderRadius.circular(12)),
+          child: Row(children: [
+            const Icon(Icons.shield_outlined, size: 18, color: AppColors.text2),
+            const SizedBox(width: 8),
+            Text('위험한 곳 ', style: AppText.meta),
+            Text(v == null ? (snap.connectionState == ConnectionState.done ? '확인 못 함' : '…') : '${v.$1} → ${v.$2}',
+                style: AppText.meta.copyWith(color: AppColors.text, fontWeight: FontWeight.w700)),
+            const Spacer(),
+            if (end != null) Text('$end 종료', style: AppText.caption.copyWith(color: AppColors.text2)),
+          ]),
+        );
+      },
     );
   }
 }

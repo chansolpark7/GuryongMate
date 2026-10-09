@@ -1,8 +1,11 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- 동행 모드: 화면이 켜진 동안만 위치 (백그라운드 위치는 쓰지 않는다, trip §2.2) -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <application
         android:usesCleartextTraffic="true"
-        android:label="Planit"
+        android:label="구룡메이트"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity

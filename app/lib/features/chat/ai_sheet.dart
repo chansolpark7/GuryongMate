@@ -5,7 +5,10 @@ import '../../core/models/agent.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/common.dart';
 import '../planner/plan_controller.dart';
+import '../settings/memory_screen.dart';
+import '../trip/trip_overlay.dart';
 import 'chat_controller.dart';
+import 'proactive_widgets.dart';
 import 'proposal_card.dart';
 
 const _half = 0.77; // Figma: Half top 196 / 844
@@ -18,6 +21,7 @@ Future<void> showAiSheet(
   required ChatController chat,
   String? prefill,
   String? sendNow,
+  bool full = false,
 }) =>
     showModalBottomSheet<void>(
       context: context,
@@ -27,14 +31,17 @@ Future<void> showAiSheet(
       sheetAnimationStyle: const AnimationStyle(duration: Duration(milliseconds: 300), curve: Curves.easeOut),
       builder: (_) => MultiProvider(
         providers: [ChangeNotifierProvider.value(value: plan), ChangeNotifierProvider.value(value: chat)],
-        child: _AiSheet(prefill: prefill, sendNow: sendNow),
+        child: _AiSheet(prefill: prefill, sendNow: sendNow, full: full),
       ),
     );
 
 class _AiSheet extends StatefulWidget {
-  const _AiSheet({this.prefill, this.sendNow});
+  const _AiSheet({this.prefill, this.sendNow, this.full = false});
   final String? prefill;
   final String? sendNow;
+
+  /// 선제 메시지에서 열 때: Full 로 (events.md §3.2).
+  final bool full;
 
   @override
   State<_AiSheet> createState() => _AiSheetState();
@@ -48,11 +55,17 @@ class _AiSheetState extends State<_AiSheet> {
   late final ChatController _chat;
   int _lastLen = 0;
 
+  /// 선제 메시지로 스크롤하기 위한 턴 키 (message id 별).
+  final _turnKeys = <int, GlobalKey>{};
+
+  GlobalKey _keyFor(int messageId) => _turnKeys.putIfAbsent(messageId, GlobalKey.new);
+
   @override
   void initState() {
     super.initState();
     _chat = context.read<ChatController>();
     _chat.addListener(_autoScroll);
+    _chat.addListener(_focusMessage);
     _chat.onNotice = (e) {
       if (mounted) showError(context, e);
     };
@@ -71,6 +84,7 @@ class _AiSheetState extends State<_AiSheet> {
   @override
   void dispose() {
     _chat.removeListener(_autoScroll);
+    _chat.removeListener(_focusMessage);
     _chat.onNotice = null;
     _sheet.dispose();
     _input.dispose();
@@ -89,6 +103,35 @@ class _AiSheetState extends State<_AiSheet> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (s.hasClients) s.animateTo(s.position.maxScrollExtent, duration: const Duration(milliseconds: 200), curve: Curves.easeOut);
     });
+  }
+
+  /// 새 선제 메시지가 오면 그 메시지로 스크롤 (입력창의 글은 그대로, events.md §3.1).
+  void _focusMessage() {
+    final mid = _chat.focusMessageId;
+    if (mid == null) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToMessage(mid));
+  }
+
+  void _scrollToMessage(int mid, {int tries = 0}) {
+    if (!mounted) return;
+    final ctx = _turnKeys[mid]?.currentContext;
+    if (ctx == null) {
+      // 기록을 다시 읽는 중이면 조금 뒤에 다시
+      if (tries < 20) Future<void>.delayed(const Duration(milliseconds: 150), () => _scrollToMessage(mid, tries: tries + 1));
+      return;
+    }
+    if (_chat.focusMessageId == mid) _chat.focusMessageId = null;
+    Scrollable.ensureVisible(ctx, duration: const Duration(milliseconds: 250), curve: Curves.easeOut, alignment: 0.02);
+  }
+
+  /// 대기 안내 줄 [제안 보기] → 대기 중인 제안이 있는 턴으로.
+  void _scrollToPending() {
+    for (final t in _chat.turns.reversed) {
+      if (t.proposals.any((e) => e.state == ProposalState.pending) && t.messageId != null) {
+        _scrollToMessage(t.messageId!);
+        return;
+      }
+    }
   }
 
   void _send([String? text]) {
@@ -121,7 +164,7 @@ class _AiSheetState extends State<_AiSheet> {
       padding: EdgeInsets.only(bottom: bottomInset),
       child: DraggableScrollableSheet(
         controller: _sheet,
-        initialChildSize: _half,
+        initialChildSize: widget.full ? _full : _half,
         minChildSize: 0.35,
         maxChildSize: _full,
         snap: true,
@@ -152,7 +195,7 @@ class _AiSheetState extends State<_AiSheet> {
                 },
                 child: Column(children: [
                   const Grabber(),
-                  _Header(plan: plan, full: full, onToggle: _toggleSize, onNew: chat.busy ? null : chat.newSession),
+                  _Header(plan: plan, label: chat.contextLabel, full: full, onToggle: _toggleSize, onNew: chat.busy ? null : chat.newSession),
                 ]),
               ),
               Expanded(
@@ -173,7 +216,17 @@ class _AiSheetState extends State<_AiSheet> {
                     else if (chat.turns.isEmpty)
                       _Welcome(day: plan.day, onPick: _send)
                     else
-                      for (final (i, t) in chat.turns.indexed) TurnView(turn: t, isLast: i == chat.turns.length - 1, onFollowUp: _send),
+                      for (final (i, t) in chat.turns.indexed)
+                        TurnView(
+                          key: t.messageId == null ? null : _keyFor(t.messageId!),
+                          turn: t,
+                          isLast: i == chat.turns.length - 1,
+                          onFollowUp: _send,
+                          onShowPending: _scrollToPending,
+                        ),
+                    // 시트가 열려 있을 때 온 도착 카드 (대화 기록에는 남지 않는 로컬 카드, 16)
+                    if (chat.arrivalCard != null && tripHub.controller != null)
+                      Padding(padding: const EdgeInsets.only(bottom: 16), child: ArrivalCard(event: chat.arrivalCard!, c: tripHub.controller!, inChat: true)),
                   ],
                 ),
               ),
@@ -187,8 +240,11 @@ class _AiSheetState extends State<_AiSheet> {
 }
 
 class _Header extends StatelessWidget {
-  const _Header({required this.plan, required this.full, required this.onToggle, required this.onNew});
+  const _Header({required this.plan, required this.label, required this.full, required this.onToggle, required this.onNew});
   final PlanController plan;
+
+  /// 동행 중 헤더 컨텍스트 ("계획명 · 동행 중" / "장소명 · 현장 해설"). null 이면 "계획명 · Day n".
+  final String? label;
   final bool full;
   final VoidCallback onToggle;
   final VoidCallback? onNew;
@@ -204,7 +260,7 @@ class _Header extends StatelessWidget {
             Expanded(
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisAlignment: MainAxisAlignment.center, children: [
                 Text('구룡메이트', style: AppText.headline),
-                Text('${plan.plan?.title ?? ''} · Day ${plan.day}', style: AppText.caption, overflow: TextOverflow.ellipsis),
+                Text(label ?? '${plan.plan?.title ?? ''} · Day ${plan.day}', style: AppText.caption, overflow: TextOverflow.ellipsis),
               ]),
             ),
             PopupMenuButton<String>(
@@ -274,20 +330,24 @@ class _Welcome extends StatelessWidget {
 
 /// 한 턴: 사용자 말풍선 → 진행 영역(status + 단계, steps_done 이면 한 줄로 접힘) → 답변 → 기억 칩 → 오류 → 카드.
 class TurnView extends StatelessWidget {
-  const TurnView({super.key, required this.turn, required this.isLast, required this.onFollowUp});
+  const TurnView({super.key, required this.turn, required this.isLast, required this.onFollowUp, this.onShowPending});
   final ChatTurn turn;
   final bool isLast;
   final ValueChanged<String> onFollowUp;
+  final VoidCallback? onShowPending;
 
   @override
   Widget build(BuildContext context) {
     final chat = context.read<ChatController>();
-    final text = turn.text.toString().trim();
+    final (text, pendingNotice) = splitPendingNotice(turn.text.toString().trim());
     final lastPending = turn.proposals.where((e) => e.state == ProposalState.pending).lastOrNull;
+    // 선제 메시지: 이벤트의 agent.message_id 와 같은 id 의 메시지 (events.md §3.1)
+    final event = turn.messageId == null ? null : chat.proactive[turn.messageId];
     return Padding(
       padding: const EdgeInsets.only(bottom: 16),
       child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
         if (turn.user.isNotEmpty) _UserBubble(text: turn.user),
+        if (event != null) ProactiveHeader(event: event),
         if (turn.hasProgress) ...[
           const SizedBox(height: 12),
           turn.collapsed ? ActivitySummary(turn: turn) : ActivityCard(turn: turn),
@@ -296,12 +356,14 @@ class TurnView extends StatelessWidget {
           const _Thinking(label: '생각 중…'),
         ],
         if (text.isNotEmpty) ...[
-          const SizedBox(height: 12),
+          SizedBox(height: event != null ? 4 : 12),
           Text(text, style: AppText.body),
         ],
+        if (event?.type == 'safety_raised') HazardEvidenceBox(event: event!),
+        if (pendingNotice) PendingNoticeLine(onTap: onShowPending),
         if (turn.remembered.isNotEmpty) ...[
           const SizedBox(height: 8),
-          Wrap(spacing: 6, runSpacing: 6, children: [for (final s in turn.remembered) _MemoryChip(text: s.detail)]),
+          for (final s in turn.remembered) Padding(padding: const EdgeInsets.only(bottom: 6), child: _MemoryChip(text: s.detail, planId: chat.plan.planId)),
         ],
         if (turn.error != null) ...[
           const SizedBox(height: 10),
@@ -315,7 +377,7 @@ class TurnView extends StatelessWidget {
             RecommendationEntry() => RecommendationCard(entry: c),
           },
         ],
-        if (isLast && lastPending != null && turn.done) _FollowUps(entry: lastPending, onPick: onFollowUp),
+        if (isLast && lastPending != null && turn.done) _FollowUps(entry: lastPending, eventType: event?.type, text: text, onPick: onFollowUp),
       ]),
     );
   }
@@ -359,19 +421,31 @@ class _Thinking extends StatelessWidget {
       ]);
 }
 
+/// 기억 칩 (18): "기억했어요 · {text}" + "나에 대해 ›" (31).
 class _MemoryChip extends StatelessWidget {
-  const _MemoryChip({required this.text});
+  const _MemoryChip({required this.text, required this.planId});
   final String text;
+  final int planId;
 
   @override
-  Widget build(BuildContext context) => Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-        decoration: BoxDecoration(color: AppColors.aiSoft, borderRadius: BorderRadius.circular(14)),
-        child: Row(mainAxisSize: MainAxisSize.min, children: [
-          const Icon(Icons.bookmark_border, size: 14, color: AppColors.ai),
-          const SizedBox(width: 4),
-          Flexible(child: Text('기억했어요 · $text', style: AppText.caption.copyWith(color: AppColors.ai, fontWeight: FontWeight.w700), overflow: TextOverflow.ellipsis)),
-        ]),
+  Widget build(BuildContext context) => Material(
+        color: AppColors.aiSoft,
+        borderRadius: BorderRadius.circular(12),
+        child: InkWell(
+          key: const ValueKey('memory-chip'),
+          borderRadius: BorderRadius.circular(12),
+          onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => MemoryScreen(planId: planId))),
+          child: Container(
+            height: 40,
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            child: Row(children: [
+              const Icon(Icons.bookmark_border, size: 16, color: AppColors.ai),
+              const SizedBox(width: 6),
+              Expanded(child: Text('기억했어요 · $text', style: AppText.meta.copyWith(color: AppColors.ai, fontWeight: FontWeight.w500), overflow: TextOverflow.ellipsis)),
+              Text('나에 대해 ›', style: AppText.caption.copyWith(color: AppColors.text, fontWeight: FontWeight.w700)),
+            ]),
+          ),
+        ),
       );
 }
 
@@ -525,19 +599,36 @@ class _ActivitySummaryState extends State<ActivitySummary> {
 
 /// 제안에 답하지 않고 이어서 요청하는 칩 (탭하면 새 요청으로 전송, 이전 제안은 대체).
 class _FollowUps extends StatelessWidget {
-  const _FollowUps({required this.entry, required this.onPick});
+  const _FollowUps({required this.entry, required this.onPick, this.eventType, this.text = ''});
   final ProposalEntry entry;
   final ValueChanged<String> onPick;
+
+  /// 선제 메시지의 이벤트 종류 (지연·안전이면 그에 맞는 칩, 19·22).
+  final String? eventType;
+  final String text;
 
   @override
   Widget build(BuildContext context) {
     final rows = entry.proposal.before == null ? const <ChangeRow>[] : buildChangeRows(entry.proposal);
-    final changed = rows.where((r) => r.badge == '교체' || r.badge == '삭제').map((r) => r.fromText ?? r.title).firstOrNull;
-    final chips = [
-      if (changed != null) '$changed은 그대로 둬줘',
-      '이동 시간 더 줄여줘',
-      '조금 더 여유롭게',
-    ];
+    final changed = rows.where((r) => r.badge == '교체' || r.badge == '삭제').map((r) => r.badge == '삭제' ? r.title : (r.fromText ?? r.title)).firstOrNull;
+    final chips = switch (eventType) {
+      // 19: 답변에 나온 대안에 맞춘 칩 + "그대로 둘게요" (서버가 칩을 주지 않는다)
+      'delay' => [
+          if (changed != null) '$changed은 유지해줘',
+          if (text.contains('②')) '②번으로 해줘',
+          '그대로 둘게요',
+        ],
+      // 22: 위험한 곳은 다른 시간에 / 다른 대체 장소
+      'safety_raised' => [
+          if (changed != null) '$changed은 다른 시간에 갈게',
+          '실내 말고 다른 곳은?',
+        ],
+      _ => [
+          if (changed != null) '$changed은 그대로 둬줘',
+          '이동 시간 더 줄여줘',
+          '조금 더 여유롭게',
+        ],
+    };
     return Padding(
       padding: const EdgeInsets.only(top: 12),
       child: Wrap(spacing: 8, runSpacing: 8, children: [
@@ -588,7 +679,7 @@ class _InputBar extends StatelessWidget {
                 onSubmitted: (_) => onSend(),
                 style: AppText.body,
                 decoration: const InputDecoration(
-                  hintText: 'AI에게 요청하기...',
+                  hintText: '구룡메이트에게 요청하기…', // Figma 18·19 (README §1 이름)
                   border: InputBorder.none,
                   filled: false,
                   isCollapsed: true,

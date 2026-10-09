@@ -64,10 +64,16 @@
 | b20 | 가이드 노트 목록(`GET /docent/plans/{id}/notes`)에 출처 수·실패 이유가 없음 (L1 에서 확인) | 32 "준비됨 · 출처 n개", failed 행 문구 | 준비 작업(`GuideJobView.places[].sources`·`error`)이 있을 때만 보이고, 화면을 다시 열면 "준비됨"만 | 권장 |
 | b21 | 규칙 변경 요약(`Change.message`, `rule_added`)에 코드 표기가 섞임 — 예 `규칙 추가: end_before {'time': '18:00'} (18시 전에 끝내기)` (L1 에서 확인) | 06·36 카드의 조건 줄 | 앱이 끝의 괄호 안 사람 말만 쓰고, 괄호가 없으면 "여행 조건" (`proposal_actions.dart` `ruleText`). planner 가 사람 말 필드를 따로 주면 더 단순 | 권장 |
 | b22 | 장소 추천 후보에 그 장소까지의 이동 시간이 없음 (L1 에서 확인) | 06B 카드 메타 "도보 6분" | `in_plan` 후보만 일정 항목의 이동 시간을 보여 주고, `not_in_plan` 은 분류·추천 이유만 (Figma 의 별점도 데이터가 없어 뺌) | 나중 |
+| b23 | `departed` 문구가 길고 조사가 기계적이다 — "구룡포 일본인 가옥거리을(를) 떠났어요. 다음은 구룡포항, 도보 약 8분 (13:39 도착 예정)." (L2 에서 확인) | 15 출발 토스트 "다음은 구룡포항, 도보 8분" | 앱이 `message` 의 "다음은 …" 부분만 쓰고 괄호(도착 예정)를 뗀다 (`trip_overlay.dart` `toastText`). payload 에 다음 장소·수단·분이 있으면 앱이 문구를 덜 자른다 | 권장 |
+| b24 | `near_hazard` 구역 이름이 센서 이름 그대로 (`구룡포수협_스마트맨홀 주변`, `구룡포파출소_지표면 수위계 주변`) (L2) | 23 본문 "구룡포수협 주변 · …", 근거 줄 | 앱이 `_스마트맨홀`·`_지표면 수위계`·`_하천수위계` 를 떼고(`shortZoneName`), 근거는 `reason` 의 "수위 등급 n (단계)" 를 "수위 센서 실측 · 단계 (등급 n)" 로 (`hazardReasonText`). safety 구역에 사람용 이름이 있으면 더 단순 | 권장 |
+| b25 | `delay` payload 에 재계산한 종료 시각이 없다 (`new_violations[].message` 문장 안에만 "18:01 에 끝나") (L2) | 14 ETA 칩 Red "18:01 종료 · 규칙 넘음" | 앱이 이벤트 `message`·위반 문구에서 첫 시각을 읽는다 (`EtaChip.violationLabel`). `payload.day_end` 같은 필드가 있으면 그것을 쓴다 | 권장 |
+| b26 | 위험 구역을 벗어났다는 이벤트·필드가 없다 (L2) | 23 접힌 띠 "구역을 벗어나면 사라짐" | 앱이 다음 위치(`TripState.location`)와 `GET /safety/avoid` 구역 다각형의 거리(60m)로 판단 (`zoneDistanceM`). 구역 다각형을 못 받으면 띠가 남는다 | 나중 |
+| b27 | 제안 `decided_at`·메모리 `created_at` 은 실제 시각, 여행일은 가상 시각(sim) — 데모에서 "오늘" 비교가 어긋난다 (L2) | 30 함께 바꾼 일정·기억한 것 | 실제 시각 기준 18시간 안(제안)·오늘(메모리)으로 센다. 요약 API(b8)가 생기면 서버가 여행일 기준으로 세 주면 된다 | 나중 |
 
 ## (c) 기존 앱 코드(`origin/feat/app` 의 `app/`)에서 고칠 것
 
 > **L1 (feat/app-l1, 2026-10-10) 처리 현황**: c1~c12·c14·c15 반영. c13(trip 위치 전송기·이벤트 폴러·TripState·데모 위치 모드 동작)은 동행 모드 단계(L2)에서.
+> **L2 (feat/app-l2, 2026-10-10)**: c13 반영 (`features/trip/` — `location.dart` 전송기, `trip_controller.dart` 폴러·표현 큐, 데모 위치 모드). voice 는 범위 밖. 비교는 [review/l2.md](review/l2.md).
 > 화면별 비교와 남은 차이는 [review/l1.md](review/l1.md).
 
 | # | 위치 | 지금 | 바꿀 것 | 명세 |

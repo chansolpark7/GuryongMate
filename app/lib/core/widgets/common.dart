@@ -41,12 +41,31 @@ void showInfo(BuildContext context, String msg, {EdgeInsets? margin}) {
 
 /// AI FAB (56 원형, AI gradient).
 class AiFab extends StatelessWidget {
-  const AiFab({super.key, required this.onTap, this.size = 56});
+  const AiFab({super.key, required this.onTap, this.size = 56, this.hasSuggestion = false});
   final VoidCallback onTap;
   final double size;
 
+  /// Has Suggestion 변형: 오른쪽 위 빨간 점 (동행 중 선제 제안이 기다릴 때, events.md §3.2).
+  final bool hasSuggestion;
+
   @override
-  Widget build(BuildContext context) => Tooltip(
+  Widget build(BuildContext context) => !hasSuggestion
+      ? _fab()
+      : Stack(clipBehavior: Clip.none, children: [
+          _fab(),
+          Positioned(
+            right: 1,
+            top: 1,
+            child: Container(
+              key: const ValueKey('fab-suggestion-dot'),
+              width: 14,
+              height: 14,
+              decoration: BoxDecoration(color: AppColors.danger, shape: BoxShape.circle, border: Border.all(color: Colors.white, width: 2)),
+            ),
+          ),
+        ]);
+
+  Widget _fab() => Tooltip(
         message: '구룡메이트 열기',
         // 그라데이션·그림자는 바깥 원에, 눌림 효과는 원으로 잘린 투명 Material 에 (Ink 는 사각 하이라이트가 비친다)
         child: DecoratedBox(
@@ -105,7 +124,7 @@ class InfoChip extends StatelessWidget {
         decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(12)),
         child: Row(mainAxisSize: MainAxisSize.min, children: [
           if (icon != null) ...[Icon(icon, size: 14, color: fg), const SizedBox(width: 4)],
-          Text(label, style: AppText.caption.copyWith(color: fg, fontWeight: FontWeight.w500)),
+          Flexible(child: Text(label, style: AppText.caption.copyWith(color: fg, fontWeight: FontWeight.w500), overflow: TextOverflow.ellipsis)),
         ]),
       );
 }

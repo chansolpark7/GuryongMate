@@ -6,6 +6,7 @@ import '../../core/api/api_client.dart';
 import '../../core/api/guryong_api.dart';
 import '../../core/models/agent.dart';
 import '../../core/models/plan.dart';
+import '../../core/models/trip.dart';
 import '../planner/plan_controller.dart';
 
 enum ProposalState { pending, applying, applied, rejected, superseded }
@@ -99,6 +100,51 @@ class ChatController extends ChangeNotifier {
   /// 화면에 잠깐 알릴 오류 (스낵바). 시트가 등록한다.
   void Function(Object error)? onNotice;
 
+  // ---------- 동행 모드 (L2) ----------
+
+  /// 선제 메시지 id → 그 이벤트. 대화 기록에는 숨김 `[이벤트]` 메시지가 안 보이므로 이벤트의 agent.message_id 로 맞춘다 (events.md §3.1).
+  final proactive = <int, TripEvent>{};
+
+  /// 시트를 이 메시지로 스크롤 (새 선제 메시지). 시트가 읽고 비운다.
+  int? focusMessageId;
+
+  /// 시트가 열려 있을 때 온 도착 카드 (대화 기록에 남지 않는 로컬 카드, 16 진입).
+  TripEvent? arrivalCard;
+
+  /// 헤더 컨텍스트 (README §3.3): null 이면 "계획명 · Day n", 동행 중이면 "계획명 · 동행 중" / "장소명 · 현장 해설".
+  String? contextLabel;
+
+  void focus(int? messageId) {
+    focusMessageId = messageId;
+    _notify();
+  }
+
+  void showArrivalInChat(TripEvent? event) {
+    arrivalCard = event;
+    _notify();
+  }
+
+  /// 대화의 제안 카드 (선제 제안 상태 확인용).
+  ProposalEntry? proposalEntry(int proposalId) {
+    for (final t in turns) {
+      for (final e in t.proposals) {
+        if (e.proposal.id == proposalId) return e;
+      }
+    }
+    return null;
+  }
+
+  /// 선제 턴이 다른 세션에 들어갔으면 그 세션으로 (trip 이 정한 세션, trip §1.3).
+  Future<void> switchSession(String sid) async {
+    if (busy || sid == sessionId) return;
+    try {
+      final d = await api.session(sid);
+      sessionId = sid;
+      _setHistory(d);
+      _notify();
+    } catch (_) {}
+  }
+
   @override
   void dispose() {
     _disposed = true;
@@ -142,9 +188,14 @@ class ChatController extends ChangeNotifier {
   }
 
   /// 기록의 카드도 서버 상태(조회할 때의 status·base_changed·후보 state)로 다시 그린다.
-  Future<void> reloadSession() async {
+  /// [force]: 선제 메시지가 왔을 때. 응답 중이면 끝난 뒤 다시 읽는다 (서버도 사용자 턴이 끝난 뒤 선제 턴을 넣는다).
+  Future<void> reloadSession({bool force = false}) async {
     final sid = sessionId;
-    if (sid == null || busy) return;
+    if (sid == null) return;
+    if (busy) {
+      if (force) _reloadAfterTurn = true;
+      return;
+    }
     final count = turns.length;
     try {
       final d = await api.session(sid);
@@ -292,7 +343,13 @@ class ChatController extends ChangeNotifier {
     busy = false;
     _sub = null;
     _notify();
+    if (_reloadAfterTurn) {
+      _reloadAfterTurn = false;
+      reloadSession();
+    }
   }
+
+  bool _reloadAfterTurn = false;
 
   /// 실행 중 Stop. 연결을 끊으면 서버가 턴을 중단하고 그때까지의 기록을 남긴다.
   Future<void> stop() async {

@@ -110,26 +110,26 @@
 | 08 | Planner After Apply | 공통 | P0 | `29:3404` · `29:5321` | 구현됨 (실행 취소 한계 → gaps) | — |
 | 09 | Map After Apply | 공통 | P1 | `21:149` · `21:2082` | 구현됨 | — |
 | 10 | Map Layers | 공통 | P1 | `21:26` · `21:2059` | 수정 필요 (→ 28-S1) | [existing](screens/00-existing.md#07-09-10-map) |
-| 11 | Trip Start | 전환 | **P0** | `73:1486` · `72:278` | 새로 | [11](screens/11-trip-start.md) |
-| 12 | Not Trip Day | 전환 | P1 | `73:1751` · `72:525` | 새로 | [12](screens/12-not-trip-day.md) |
-| 13 | Location Permission | 전환 | P1 | `73:1969` · `72:622` | 새로 | [13](screens/13-location-permission.md) |
-| 14 | Today (동행 홈) | 동행 | **P0** | `73:2042` · `72:844` | 새로 | [14](screens/14-today.md) |
-| 15 | Today Moving (다음 장소 안내) | 동행 | P1 | `73:2240` · `72:1061` | 새로 | [15](screens/15-today-moving.md) |
-| 16 | Arrival Docent (도착 해설 카드) | 동행 | **P0** | `73:2418` · `72:1259` | 새로 | [16](screens/16-arrival-docent.md) |
-| 17 | Guide Note | 동행 | **P0** | `73:2587` · `73:2726` | 새로 | [17](screens/17-guide-note.md) |
-| 18 | Docent Chat (추가 질문·"더 짧게") | 동행 | **P0** | `73:2755` · `73:2848` | 새로 | [18](screens/18-docent-chat.md) |
-| 19 | Proactive Delay (지연 선제 메시지) | 동행 | **P0** | `73:2877` · `73:3086` | 새로 | [19](screens/19-proactive-delay.md) |
-| 20 | Proposal Revised (제약 반영) | 동행 | **P0** | `73:3115` · `73:3336` | 새로 | [20](screens/20-proposal-revised.md) |
-| 21 | Compare (기존안/수정안) | 공통 | **P0** | `73:3360` · `73:3535` | 새로 | [21](screens/21-compare.md) |
-| 22 | Proactive Safety (안전 선제 메시지) | 동행 | **P0** | `73:3564` · `73:3781` | 새로 | [22](screens/22-proactive-safety.md) |
-| 23 | Hazard Alert (위험 구역 경고) | 동행 | **P0** | `73:3810` · `73:3945` | 새로 | [23](screens/23-hazard-alert.md) |
-| 24 | Event Inbox (알림 목록) | 동행 | P1 | `73:3974` · `73:4113` | 새로 | [24](screens/24-event-inbox.md) |
+| 11 | Trip Start | 전환 | **P0** | `73:1486` · `72:278` | 구현됨 (L2) | [11](screens/11-trip-start.md) |
+| 12 | Not Trip Day | 전환 | P1 | `73:1751` · `72:525` | 구현됨 (L2) | [12](screens/12-not-trip-day.md) |
+| 13 | Location Permission | 전환 | P1 | `73:1969` · `72:622` | 구현됨 (L2) | [13](screens/13-location-permission.md) |
+| 14 | Today (동행 홈) | 동행 | **P0** | `73:2042` · `72:844` | 구현됨 (L2) | [14](screens/14-today.md) |
+| 15 | Today Moving (다음 장소 안내) | 동행 | P1 | `73:2240` · `72:1061` | 구현됨 (L2) | [15](screens/15-today-moving.md) |
+| 16 | Arrival Docent (도착 해설 카드) | 동행 | **P0** | `73:2418` · `72:1259` | 구현됨 (L2) | [16](screens/16-arrival-docent.md) |
+| 17 | Guide Note | 동행 | **P0** | `73:2587` · `73:2726` | 구현됨 (L2) | [17](screens/17-guide-note.md) |
+| 18 | Docent Chat (추가 질문·"더 짧게") | 동행 | **P0** | `73:2755` · `73:2848` | 구현됨 (L2) | [18](screens/18-docent-chat.md) |
+| 19 | Proactive Delay (지연 선제 메시지) | 동행 | **P0** | `73:2877` · `73:3086` | 구현됨 (L2) | [19](screens/19-proactive-delay.md) |
+| 20 | Proposal Revised (제약 반영) | 동행 | **P0** | `73:3115` · `73:3336` | 구현됨 (L2) | [20](screens/20-proposal-revised.md) |
+| 21 | Compare (기존안/수정안) | 공통 | **P0** | `73:3360` · `73:3535` | 구현됨 (L2) | [21](screens/21-compare.md) |
+| 22 | Proactive Safety (안전 선제 메시지) | 동행 | **P0** | `73:3564` · `73:3781` | 구현됨 (L2) | [22](screens/22-proactive-safety.md) |
+| 23 | Hazard Alert (위험 구역 경고) | 동행 | **P0** | `73:3810` · `73:3945` | 구현됨 (L2) | [23](screens/23-hazard-alert.md) |
+| 24 | Event Inbox (알림 목록) | 동행 | P1 | `73:3974` · `73:4113` | 구현됨 (L2) | [24](screens/24-event-inbox.md) |
 | 25 | Planner Safety (04 개정) | 공통 | **P0** | `73:4137` · `73:4366` | 새로 (04 수정) | [25](screens/25-planner-safety.md) |
 | 26 | Safety Detail (위험 근거) | 공통 | P1 | `73:4400` · `73:4727` | 새로 | [26](screens/26-safety-detail.md) |
 | 27 | Safety Outlook (날짜 전망) | 공통 | P1 | `73:4751` · `73:5116` | 새로 | [27](screens/27-safety-outlook.md) |
 | 28 | Map Safety (위험 구역·우회) | 공통 | P1 | `73:5140` · `73:5276` | 새로 | [28](screens/28-map-safety.md) |
 | 29 | Plan List Status (02 개정) | 공통 | P1 | `73:5305` · `73:5429` | 새로 (02 수정) | [29](screens/29-plan-list-status.md) |
-| 30 | Trip End (하루 요약) | 동행 | P1 | `73:5458` · `73:5579` | 새로 | [30](screens/30-trip-end.md) |
+| 30 | Trip End (하루 요약) | 동행 | P1 | `73:5458` · `73:5579` | 구현됨 (L2) | [30](screens/30-trip-end.md) |
 | 31 | Memory (나에 대해) | 공통 | P1 | `73:5603` · `73:5717` | 새로 | [31](screens/31-memory.md) |
 | 32 | Guide Prep (가이드 준비) | 계획 | P1 | `73:5746` · `73:5880` | 새로 | [32](screens/32-guide-prep.md) |
 | 33 | Settings · Demo | 공통 | **P0** | `73:5904` · `73:6045` | 새로 | [33](screens/33-settings-demo.md) |
@@ -149,6 +149,8 @@
 | 28-S1 | 지도 레이어 패널 (위험 구역, 혼잡도 비활성) | `73:7999` |
 | 34-S1 | 로그인 잠김 (429) | `73:8131` |
 | States_Feedback | 로딩·빈·오류·오프라인·busy·다이얼로그 | `73:7102` |
+
+구현과 Figma 대조: [review/l1.md](review/l1.md) (계획 모드) · [review/l2.md](review/l2.md) (동행 모드).
 | Components_Companion | 새 컴포넌트 모음 | `73:6361` |
 
 흐름도 (Flows — 동행 모드 페이지): F3 `73:8263` · F4 `73:8364` · F5 `73:8445` · F6 `73:8546` · F7 `73:8607`.

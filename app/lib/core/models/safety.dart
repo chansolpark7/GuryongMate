@@ -282,13 +282,16 @@ class AvoidZone {
 
 /// POST /routing/route. geometry 는 GeoJSON LineString ([lng, lat]).
 class RouteResult {
-  RouteResult({required this.mode, required this.source, required this.minutes, required this.distanceM, required this.points, required this.hazards});
+  RouteResult({required this.mode, required this.source, required this.minutes, required this.distanceM, required this.points, required this.hazards, this.steps = const []});
   final String mode;
   final String source; // road | estimate
   final int minutes;
   final int distanceM;
   final List<LatLng> points;
   final RouteHazards? hazards;
+
+  /// 회전 안내 (`legs[].steps`, 요청에 steps:true 일 때). begin_index 는 geometry 의 점 위치 (15 길 안내).
+  final List<RouteStep> steps;
 
   bool get estimated => source == 'estimate';
 
@@ -299,6 +302,25 @@ class RouteResult {
         distanceM: (j['distance_m'] as num?)?.round() ?? 0,
         points: _ring((j['geometry'] as Map?)?['coordinates']),
         hazards: j['hazards'] is Map ? RouteHazards.fromJson(j['hazards'] as Map<String, dynamic>) : null,
+        steps: [
+          for (final leg in (j['legs'] as List?) ?? const [])
+            for (final st in ((leg as Map)['steps'] as List?) ?? const []) RouteStep.fromJson(Map<String, dynamic>.from(st as Map)),
+        ],
+      );
+}
+
+class RouteStep {
+  RouteStep({required this.type, required this.instruction, required this.distanceM, required this.beginIndex});
+  final String type; // start · left · right · arrive …
+  final String instruction;
+  final int distanceM;
+  final int beginIndex;
+
+  factory RouteStep.fromJson(Map<String, dynamic> j) => RouteStep(
+        type: j['type'] as String? ?? '',
+        instruction: j['instruction'] as String? ?? '',
+        distanceM: (j['distance_m'] as num?)?.round() ?? 0,
+        beginIndex: (j['begin_index'] as num?)?.toInt() ?? 0,
       );
 }
 

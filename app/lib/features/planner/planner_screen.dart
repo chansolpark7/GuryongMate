@@ -75,7 +75,10 @@ class PlannerScreen extends StatelessWidget {
 
 /// 우하단 "일정 추가" + AI FAB. 셸 Scaffold 에 두어 스낵바가 뜨면 함께 위로 비켜난다 (Spec 08).
 class PlannerFabs extends StatelessWidget {
-  const PlannerFabs({super.key});
+  const PlannerFabs({super.key, this.hasSuggestion = false});
+
+  /// 동행 중 대기 선제 제안 → FAB 빨간 점 (14-S3).
+  final bool hasSuggestion;
 
   @override
   Widget build(BuildContext context) {
@@ -83,7 +86,7 @@ class PlannerFabs extends StatelessWidget {
     return Row(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.center, children: [
       _AddButton(onTap: () => openAddPlace(context, c)),
       const SizedBox(width: 10),
-      AiFab(onTap: () => c.openAi()),
+      AiFab(onTap: () => c.openAi(), hasSuggestion: hasSuggestion),
     ]);
   }
 }
