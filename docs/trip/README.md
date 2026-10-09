@@ -1,6 +1,7 @@
 # trip — 여행 중 상태·이벤트 API 명세
 
-> 상태: **설계 (미구현)**. 2026-10-09 합의안. 구현하면서 바뀐 부분은 이 문서를 같이 고친다.
+> 상태: **설계 (trip 미구현)**. 2026-10-09 합의안. 구현하면서 바뀐 부분은 이 문서를 같이 고친다.
+> planner 쪽 기반(§6.1 진행 상태, §6.2 현재 기준 재계산, §5 planner 시계)은 구현됨 — 명세는 `docs/planner/README.md` §8.
 
 여행 당일의 **실행 상태**(지금 몇 일차를 여행 중인지, 어디에 있는지, 어떤 일정을 하고 있는지)를 관리하고,
 위치·시각·안전 정보를 바탕으로 **이벤트**를 판정해 앱과 Agent에 전달한다.
@@ -201,36 +202,48 @@ trip·agent·planner·safety 가 **같은 '지금'**을 봐야 한다. 시뮬레
 - 기준은 safety 의 시각이다 (`PUT /safety/sim` 의 `now`, `SAFETY_SOURCE=mock` 일 때). safety 가 시각의 단일 원천이다.
 - trip 은 `TRIP_CLOCK=safety` 이면 `GET /safety/sim` 의 `now`(실제 시간만큼 흘러감)를 5초 캐시해서 쓰고, 실패하면 시스템 시각. `TRIP_CLOCK=system` 이면 시스템 시각만.
 - 위치의 `recorded_at` 은 판정에 쓰는 시각이다. 재생기는 시뮬레이션 시각 기준 `recorded_at` 을 넣는다.
-- **확인 필요**: planner 는 안전 점검에서 safety 의 `now` 를 쓰지만 일부(`safety_watch._today`)는 시스템 날짜다. agent 의 날짜 표시(`prompts.py`)도 시스템 시각이다. 데모 전에 같은 시계를 쓰도록 맞춘다.
+- planner 는 같은 규칙(`PLANNER_CLOCK=safety`, `GET /safety/sim` 5초 캐시, 실패하면 시스템 시각)으로 맞췄다 (`docs/planner/README.md` §8.3).
+  진행 상태 `at`·재계산 `day`/`now` 의 기본값, 안전 점검 날짜 범위(`safety_watch._today`)가 이 시계를 쓴다.
+- **확인 필요**: agent 의 날짜 표시(`prompts.py`)는 아직 시스템 시각이다. 데모 전에 같은 시계를 쓰도록 맞춘다.
 
 ---
 
 ## 6. 다른 서비스와의 연결
 
-### 6.1 planner — 진행 상태 (**변경 필요**)
+### 6.1 planner — 진행 상태 (구현됨)
 도착·출발은 planner 항목의 `status`(`visiting`·`done`)로 반영한다. 그래야 planner 의 검증·안전 점검이 완료 항목을 뺀다.
-
-**문제**: 지금은 `PATCH /planner/plans/{id}/items/{item_id}` 로 `status` 만 바꿔도 `version` 이 오른다. 여행 중 도착할 때마다 대기 중인 Agent 제안이 모두 `base_changed`(409)가 된다.
-
-**권장 (planner 담당이 결정)**: 진행 상태 변경은 일정 변경이 아니다.
-- 새 API `POST /planner/plans/{id}/items/{item_id}/progress` `{"status": "visiting"|"done"|"planned", "at": "HH:MM"}` 는 **`version` 을 올리지 않는다.** 대신 `progress_version` 을 올린다 (앱 화면 갱신용).
-- 실제 도착·완료 시각(`arrived_at`, `done_at`)을 항목에 기록한다 (§6.2 재계산 기준).
-- 제안을 승인할 때(덮어쓰기 포함) 진행 상태는 지금 값을 유지한다.
-- `skipped` 는 일정 변경이므로 지금처럼 `version` 을 올린다.
-
-### 6.2 planner — 현재 기준 재계산 (**추가 필요**)
-지연 판정에 필요하다. 시간 모델은 planner 소유이므로 planner 가 제공한다.
+명세: `docs/planner/README.md` §8.1.
 
 ```
-POST /planner/plans/{id}/projection        (저장 안 함)
-{"day": 1, "now": "15:05",
- "position": {"item_id": 12, "state": "visiting", "arrived_at": "14:05"}     // 장소 안
-         | {"state": "moving", "lat": 35.98, "lng": 129.55}}                  // 이동 중
-→ 200 {"plan": PlanDetail, "baseline_violations": [...], "new_violations": [...], "delay_minutes": 35}
+POST /planner/plans/{id}/items/{item_id}/progress
+{"status": "visiting" | "done" | "planned", "at": "HH:MM"}     // at 생략 시 planner 의 지금 (§5)
+→ 200 PlanDetail
+```
+- **`version` 을 올리지 않는다.** 대신 `progress_version` 이 1 오른다 (앱 화면 갱신용). 여행 중 도착할 때마다 대기 중인 Agent 제안이 `base_changed`(409)가 되지 않는다.
+- 실제 도착·완료 시각을 항목의 `arrived_at`(visiting), `done_at`(done)에 기록하고 `ItemView` 에 노출한다 (§6.2 재계산 기준). `planned` 는 둘 다 지운다.
+- 제안을 승인할 때(`auto`·`overwrite` 모두) 진행 상태는 지금 값을 유지한다. 변경 요약에도 진행 상태 변화는 나오지 않는다.
+- `skipped` 는 일정 변경이므로 지금처럼 `PATCH …/items/{item_id}` 로 하고 `version` 이 오른다. 건너뛴 항목에 진행 상태를 보내면 409 `item_skipped`.
+- planner 는 한 항목만 바꾼다. 출발(`departed`) 때 `done`, 다음 장소 도착 때 `visiting` 을 보내는 것은 trip 이 정한다.
+
+### 6.2 planner — 현재 기준 재계산 (구현됨)
+지연 판정에 필요하다. 시간 모델은 planner 소유이므로 planner 가 제공한다. 명세: `docs/planner/README.md` §8.2.
+
+```
+POST /planner/plans/{id}/projection        (저장 안 함, 본문·필드 모두 선택)
+{"day": 1, "now": "15:05",                                                    // 생략 시 planner 의 오늘·지금 (§5)
+ "position": {"state": "visiting", "item_id": 12, "arrived_at": "14:05"}     // 장소 안 (arrived_at 생략 시 항목의 기록)
+         | {"state": "moving", "lat": 35.98, "lng": 129.55}}                  // 이동 중. 생략하면 저장된 진행 상태로 판단
+→ 200 {"day": 1, "now": "15:05", "plan": PlanDetail, "baseline_violations": [...], "new_violations": [...],
+       "delay_minutes": 35,                                                   // 다음 항목 시작 시각 차이 (음수 = 여유)
+       "next": {"item_id": 13, "planned_start": "15:00", "eta": "15:35", "start_at": "15:35"}}   // TripState.next 에 그대로 쓴다
 ```
 - `done` 항목은 기록된 시각 그대로, 현재 항목은 실제 도착 시각부터 (예정 체류가 이미 지났으면 `now` 에 끝난다고 본다), 이동 중이면 `now + 현재 위치 → 다음 장소 이동시간`(routing)에 도착한다고 보고 남은 항목을 다시 계산한다.
+  이동 중의 '다음 장소'는 마지막으로 다녀온·머문 항목 뒤의 첫 `planned` 항목이다.
+- 지난 항목과 지금 머무는 항목의 고정 시각 놓침은 따지지 않는다 (이미 지난 일). 지금 머무는 곳의 운영시간 종료는 따진다.
 - 사용자가 고정한 `start_time` 은 그대로 고정이다 (늦으면 `fixed_time_missed`).
-- `new_violations` = 재계산 위반 중 기준 일정(`GET /validate`)에 없던 것 (코드 + 항목 기준). trip 의 `delay` 판정은 이것만 본다.
+- `new_violations` = 재계산 위반 중 기준 일정(`GET /validate`)에 없던 것 (코드 + 날짜 + 항목 + 규칙 기준). trip 의 `delay` 판정은 이것만 본다.
+  늦어도 새 위반이 없으면 빈 목록이다 (가벼운 지연: `delay_minutes`·`next.eta` 만 갱신).
+- 오늘이 계획 기간 밖이면(`day` 생략 시) 422 `day_out_of_range`.
 
 ### 6.3 그 밖의 호출
 
@@ -321,7 +334,7 @@ sim scenario storm / sim now 2026-10-10T14:00   safety 가상 상황·시각 (PU
 
 ## 10. 구현 순서 (권장)
 
-1. **planner 변경** (§6.1 progress, §6.2 projection) — 다른 모든 판정의 기반. planner 담당.
+1. ~~**planner 변경** (§6.1 progress, §6.2 projection)~~ — 구현됨 (`docs/planner/README.md` §8).
 2. trip 골격: 여행일 시작·종료·상태, 위치 API, 시계, 테이블, compose·게이트웨이 등록 (공용 파일은 별도 커밋).
 3. 도착·출발 판정 + 해설 카드 이벤트 (장면 ②의 이벤트 부분)
 4. 지연 판정 (projection) + 백그라운드 틱

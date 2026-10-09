@@ -12,6 +12,7 @@ HHMM = Annotated[time, PlainSerializer(lambda t: t.strftime("%H:%M"), return_typ
 
 TravelMode = Literal["walk", "car"]
 ItemStatus = Literal["planned", "visiting", "done", "skipped"]
+ProgressStatus = Literal["planned", "visiting", "done"]  # 진행 상태 (일정 변경이 아님). skipped 는 일정 변경
 RuleType = Literal["must_include", "exclude", "end_before", "max_travel_minutes", "max_walk_minutes",
                    "max_daily_walk_minutes"]
 Severity = Literal["error", "warning"]
@@ -98,6 +99,13 @@ class ItemUpdate(PartialUpdate):
     memo: Memo | None = None
     status: ItemStatus | None = None
     travel_mode: TravelMode | None = Field(None, description="여기까지 오는 이동 수단. null 이면 계획 기본으로")
+
+
+class ProgressUpdate(Strict):
+    """여행 중 진행 상태. 일정 변경이 아니라 version 을 올리지 않는다 (progress_version 만 오른다)."""
+
+    status: ProgressStatus = Field(description="visiting: 도착(장소 안) / done: 다녀옴 / planned: 기록 취소")
+    at: HHMM | None = Field(None, description="실제 도착(visiting)·완료(done) 시각. 생략하면 planner 의 지금 시각")
 
 
 class _PlaceRule(Strict):
@@ -239,6 +247,8 @@ class ItemView(BaseModel):
     arrive_at: str | None = Field(description="계산된 도착 시각 HH:MM (건너뜀은 null)")
     start_at: str | None
     end_at: str | None
+    arrived_at: HHMM | None = Field(None, description="실제 도착 시각 (진행 상태 API 가 기록. 없으면 null)")
+    done_at: HHMM | None = Field(None, description="실제 완료 시각 (진행 상태 API 가 기록. 없으면 null)")
 
 
 class DayView(BaseModel):
@@ -273,6 +283,7 @@ class PlanSummary(BaseModel):
     travel_mode: TravelMode
     memo: str
     version: int = Field(description="일정이 바뀔 때마다 1 오른다")
+    progress_version: int = Field(0, description="진행 상태(도착·완료)가 바뀔 때마다 1 오른다 (일정 변경 아님)")
     item_count: int = 0
     created_at: datetime
     updated_at: datetime
@@ -296,6 +307,48 @@ class Change(BaseModel):
     message: str
     item_id: int | None = None
     day: int | None = None
+
+
+# ---------- 현재 기준 재계산 (여행 중) ----------
+
+class PositionVisiting(Strict):
+    state: Literal["visiting"]
+    item_id: int = Field(description="지금 머무는 항목 (그날, 건너뜀이 아닌 항목)")
+    arrived_at: HHMM | None = Field(None, description="실제 도착 시각. 생략하면 항목에 기록된 arrived_at, 없으면 now")
+
+
+class PositionMoving(Strict):
+    state: Literal["moving"]
+    lat: float = Field(ge=-90, le=90)
+    lng: float = Field(ge=-180, le=180)
+
+
+Position = Annotated[PositionVisiting | PositionMoving, Field(discriminator="state")]
+
+
+class ProjectionRequest(Strict):
+    day: Day | None = Field(None, description="n일차. 생략하면 planner 의 오늘 (계획 기간 밖이면 422 day_out_of_range)")
+    now: HHMM | None = Field(None, description="지금 시각. 생략하면 planner 의 지금 시각 (safety 가상 시각을 따름)")
+    position: Position | None = Field(
+        None, description="생략하면 저장된 진행 상태로 판단 (visiting 항목이 있으면 거기 있다고 본다)")
+
+
+class ProjectionNext(BaseModel):
+    item_id: int
+    planned_start: str | None = Field(description="기준 일정의 시작 시각")
+    eta: str | None = Field(description="재계산한 도착 시각")
+    start_at: str | None = Field(description="재계산한 시작 시각")
+
+
+class ProjectionResult(BaseModel):
+    day: int
+    now: str
+    plan: PlanDetail = Field(description="현재 기준으로 다시 계산한 계획 (저장 안 함). violations 는 재계산 위반")
+    baseline_violations: list[Violation] = Field(description="기준 일정(GET /validate)의 위반")
+    new_violations: list[Violation] = Field(description="재계산 위반 중 기준 일정에 없던 것 (코드 + 날짜 + 항목 + 규칙 기준)")
+    delay_minutes: int | None = Field(
+        description="다음 항목의 시작 시각 차이 (재계산 - 기준, 음수 = 여유). 다음 항목이 없으면 그날 종료 시각 차이")
+    next: ProjectionNext | None = Field(description="다음에 갈 항목 (없으면 null)")
 
 
 class PreviewResult(BaseModel):

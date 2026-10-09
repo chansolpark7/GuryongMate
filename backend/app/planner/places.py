@@ -22,6 +22,10 @@ class PlannerSettings(BaseSettings):
     safety_watch_sec: float = 0  # 상황 확인 주기(초). 0 이면 주기 점검을 하지 않는다 (compose 의 planner 서비스만 켠다)
     safety_recheck_min: float = 10  # 상황이 그대로여도 이 주기마다 다시 점검 (일정 수정, 방문 3시간 전 실측 적용 대비)
 
+    # 지금 시각 (docs/trip/README.md §5). safety: safety 의 가상 시각을 따른다 (실패하면 시스템 시각) / system: 시스템 시각
+    clock: str = "safety"
+    clock_cache_sec: float = 5
+
 
 settings = PlannerSettings()
 
