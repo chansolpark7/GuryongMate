@@ -235,9 +235,10 @@ def apply_ops(plan_id: int, body: OpsRequest, db: DbSession, user_id: UserId, pl
 
 
 @router.post("/plans/{plan_id}/preview", response_model=PreviewResult)
-def preview_ops(plan_id: int, body: OpsRequest, db: DbSession, user_id: UserId, places: Places) -> PreviewResult:
-    """ops 를 적용하면 어떻게 되는지 계산만 한다 (저장 안 함)."""
-    _, after, changes = engine.preview(_get_plan(db, user_id, plan_id), body.ops, places)
+def preview_ops(plan_id: int, body: OpsRequest, db: DbSession, user_id: UserId, places: Places,
+                clock: Now) -> PreviewResult:
+    """ops 를 적용하면 어떻게 되는지 계산만 한다 (저장 안 함). 여행 중인 날은 실제 진행 + 지금 기준 (§8.4)."""
+    _, after, changes = engine.preview(_get_plan(db, user_id, plan_id), body.ops, places, now=clock.now())
     return PreviewResult(plan=after, changes=changes)
 
 
@@ -252,14 +253,17 @@ def _get_proposal(db: Session, plan: PlannerPlan, proposal_id: int) -> PlannerPr
 
 def _proposal_detail(prop: PlannerProposal, plan: PlannerPlan) -> ProposalDetail:
     summary = ProposalSummary.model_validate(prop)
+    before, after = PlanDetail.model_validate(prop.before), PlanDetail.model_validate(prop.after)
     return ProposalDetail(
         **{k: getattr(summary, k) for k in ProposalSummary.model_fields},
         request=prop.request,
         ops=_ops_adapter.validate_python(prop.ops),  # 저장된(보낸 필드만) 그대로 -> 직렬화도 보낸 필드만
-        before=PlanDetail.model_validate(prop.before),
-        after=PlanDetail.model_validate(prop.after),
+        before=before,
+        after=after,
         current_version=plan.version,
         base_changed=plan.version != prop.base_version,
+        progress_changed=[x["item_id"] for x in engine.progress_changed(before, after, plan)]
+        if prop.status == "pending" else [],
     )
 
 
@@ -277,12 +281,12 @@ def _decide(prop: PlannerProposal, status: str, decision: str | None = None) -> 
 
 @router.post("/plans/{plan_id}/proposals", response_model=ProposalDetail, status_code=201)
 def create_proposal(plan_id: int, body: ProposalCreate, db: DbSession, user_id: UserId,
-                    places: Places) -> ProposalDetail:
+                    places: Places, clock: Now) -> ProposalDetail:
     plan = _get_plan(db, user_id, plan_id, lock=True)
     if body.expected_version is not None and body.expected_version != plan.version:
         raise PlannerError(409, "version_conflict", "그사이 일정이 바뀌었습니다.",
                            expected_version=body.expected_version, current_version=plan.version)
-    before, after, changes = engine.preview(plan, body.ops, places)
+    before, after, changes = engine.preview(plan, body.ops, places, now=clock.now())  # 여행 중이면 실제 진행 기준 (§8.4)
     if body.supersedes is not None:
         old = _get_proposal(db, plan, body.supersedes)
         if old.status != "pending":
@@ -318,13 +322,19 @@ def get_proposal(plan_id: int, proposal_id: int, db: DbSession, user_id: UserId)
 
 
 @router.post("/plans/{plan_id}/proposals/{proposal_id}/accept", response_model=AcceptResult)
-def accept_proposal(plan_id: int, proposal_id: int, db: DbSession, user_id: UserId, places: Places,
+def accept_proposal(plan_id: int, proposal_id: int, db: DbSession, user_id: UserId, places: Places, clock: Now,
                     body: Annotated[AcceptRequest | None, Body()] = None) -> AcceptResult:
     mode = (body or AcceptRequest()).mode
     plan = _get_plan(db, user_id, plan_id, lock=True)
     prop = _get_proposal(db, plan, proposal_id)
     _require_pending(prop)
     after = PlanDetail.model_validate(prop.after)
+    # 진행 상태는 version 을 올리지 않는다. 제안 이후 다녀온 곳을 제안이 바꾸면 어느 모드로도 반영하지 않는다 (§5.4)
+    gone = engine.progress_changed(PlanDetail.model_validate(prop.before), after, plan)
+    if gone:
+        names = ", ".join(f"'{x['title']}'" for x in gone)
+        raise PlannerError(409, "progress_changed", f"제안 이후 {names} 을(를) 다녀와서 이 제안을 그대로 반영할 수 없습니다. "
+                           "현재 상황에 맞춰 다시 제안받으세요.", items=gone)
 
     if plan.version == prop.base_version and mode == "auto":
         try:
@@ -334,7 +344,7 @@ def accept_proposal(plan_id: int, proposal_id: int, db: DbSession, user_id: User
             raise
         decision = "applied"
     elif mode == "auto":
-        current = engine.detail(plan, places)
+        current = engine.detail(plan, places, engine.live_actual(plan, places, clock.now()))  # before 와 같은 기준
         raise PlannerError(
             409, "base_changed", "이 제안 이후 일정이 바뀌었습니다. 카드의 일정 그대로 반영하거나 다시 제안받으세요.",
             base_version=prop.base_version, current_version=plan.version,
@@ -467,9 +477,10 @@ def check_safety(plan_id: int, db: DbSession, user_id: UserId, places: Places, c
 
 @router.post("/plans/{plan_id}/safety/preview", response_model=SafetyCheck)
 def preview_safety(plan_id: int, body: OpsRequest, db: DbSession, user_id: UserId, places: Places,
-                   client: Safety, routes: Routes) -> SafetyCheck:
-    """ops 를 적용했다고 치고 안전 점검 (저장 안 함). 변경안을 만들 때 쓴다. 새 항목 item_id 는 음수 임시값."""
-    after = engine.simulate(_get_plan(db, user_id, plan_id), body.ops, places, with_index=True)
+                   client: Safety, routes: Routes, clock: Now) -> SafetyCheck:
+    """ops 를 적용했다고 치고 안전 점검 (저장 안 함). 변경안을 만들 때 쓴다. 새 항목 item_id 는 음수 임시값.
+    여행 중인 날은 preview 와 같이 실제 진행 + 지금 기준 시각으로 본다."""
+    after = engine.simulate(_get_plan(db, user_id, plan_id), body.ops, places, with_index=True, now=clock.now())
     db.rollback()
     return _safety_check(after, client, routes)
 

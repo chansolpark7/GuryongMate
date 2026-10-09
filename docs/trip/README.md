@@ -133,9 +133,9 @@
 |---|---|---|---|---|
 | `arrived` | 오늘 남은 항목 장소 반경(`TRIP_ARRIVE_RADIUS_M` 60 + accuracy, 최대 150m) 안에 `TRIP_ARRIVE_DWELL_SEC`(90초) 이상 머묾. 예정 순서가 아닌 항목이어도 오늘 남은 항목이면 도착으로 본다 (`out_of_order: true`) | 0 + 2 | 항목을 `visiting` 으로. **해설 카드**: "일본인가옥거리예요. 이야기 들어볼까요? [짧게] [자세히]" → 누르면 해설 (`docs/docent/README.md`) | ② |
 | `departed` | `visiting` 장소 반경 밖이 `TRIP_DEPART_DWELL_SEC`(120초) 이상 이어짐 | 0 + 1 | 항목을 `done` 으로. "다음은 과메기문화관, 도보 8분" | |
-| `delay` | 현재 위치·시각 기준으로 남은 일정을 다시 계산(§6.2)했을 때 **기준 일정에 없던 위반이 새로 생김**: `fixed_time_missed`, `day_overflow`, `outside_open_hours`, `closed_day`, hard 규칙 위반 | 3 | Agent 선제 턴: 영향 설명 + 대안 → 제안 → 승인 | ③ |
+| `delay` | 현재 위치·시각 기준으로 남은 일정을 다시 계산(§6.2)했을 때 **기준 일정에 없던 위반이 새로 생김**: `fixed_time_missed`, `day_overflow`, `outside_open_hours`, `closed_day`, hard 규칙 위반 | 3 | Agent 선제 턴: 근거·영향 설명 + 추천안 1개(제안 카드) + "다른 방법" 한 줄 → 승인 (대화로 조건을 붙이면 다시 제안) | ③ |
 | (가벼운 지연) | 늦어졌지만 새 위반 없음 | 0 | `delay_minutes`·`eta` 만 갱신. 알리지 않음 | |
-| `safety_raised` | planner 안전 경고 중 `needs_action=true`, 오늘 남은 항목에 해당 (`GET /planner/plans/{id}/safety/alerts?status=new`) | 3 | Agent 선제 턴: 위험 근거 + 대안(시간 이동·실내 대체) → 제안 | ④ |
+| `safety_raised` | planner 안전 경고 중 `needs_action=true`, 오늘 남은 항목에 해당 (`GET /planner/plans/{id}/safety/alerts?status=new`) | 3 | Agent 선제 턴: 위험 근거 + 추천 대체안 1개(시간 이동·실내 대체, 제안 카드) + "다른 방법" 한 줄 → 승인 | ④ |
 | `safety_eased` | planner 경고의 `lowered`/`cleared` | 1 | "방파제 풍랑 주의가 해제됐어요" | |
 | `near_hazard` | **지금 위치**가 safety `/safety/avoid` 구역 안이거나 `TRIP_HAZARD_NEAR_M`(50m) 안 | 1 | **LLM 없이 즉시** 고정 경고: "침수 감시 구역(구룡포수협 주변) 근처예요. 물이 고인 길은 피하세요." | ④ 보조 |
 | `day_started` / `day_ended` | 시작·종료 | 0 | 기록만 | |
@@ -208,6 +208,7 @@ POST /agent/sessions/{session_id}/events          (내부 호출, 앱은 부르�
 ```
 - Agent 는 사용자 메시지 대신 숨김 메시지 `[이벤트] …`(이벤트 요약 + 근거)로 턴을 시작한다. 대화 기록에는 assistant 답변과 카드만 보인다.
 - 시스템 프롬프트에 동행 모드 섹션과 "현재 상황" 블록(§4.4)을 넣는다.
+- 보내는 `TripState.now` 는 이벤트의 판정 시각(`event.now`)보다 이르지 않다 (가상 시각을 크게 옮긴 직후 trip 시계 캐시가 늦어도 Agent 가 이벤트보다 앞선 '지금'을 보지 않게).
 - 결과(답변 message id, 만든 proposal id)를 trip 이 이벤트의 `agent` 필드에 기록한다. 앱은 이벤트를 보고 대화 화면에 새 메시지를 띄운다 (또는 세션을 다시 조회).
   trip 은 `ChatResult` 의 `message_id`(agent 가 응답에 넣어 주어야 한다, 없으면 null)와 `cards` 의 첫 `proposal` 카드 id(`id` 또는 `proposal.id`)를 읽는다.
 - 본문의 `event` 는 §3.3 Event, `trip` 은 §1.3 TripState 그대로다 (보낼 때 `event.status` 는 `queued`, `agent` 는 null).
@@ -252,6 +253,8 @@ trip·agent·planner·safety 가 **같은 '지금'**을 봐야 한다. 시뮬레
 - trip 의 `TripState.clock` 은 safety 가상 시각을 쓰는 중이면 `sim`, 아니면 `system`.
 - 가상 시각을 크게 옮긴 직후 몇 초(캐시)는 trip·planner 가 이전 시각을 본다. 재생기는 시작 전에 trip 의 지금이 맞춰질 때까지 기다리고,
   틱에는 재생 시각(`now`)을 넘긴다. 위치는 `recorded_at` 으로 판정하므로 캐시와 상관없다.
+  `--speed 0` 이면 틱 전과 재생이 끝난 뒤에도 trip 의 지금이 재생 시각을 따라올 때까지 기다린다 (틱이 보내는 선제 턴과 이어서 하는 `trip tick` 이 맞는 시각을 보게).
+  다만 위치 응답 뒤 백그라운드로 바로 보내는 선제 턴·백그라운드 틱은 몇 초 동안 이전 시각을 볼 수 있다 (선제 턴의 `TripState.now` 는 §4.2 처럼 이벤트 시각으로 맞춘다).
 
 ---
 
@@ -267,6 +270,7 @@ POST /planner/plans/{id}/items/{item_id}/progress
 → 200 PlanDetail
 ```
 - **`version` 을 올리지 않는다.** 대신 `progress_version` 이 1 오른다 (앱 화면 갱신용). 여행 중 도착할 때마다 대기 중인 Agent 제안이 `base_changed`(409)가 되지 않는다.
+  대신 제안을 만든 뒤 그 제안이 바꾸는 곳을 떠나면(`done`) 승인은 409 `progress_changed` 이고 앱은 다시 제안(`repropose`)으로 잇는다 (planner §5.4).
 - 실제 도착·완료 시각을 항목의 `arrived_at`(visiting), `done_at`(done)에 기록하고 `ItemView` 에 노출한다 (§6.2 재계산 기준). `planned` 는 둘 다 지운다.
 - 제안을 승인할 때(`auto`·`overwrite` 모두) 진행 상태는 지금 값을 유지한다. 변경 요약에도 진행 상태 변화는 나오지 않는다.
 - `skipped` 는 일정 변경이므로 지금처럼 `PATCH …/items/{item_id}` 로 하고 `version` 이 오른다. 건너뛴 항목에 진행 상태를 보내면 409 `item_skipped`.
@@ -360,7 +364,7 @@ python scripts/planner/cli.py trip replay new scene4_safety --speed 60   # 장�
    {"expect": {"type": "delay", "not": true}}]}               // "not": 없어야 함
 ```
 - 한 단계 안에서는 at → sim → goto → walk_to → stay → tick → expect 순서다.
-- `--speed` 는 시뮬레이션 시각이 흐르는 배속이다 (0 이면 기다리지 않음). 위치를 보낼 때마다 safety sim 의 `now` 를 재생 시각으로 옮기고,
+- `--speed` 는 시뮬레이션 시각이 흐르는 배속이다 (0 이면 기다리지 않음). 배속과 상관없이 동작(위치·틱·기대 확인)마다 safety sim 의 `now` 를 재생 시각으로 옮기고,
   `sim` 단계 뒤에는 planner 안전 점검(`POST /planner/safety/scan`, 개발 모드)과 trip 틱(`now` = 재생 시각)을 바로 부른다.
 - pytest(`backend/tests/trip/test_scenes.py`)는 같은 파일을 서버 없이 재생한다: 이벤트 판정 함수는 **순수 함수**(`judge.py`, 입력: 오늘 일정·마지막 상태·위치·now → 출력: 새 상태·감지)와
   Event Policy(`policy.py`)로 두고, planner·safety·agent 는 가짜 클라이언트(`tests/trip/fakes.py`)로 바꾼다. 가짜 planner 는 planner 시간 모델을 단순하게 흉내 낸다 (도보 = 직선 × 1.3 / 70m).
@@ -368,6 +372,10 @@ python scripts/planner/cli.py trip replay new scene4_safety --speed 60   # 장�
 - 실제 서비스로 확인한 결과 (2026-10-09, `SAFETY_SOURCE=mock`, `--speed 0`): 장면 ③ 기대 4개, 장면 ④ 기대 3개 모두 통과.
   장면 ③ 에서 실제 planner 는 15:37 에 역사관 운영시간(`outside_open_hours`), 16:07 에 하루 초과(`day_overflow`, 더 나빠짐)로 delay 를 두 번 냈고,
   agent 선제 턴 API 가 아직 없어 앞의 것은 `suppressed`, 뒤의 것은 `queued` 로 남아 틱마다 다시 시도했다.
+- 선제 턴까지 확인 (2026-10-09, `--speed 0`, gpt-5.4-mini): 장면 ③ 은 delay 선제 턴이 근거 + 추천안 1개(역사관 빼기) + "다른 방법" 한 줄로 답했고,
+  카드의 전후 비교는 실제 진행 기준(종료 18:07 → 17:20)이었다. "과메기문화관은 꼭 가고 싶어" 에는 `must_include` 규칙을 넣은 새 제안이 이전 제안을 대체했다.
+  재생 도중에 만든 제안이 바꾸는 곳(과메기문화관)을 떠난 뒤 승인하면 409 `progress_changed` 였고, `repropose` 로 다시 제안됐다.
+  장면 ④ 는 safety_raised 선제 턴이 위험 근거 + 추천 대체안 1개 + "다른 방법" 한 줄로 답했다.
 
 ### 꼭 있어야 할 테스트
 - 반경 경계에서 위치가 튀어도(한 점만 안/밖) 도착·출발이 생기지 않는다.

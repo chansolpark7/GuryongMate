@@ -134,6 +134,11 @@ def plan_of(client, pid):
     return ok(client.get(f"/planner/plans/{pid}", headers=H))
 
 
+def sent(messages: list[dict]) -> list[dict]:
+    """LLM 에 보낸 메시지에서 하네스가 매 호출 덧붙이는 '확정 변경' 안내를 뺀 것."""
+    return [m for m in messages if not (m["role"] == "user" and m["content"].startswith("[시스템] 지금 변경 제안 초안"))]
+
+
 def places_in(plan, day=1):
     return [i["place_id"] for i in plan["days"][day - 1]["items"]]
 
@@ -180,7 +185,7 @@ def test_stream_events_steps_and_proposal(client, session):
     assert done["text"] == text and done["cards"] == [{"type": "proposal", "id": prop["id"]}]
     assert done["usage"]["calls"] == 3  # 가짜 LLM 은 토큰 수를 주지 않아 호출 수만 센다
     assert places_in(plan_of(client, pid)) == ["p-house"]  # 아직 반영 안 됨
-    assert llm.calls[2][-1]["role"] == "tool" and "plan_after" in llm.calls[2][-1]["content"]  # add_item 결과
+    assert sent(llm.calls[2])[-1]["role"] == "tool" and "plan_after" in sent(llm.calls[2])[-1]["content"]  # add_item 결과
 
 
 def test_tool_error_marks_step_error_and_turn_continues(client, session):
@@ -407,7 +412,7 @@ def test_session_detail_cards_reflect_current_state(client, session):
 def test_history_keeps_short_tool_results(client, session):
     sid, _ = session
     chat(client, sid, "a", [[("add_item", {"place_id": "p-food", "start_time": "12:00"})], ["추가"]])
-    assert "start_time" in llm.calls[-1][-1]["content"]  # 무시한 인자를 LLM 에 알려줌
+    assert "start_time" in sent(llm.calls[-1])[-1]["content"]  # 무시한 인자를 LLM 에 알려줌
     with SessionLocal() as db:
         tool_rows = db.scalars(select(AgentMessage).where(AgentMessage.session_id == sid,
                                                           AgentMessage.role == "tool")).all()
@@ -556,10 +561,10 @@ def test_empty_reply_is_nudged_once(client, session):
     sid, pid = session
     events = chat(client, sid, "일정 짜줘", [[""], [("add_item", {"place_id": "p-food"})], ["추가했어요"]])
     assert "[시스템] 방금 응답이 비어" in llm.calls[1][-1]["content"]     # 되묻기
-    assert "[시스템]" not in llm.calls[2][-1]["content"]                  # 일회성
+    assert "[시스템]" not in sent(llm.calls[2])[-1]["content"]                  # 일회성
     assert last(events, "proposal")["status"] == "pending"
     with SessionLocal() as db:  # 되묻기 안내와 빈 응답은 기록에 남지 않는다
-        rows = db.scalars(select(AgentMessage).where(AgentMessage.session_id == sid)).all()
+        rows = db.scalars(select(AgentMessage).where(AgentMessage.session_id == sid).order_by(AgentMessage.id)).all()
     assert not any("[시스템]" in m.content for m in rows)
     assert [m.role for m in rows] == ["user", "assistant", "tool", "assistant"]
 
@@ -568,11 +573,11 @@ def test_tool_results_help_model_follow_up(client, session):
     """추천 결과에 place_id 를 남기고, 같은 날 이미 있는 장소를 추가하면 중복이라고 알려준다."""
     sid, _ = session
     chat(client, sid, "추천", [[("recommend_places", {"title": "t", "candidates": [{"place_id": "p-cafe"}]})], ["골라요"]])
-    assert '"place_id": "p-cafe"' in llm.calls[-1][-1]["content"]
+    assert '"place_id": "p-cafe"' in sent(llm.calls[-1])[-1]["content"]
     chat(client, sid, "가옥거리 또 넣어줘", [[("add_item", {"place_id": "p-house"})], ["넣었어요"]])
-    assert "중복" in llm.calls[-1][-1]["content"]
+    assert "중복" in sent(llm.calls[-1])[-1]["content"]
     chat(client, sid, "카페 넣어줘", [[("add_item", {"place_id": "p-cafe"})], ["넣었어요"]])
-    assert "중복" not in llm.calls[-1][-1]["content"]
+    assert "중복" not in sent(llm.calls[-1])[-1]["content"]
 
 
 # ---------- 검토 관문 ----------

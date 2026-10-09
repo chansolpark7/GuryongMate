@@ -61,6 +61,7 @@
 | 409 | `proposal_not_pending` | 이미 승인·거절·대체된 제안을 승인·거절 | `status` |
 | 409 | `supersede_conflict` | `supersedes`로 지정한 제안이 대기 상태가 아님 | `status` |
 | 409 | `base_changed` | 제안을 기본 모드로 승인하려는데 제안 이후 일정이 바뀜 (§5.4) | `base_version`, `current_version`, `since_proposal`, `overwrite_effect` |
+| 409 | `progress_changed` | 제안 이후 다녀온(`done`) 항목을 제안이 바꾸거나 지움 — 어느 모드로도 반영하지 않음 (§5.4) | `items: [{item_id, title, done_at}]` |
 | 409 | `already_in_plan` | 추천 후보 [추가]인데 이미 그날 일정에 있음 | `item_id` |
 | 409 | `not_in_plan` | 추천 후보 [빼기]인데 그날 일정에 없음 | |
 | 409 | `item_skipped` | 건너뛴(`skipped`) 항목의 진행 상태를 바꾸려 함 (다시 넣으려면 `PATCH`) | |
@@ -94,6 +95,7 @@
 - 조회, `preview`, 제안 생성·거절, 추천 생성, **진행 상태 기록(§8.1)**, 재계산(§8.2)은 `version`을 바꾸지 않는다.
 - `progress_version`: 계획을 만들면 `0`이다. 진행 상태 API(§8.1)가 성공할 때마다 1 오른다 (앱 화면 갱신용). 제안의 기준 비교에는 쓰지 않는다.
   그래서 여행 중 도착·완료를 기록해도 대기 중인 제안은 `base_changed`가 되지 않는다.
+  대신 제안이 그사이 다녀온(`done`) 항목을 바꾸거나 지우면 승인할 때 409 `progress_changed`다 (§5.4).
 - 일정을 바꾸는 요청은 계획 행을 잠그고 처리한다. 동시에 들어온 요청은 차례로 처리되므로 같은 `version` 위에 두 변경이 겹치지 않는다(예: 같은 기준의 제안 둘을 동시에 승인하면 하나만 반영되고 나머지는 409 `base_changed`).
 - 제안은 만들 때의 `version`(`base_version`)을 기억한다. 둘이 같으면 "제안 이후 일정이 안 바뀜"이다.
 
@@ -202,7 +204,7 @@ params에 정의되지 않은 키가 있으면 422 `invalid_request`다.
 | POST | `/planner/plans/{plan_id}/constraints` | `ConstraintCreate` | 201 `PlanDetail` | 404, 422, 503 |
 | DELETE | `/planner/plans/{plan_id}/constraints/{constraint_id}` | | 200 `PlanDetail` | 404 `constraint_not_found` |
 | POST | `/planner/plans/{plan_id}/ops` | `{"ops": PlanOp[1..100]}` | 200 `PlanDetail` | 404, 409, 422, 503 (+`op_index`) |
-| POST | `/planner/plans/{plan_id}/preview` | `{"ops": PlanOp[1..100]}` | 200 `{"plan": PlanDetail, "changes": Change[]}` (저장 안 함) | 위와 같음 |
+| POST | `/planner/plans/{plan_id}/preview` | `{"ops": PlanOp[1..100]}` | 200 `{"plan": PlanDetail, "changes": Change[]}` (저장 안 함. 여행 중인 날은 실제 진행 기준, §8.4) | 위와 같음 |
 
 ```jsonc
 // ItemCreate
@@ -256,6 +258,8 @@ pending ──accept──▶ accepted (decision: applied | overwritten)
 - `after`: 승인하면 될 일정(`PlanDetail`, 새 항목 id는 음수)
 - `changes`: `before` → `after` 변경 요약(`Change[]`). 카드에는 이 델타를 보여주고, [자세히 보기]에서 `before`/`after` 전체를 보여준다.
 - `base_version`: 제안 당시 계획의 `version`
+- 여행 중인 날(planner 의 오늘에 진행 기록 `visiting`·`done` 이 있음)은 `before`/`after`·`changes`(특히 `day_end`)를
+  **실제 진행 + planner 의 지금** 기준으로 계산한다 (§8.4). 카드의 "1일차 종료: A → B" 가 지금 예상과 맞는다.
 
 ### 5.3 API
 
@@ -264,7 +268,7 @@ pending ──accept──▶ accepted (decision: applied | overwritten)
 | POST | `/planner/plans/{plan_id}/proposals` | `ProposalCreate` | 201 `ProposalDetail` | 404 (`supersedes`가 없는 제안이면 `proposal_not_found`), 409 `version_conflict`·`supersede_conflict`, 422, 503 (+`op_index`) |
 | GET | `/planner/plans/{plan_id}/proposals?status=` | | 200 `ProposalSummary[]` (최신순) | 404, 422 (모르는 status) |
 | GET | `/planner/plans/{plan_id}/proposals/{proposal_id}` | | 200 `ProposalDetail` | 404 `proposal_not_found` |
-| POST | `/planner/plans/{plan_id}/proposals/{proposal_id}/accept` | `{"mode": "auto" \| "overwrite"}` (본문 생략 = auto) | 200 `{"proposal": ProposalDetail, "plan": PlanDetail}` | 404, 409 `proposal_not_pending`·`base_changed`, 422 |
+| POST | `/planner/plans/{plan_id}/proposals/{proposal_id}/accept` | `{"mode": "auto" \| "overwrite"}` (본문 생략 = auto) | 200 `{"proposal": ProposalDetail, "plan": PlanDetail}` | 404, 409 `proposal_not_pending`·`progress_changed`·`base_changed`, 422 |
 | POST | `/planner/plans/{plan_id}/proposals/{proposal_id}/reject` | | 200 `ProposalDetail` | 404, 409 `proposal_not_pending` |
 
 ```jsonc
@@ -282,7 +286,8 @@ pending ──accept──▶ accepted (decision: applied | overwritten)
 // ProposalDetail = ProposalSummary + 아래
 {"request": "...", "ops": [PlanOp, ...], "before": PlanDetail, "after": PlanDetail,
  "current_version": 9,            // 지금 계획의 version
- "base_changed": true}            // current_version != base_version
+ "base_changed": true,            // current_version != base_version
+ "progress_changed": [12]}        // 제안 이후 다녀온(done) 항목 중 이 제안이 바꾸거나 지우는 것 (대기 중일 때만). 있으면 승인은 409
 ```
 
 ### 5.4 승인 규칙
@@ -309,6 +314,14 @@ pending ──accept──▶ accepted (decision: applied | overwritten)
 - 같은 이유로 변경 요약(`changes`, `since_proposal`, `overwrite_effect`)에 planned/visiting/done 사이의 상태 변화는 나오지 않는다.
 
 `auto` 승인은 제안의 `ops`를 지금 일정에 다시 적용하므로 진행 상태는 (ops가 직접 바꾸지 않는 한) 그대로다.
+
+**진행 상태가 바뀐 옛 제안 (409 `progress_changed`)**: 진행 상태는 `version`을 올리지 않으므로(§2.2) `base_changed`로는 잡히지 않는다.
+그래서 승인할 때(`auto`·`overwrite` 모두, `base_changed`보다 먼저) 제안 당시(`before`) `done`이 아니었다가 지금 `done`인 항목을
+제안이 바꾸거나(변경·이동) 지우면 반영하지 않고 409 `progress_changed`로 거절한다. 제안은 `pending` 그대로 남는다.
+- 예: 짬홍에 머무는 동안 만든 "짬홍 체류 60→35분" 제안을 짬홍을 떠난(`done`) 뒤 승인 → 409, `items: [{"item_id", "title": "짬홍", "done_at": "13:50"}]`
+- 앱: "그사이 다녀온 곳이 있어 이 제안을 그대로 반영할 수 없어요" + **[현재 상황에 맞춰 다시 제안]** → Agent `repropose`.
+  덮어쓰기 버튼은 없다. 승인 전에 `ProposalDetail.progress_changed`가 비어 있지 않으면 카드에 미리 표시할 수 있다.
+- 다녀온 곳을 건드리지 않는 제안(남은 곳의 체류·순서 등)은 그대로 승인된다.
 
 ---
 
@@ -519,6 +532,7 @@ trip 서비스(`docs/trip/README.md`)가 위치로 도착·출발·지연을 판
 | POST | `/planner/plans/{plan_id}/items/{item_id}/progress` | `{"status": "visiting"\|"done"\|"planned", "at"?: "HH:MM"}` | 200 `PlanDetail` | 404 `plan_not_found`·`item_not_found`, 409 `item_skipped`, 422 `invalid_request`·`invalid_range` |
 
 - **`version`을 올리지 않고 `progress_version`을 1 올린다.** 도착할 때마다 대기 중인 제안이 `base_changed`가 되지 않게 하기 위해서다.
+  그 대신 제안 이후 `done`이 된 항목을 바꾸는 제안은 승인 때 409 `progress_changed`로 막는다 (§5.4).
 - `visiting`: `arrived_at = at`, `done_at`은 지운다. `done`: `done_at = at` (`arrived_at`은 그대로, 없으면 null). `planned`: 둘 다 지운다 (`at` 무시).
 - `at`을 생략하면 planner의 지금 시각(§8.3)을 분 단위로 쓴다. `done`의 `at`이 `arrived_at`보다 이르면 422 `invalid_range`.
 - 건너뜀(`skipped`)은 일정 변경이다. `PATCH …/items/{item_id}` `{"status": "skipped"}`로 하고 `version`이 오른다.
@@ -575,8 +589,26 @@ planner의 '지금'은 safety의 시각을 따른다 (`docs/trip/README.md` §5)
 - `PLANNER_CLOCK=safety`(기본): `GET /safety/sim`의 `now`와 시스템 시각의 차이를 `PLANNER_CLOCK_CACHE_SEC`(기본 5초) 동안 기억해 쓴다.
   safety가 가상 상황이 아니면(`404 sim_disabled`) 시스템 시각, 접근할 수 없으면 20초 동안 시스템 시각.
 - `PLANNER_CLOCK=system`: 시스템 시각만.
-- 쓰는 곳: 진행 상태 `at`·재계산 `day`/`now`의 기본값, 안전 점검의 경로선 날짜 범위(`safety_watch._today`), 점검할 방문이 없을 때의 `checked_at`.
+- 쓰는 곳: 진행 상태 `at`·재계산 `day`/`now`의 기본값, 안전 점검의 경로선 날짜 범위(`safety_watch._today`), 점검할 방문이 없을 때의 `checked_at`,
+  여행 중 미리보기·제안의 기준 시각(§8.4).
   주기 점검(§7.4)은 원래 safety 상황의 `now`를 쓴다. 기록용 시각(`updated_at`, `decided_at`, `created_at`)은 실제 시각 그대로다.
+
+### 8.4 여행 중 미리보기·제안의 기준
+여행 중에는 계획 기준 시각(`GET /plans/{id}`)이 현실과 다르다 (늦게 도착·오래 머묾). 변경안을 볼 때는 현실 기준이어야 하므로
+아래 API 는 **planner 의 오늘(§8.3)에 진행 기록(`visiting`·`done`)이 있으면** 그날을 projection(§8.2)과 같은 계산으로 다시 낸다
+(`ops.live_actual`: 위치는 저장된 진행 상태, 시각은 planner 의 지금). 다른 날·여행 전·진행 기록 없는 날은 계획 기준 그대로다.
+
+| API | 실제 진행 기준으로 계산하는 것 |
+|---|---|
+| `POST /preview` | `plan`(적용 후)과 `changes`(적용 전도 같은 기준으로 비교 — `day_end` 가 지금 예상 종료 기준) |
+| `POST /proposals` | 스냅샷 `before`/`after` 와 `changes` (§5.2) |
+| `POST /safety/preview` | 점검할 방문·이동 시각 |
+| accept 의 409 `base_changed` | `since_proposal`·`overwrite_effect` 의 현재 일정 (`before` 와 같은 기준) |
+
+- 지난 항목은 기록 시각, 머무는 항목은 실제 도착부터 (예정 체류가 지났으면 지금 끝남), 머무는 곳이 없으면 남은 첫 항목이 지금 출발이다.
+  지난 항목의 시각 위반은 따지지 않으므로 Agent(LLM)가 보는 위반·시각도 현실과 맞는다.
+- 예 (장면 ③): 계획 기준이면 "1일차 종료: 17:14 → 16:44" 였던 카드가 실제 예상 종료(18:04) 기준 "18:04 → 17:34" 로 나온다.
+- 이동 중(마지막 위치)은 저장하지 않으므로 반영하지 않는다. 정확한 이동 중 예상 도착은 trip 의 `TripState.next`(projection) 를 쓴다.
 
 ## 9. 구조
 

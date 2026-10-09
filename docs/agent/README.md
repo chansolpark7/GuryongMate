@@ -131,7 +131,7 @@ LLM은 일정을 직접 바꾸지 않는다. 결과는 두 종류의 **카드**�
 
 | 메서드 | 경로 | 본문 | 성공 | 대표 오류 |
 |---|---|---|---|---|
-| POST | `/agent/sessions/{sid}/proposals/{pid}/accept` | `{"mode": "auto" \| "overwrite"}` (생략 = auto) | 200 `{"proposal", "plan"}` | 409 `base_changed`·`proposal_not_pending`·`agent_busy` |
+| POST | `/agent/sessions/{sid}/proposals/{pid}/accept` | `{"mode": "auto" \| "overwrite"}` (생략 = auto) | 200 `{"proposal", "plan"}` | 409 `progress_changed`·`base_changed`·`proposal_not_pending`·`agent_busy` |
 | POST | `/agent/sessions/{sid}/proposals/{pid}/reject` | | 200 `ProposalDetail` | 409 `proposal_not_pending`·`agent_busy` |
 | POST | `/agent/sessions/{sid}/proposals/{pid}/repropose` | | 200 `text/event-stream` (§3과 같은 이벤트) | 409 `agent_busy` |
 | POST | `/agent/sessions/{sid}/recommendations/{rid}/candidates/{cid}/add` | | 200 `{"recommendation", "plan"}` | 409 `already_in_plan`·`agent_busy`, 422 `day_out_of_range` |
@@ -149,11 +149,18 @@ LLM은 일정을 직접 바꾸지 않는다. 결과는 두 종류의 **카드**�
         - since_proposal 목록: "그대로 반영하면 사라지는 변경"
         [카드에서 본 일정 그대로 반영] → accept {mode: overwrite}
         [현재 일정에 맞춰 다시 제안]   → repropose (SSE)
+   └─ 409 progress_changed: (여행 중) 제안 이후 그 제안이 바꾸는 곳을 다녀옴(done)
+        "그사이 다녀온 곳이 있어 이 제안을 그대로 반영할 수 없어요" (items: [{item_id, title, done_at}])
+        [현재 상황에 맞춰 다시 제안]   → repropose (SSE)     ※ 덮어쓰기 없음 (overwrite 도 같은 409)
 ```
+- `progress_changed` 는 진행 상태가 `version` 을 올리지 않아 `base_changed` 로 잡히지 않는 경우다 (planner §5.4). 카드의 `proposal.progress_changed`
+  (항목 id 목록)가 비어 있지 않으면 승인 전에 미리 알릴 수 있다. 다녀온 곳을 건드리지 않는 제안은 그대로 승인된다.
 
 ### 4.2 다시 제안 (`repropose`)
 - 그 제안을 만든 요청(`request`)을 **지금 일정 기준으로** LLM에 다시 보낸다. 대화에는 사용자 메시지 `이전 제안을 현재 일정에 맞춰 다시 만들어줘.`가 남는다.
 - 새 제안이 만들어지면 원래 제안은 `superseded`가 된다. 원래 제안이 이미 대기 상태가 아니면 409 `proposal_not_pending`이다.
+- 동행 모드에서는 원래 요청(이벤트 메시지 등)의 시각·문제는 그때 기준이라고 알리고, 지금 일정(실제 진행 기준)의 문제로만 판단하게 한다.
+  원래 문제가 지금은 없으면 변경 없이 그렇다고 답한다. 원래 제안이 `progress_changed` 였으면 다녀온 곳은 바꾸지 않는다고 함께 알린다.
 
 ### 4.3 추천 카드
 - 후보 상태와 버튼은 planner §6.1을 따른다(`in_plan` → [빼기], `not_in_plan` → [추가], `day_out_of_range` → 버튼 없음).
@@ -184,9 +191,12 @@ LLM은 일정을 직접 바꾸지 않는다. 결과는 두 종류의 **카드**�
 
 - 변경 도구는 일정을 바로 바꾸지 않고 초안에 쌓는다. 도구마다 planner `preview`로 결과와 위반을 계산해 LLM에 돌려준다.
 - **턴이 끝나면** 초안을 제안 하나로 만든다(초안이 비었으면 만들지 않는다).
-- 이어서 고치기: 이 세션의 최신 대기 제안이 있고 그 `base_version`이 지금 `version`과 같으면, 그 제안의 ops에서 초안을 시작하고 새 제안이 그것을 대체한다. 다르면 빈 초안에서 시작하고(LLM에 알린다), 새 제안이 만들어질 때 그것을 대체한다. `discard_changes`로 초안을 비우고 끝나면 이어받던 제안은 거절된다.
+- 이어서 고치기: 이 세션의 최신 대기 제안이 있고 그 `base_version`이 지금 `version`과 같으면, 그 제안의 ops에서 초안을 시작하고 새 제안이 그것을 대체한다. 다르거나 그 제안이 `progress_changed`(그사이 다녀온 곳을 바꿈)면 빈 초안에서 시작하고(이유와 당시 변경을 LLM에 알린다), 새 제안이 만들어질 때 그것을 대체한다. `discard_changes`로 초안을 비우고 끝나면 이어받던 제안은 거절된다.
 - 같은 턴에서 새로 추가한 항목은 음수 임시 id로 다시 가리킨다. 제안이 승인되기 전까지 이어지는 턴에서도 같은 번호다.
 - 프롬프트 원칙: "골라 달라·추천해 달라"는 `recommend_places`, "짜 달라·바꿔 달라"는 변경 도구 → 제안.
+- **답변과 제안 일치**: 초안이 있거나 이번 턴에 바뀌었으면(선제 턴은 첫 호출 뒤 항상) 하네스가 LLM 호출마다 기록에 남기지 않는 안내를 덧붙인다 —
+  지금 초안의 확정 변경 요약(planner preview `changes`)과 변경 후 남는 문제(위반). 답변은 이 변경만 일정 변경으로 말하고,
+  목록에 없는 변경(예: "가옥거리는 내일로")은 도구로 넣거나 "다른 방법으로 …도 있어요" 선택지로만 말한다. 초안이 비었으면 "카드가 만들어지지 않는다"고 알린다.
 - `travel_time`의 `route_zones`는 길찾기가 막는 구역(실측이 오른 센서 주변 80m·방파제)만 본 것이라, 그것만으로 "안전"이라고 하지 않게 `safety_now`(날씨·특보·도착지 포함)를 함께 준다.
 
 ### 검토 루프 (계획 → 검토 → 수정 → 재검토)
@@ -316,9 +326,15 @@ trip 이 단계 3 이벤트(`delay`, `safety_raised`)에서 부른다. 앱은 �
 
   | type | 할 일 (LLM 에 주는 지시) |
   |---|---|
-  | `delay` | 무엇이 왜 문제인지 한 문장으로 알리고, 오늘 남은 일정을 고친 변경안을 만든다 (체류 줄이기·순서 바꾸기·영향받는 곳 빼기/다른 날로·가까운 대체 장소). 완료·지난 시간은 바꾸지 않는다 |
-  | `safety_raised` | `check_safety`로 근거를 확인하고, 위험 근거를 한 문장으로 알린 뒤 신호 없는 시간대로 이동·실내 대체·이동 수단 변경 변경안을 만든다. 못 바꾸면 이유와 조심할 점만 |
+  | `delay` | 오늘 남은 일정을 고친 **추천안 하나**를 만든다 (체류 줄이기·순서 바꾸기·영향받는 곳 빼기/다른 날로·가까운 대체 장소). 완료·지난 시간은 바꾸지 않는다. + 답변 형식 |
+  | `safety_raised` | `check_safety`로 근거를 확인하고, 신호 없는 시간대로 이동·실내 대체·이동 수단 변경 **추천안 하나**를 만든다. + 답변 형식. 못 바꾸면 이유와 조심할 점만 |
   | 그 밖 | 짧게 알리고, 바꿔야 하면 변경안을 만든다 |
+
+  **답변 형식** (PROJECT.md §3 장면 ③·④): 현장에서 바로 듣기 좋은 짧은 세 문장 — ① 무엇이 왜 문제인지 근거·영향
+  ② 추천안 (초안에 실제로 넣은 변경만, 제안 카드 하나로 전달) ③ "다른 방법으로 …도 있어요" 한 줄 (도구로 만들지 않은 선택지).
+  대안을 카드로 여러 개 만들지 않는다: 선제 턴에는 `recommend_places` 도구를 주지 않고, 한 턴의 변경은 원래 제안 하나다.
+  사용자가 이어서 대화로 조건을 붙이면("과메기문화관은 유지") 그 조건을 `add_rule`(예: `must_include`)로 등록하고 대기 중인 제안 위에서 고쳐
+  다시 제안한다 (새 제안이 이전 제안을 `superseded` 로 대체).
 - 대화 기록(`GET /sessions/{id}`)에는 숨김 메시지가 나오지 않고 **assistant 답변과 카드만** 보인다. 선제 턴 답변은 앞 턴의 말풍선에 합쳐지지 않고 새 말풍선이다.
   다음 턴의 LLM 은 이벤트 메시지와 답변을 기록으로 안다.
 - 잠금·제안·검토 관문은 chat 과 같다: 응답 중이면 409 `agent_busy` (trip 은 큐에 두고 나중에 다시 보낸다), 초안이 있으면 턴 끝에 제안을 만들고,
@@ -339,7 +355,10 @@ trip 이 단계 3 이벤트(`delay`, `safety_raised`)에서 부른다. 앱은 �
 - 바꿀 수 없는 것: 완료한 항목, 지난 시각
 ```
 - 동행 섹션: 답변은 **1~3문장**(현장, 나중에 음성), 목록·기호 없이. 모든 도구 사용 가능, 기본 대상은 오늘 남은 일정, 원하면 다른 날도.
-  "지금 가도 돼?"는 `travel_time`(`check_hazards`), 늦어지면 체류 줄이기·순서·빼기로 조정.
+  "지금 가도 돼?"는 `travel_time`(`check_hazards`), 늦어지면 체류 줄이기·순서·빼기로 조정. 변경안은 하나, 다른 선택지는 말로 한 줄.
+  사용자가 대기 중인 제안에 조건을 붙이면 `add_rule`로 등록하고 그 제안 위에서 고쳐 다시 제안한다.
+- **현재 일정은 실제 진행 기준**이다: 초안이 있으면 planner `preview`, 없으면 planner `projection` 의 일정 (실제 도착·완료 기록 + planner 의 지금,
+  planner §8.4). 그래서 LLM 이 보는 시각·위반과 제안 카드의 전후 비교(`day_end` 등)가 현실과 맞는다. projection 이 실패하면(오늘이 기간 밖 등) 계획 기준.
 - 하네스가 변경 도구에서 **직접 거부**한다 (도구 오류 `not_allowed_during_trip`, LLM 이 이유를 받고 다른 방법을 찾는다):
   - 완료(`done`) 항목의 수정·삭제
   - 오늘 항목을 지금보다 이른 `start_time`으로 고정

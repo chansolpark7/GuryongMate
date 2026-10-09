@@ -77,6 +77,10 @@ class ServiceApi:
     async def preview(self, plan_id: int, ops: list[dict]) -> dict:
         return await self._req("POST", f"/planner/plans/{plan_id}/preview", json={"ops": ops})
 
+    async def projection(self, plan_id: int) -> dict:
+        """여행 중 오늘을 실제 진행 + planner 의 지금 기준으로 다시 계산한 일정 (저장 안 함)."""
+        return await self._req("POST", f"/planner/plans/{plan_id}/projection")
+
     # ----- routing (길찾기) -----
     async def routing_matrix(self, mode: str, sources: list[dict], targets: list[dict]) -> dict:
         return await self._req("POST", "/routing/matrix", json={"mode": mode, "sources": sources, "targets": targets})

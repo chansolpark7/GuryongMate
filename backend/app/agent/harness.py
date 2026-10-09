@@ -22,7 +22,7 @@ from app.agent.config import settings
 from app.agent.llm import Finish, LLMError, LLMProvider, ReasoningDelta, TextDelta, ToolCall
 from app.agent.models import AgentMessage, AgentSession
 from app.agent.prompts import build_system
-from app.agent.review import summarize
+from app.agent.review import SKIP_CODES, summarize
 from app.agent.tools import STEP_KIND, Draft, Toolbox, tool_specs
 from app.db import SessionLocal
 
@@ -35,6 +35,13 @@ EMPTY_REPLY_NOTE = ("[시스템] 방금 응답이 비어 있었다. 필요한 �
 FINAL_STEP_NOTE = ("[시스템] 이번 턴의 도구 호출 한도에 도달해 더는 도구를 쓸 수 없다. 지금까지 도구로 실제로 한 변경만 "
                    "짧게 정리해 답하라 (그 변경이 제안 카드로 전달된다). 하지 않은 변경을 했다고 말하지 말고, "
                    "남은 일은 다음 요청에서 이어서 하겠다고만 말하라.")
+CHANGES_NOTE = ("[시스템] 지금 변경 제안 초안의 확정 변경 (답변이 끝나면 이것만 제안 카드 하나로 전달된다):\n{changes}\n"
+                "변경 후 일정에 남는 문제:\n{left}\n"
+                "답변의 시각·문제는 이 기준(현재 일정)으로 말한다. 답변에서 일정을 바꾼다고 말하는 것은 이 목록에 있는 "
+                "변경뿐이다. 목록에 없는 변경(예: 다른 날로 미루기)을 권하고 "
+                "싶으면 도구로 초안에 넣거나, 넣지 않을 거면 '다른 방법으로 …도 할 수 있어요'처럼 선택지로만 한 줄 말한다.")
+NO_CHANGES_NOTE = ("[시스템] 지금 변경 제안 초안이 비어 있다 (제안 카드가 만들어지지 않는다). 일정을 바꾸려면 변경 도구를 "
+                   "써야 한다. 도구로 바꾸지 않은 변경을 했다거나 제안한다고 말하지 말고, 권하고 싶은 변경은 선택지로만 말한다.")
 REVIEW_NOTE = ("[시스템] 방금 쓴 답변은 아직 사용자에게 보내지 않았다. 일정을 검토했더니 아래 문제가 남아 있다. "
                "must 는 반드시, should 는 가능하면 고친 뒤 review_plan 으로 다시 확인하라. 다 고친 뒤 최종 답변을 처음부터 "
                "다시 써라. 고칠 수 없는 문제는 최종 답변에서 이유를 짧게 말하라.\n")
@@ -177,15 +184,14 @@ async def run_turn(session_id: str, plan_id: int, user_text: str, llm: LLMProvid
         pending = await latest_pending(api, plan_id, session_id)
         if pending:
             draft.base_proposal_id = pending["id"]
-            if pending["base_changed"]:  # 그 뒤로 일정이 바뀜 -> 빈 초안에서 시작, 새 제안이 생기면 대체
+            if pending["base_changed"] or pending.get("progress_changed"):
+                # 그 뒤로 일정이 바뀌었거나, 제안이 바꾸는 곳을 그사이 다녀옴 -> 빈 초안에서 시작, 새 제안이 생기면 대체
                 dropped, pending = pending, None
             else:
                 draft.ops, draft.continued = pending["ops"], True
                 if pending["request"]:  # 이어서 고친 제안은 원래 요청부터 누적 (다시 제안할 때 원래 의도 유지)
                     request = f"{pending['request']}\n{user_text}"
     toolbox = Toolbox(api, plan_id, draft, session_id)
-    plan_view = await toolbox.current_view()
-    base_version = toolbox.last_plan["version"]
 
     # 여행 중이면 동행 모드. '지금'은 trip 의 now (trip 도 safety 시각을 따른다), 아니면 safety 시계
     if fetch_trip:
@@ -198,11 +204,13 @@ async def run_turn(session_id: str, plan_id: int, user_text: str, llm: LLMProvid
         now, simulated = await clock.now(api)
     if trip:
         toolbox.trip = {"day": trip.get("day"), "now": f"{now:%H:%M}"}
+    plan_view = await toolbox.current_view()  # 동행 모드면 실제 진행 기준 시각 (toolbox.trip 을 먼저 정한다)
+    base_version = toolbox.last_plan["version"]
 
     history = await to_thread.run_sync(_load_history, session_id, settings.history_messages)
     review_on = settings.review_rounds > 0
     pushes_left = settings.review_rounds
-    specs = tool_specs(review_on)
+    specs = tool_specs(review_on, proactive=hidden)
     system = build_system(plan_view, pending, dropped, repropose, review_on, now=now, simulated=simulated,
                           trip=trip, plan=toolbox.last_plan)
     messages = [{"role": "system", "content": system}, *history, {"role": "user", "content": user_text}]
@@ -227,6 +235,18 @@ async def run_turn(session_id: str, plan_id: int, user_text: str, llm: LLMProvid
         saved = True
         return await to_thread.run_sync(_save, session_id, closing_rows(note))
 
+    def changes_note() -> list[dict]:
+        """답변이 실제 초안과 어긋나지 않게, 초안이 있거나 바뀐 턴(선제 턴은 항상)에는 매 호출에 확정 변경 목록을 준다.
+        기록에는 남기지 않는다."""
+        if toolbox.changes and draft.ops:
+            left = [v["message"] for v in toolbox.last_plan["violations"] if v["code"] not in SKIP_CODES]
+            return [{"role": "user", "content": CHANGES_NOTE.format(
+                changes="\n".join(f"- {c}" for c in toolbox.changes),
+                left="\n".join(f"- {m}" for m in left) or "없음")}]
+        if draft.changed or (hidden and step_no > 0):
+            return [{"role": "user", "content": NO_CHANGES_NOTE}]
+        return []
+
     usage = {"input": 0, "cached": 0, "output": 0, "reasoning": 0, "calls": 0}  # 이 턴의 LLM 토큰 사용량
     nudged = False
     extra: list[dict] = []  # 이번 호출에만 붙이는 안내 (기록에는 남기지 않음)
@@ -242,7 +262,7 @@ async def run_turn(session_id: str, plan_id: int, user_text: str, llm: LLMProvid
             for attempt in range(LLM_RETRIES + 1):
                 text, calls, finish, reasoning_len = "", [], "", 0
                 try:
-                    async for ev in llm.stream(messages + extra, tools):
+                    async for ev in llm.stream(messages + changes_note() + extra, tools):
                         match ev:
                             case TextDelta(text=t):
                                 text += t

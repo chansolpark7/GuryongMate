@@ -215,3 +215,91 @@ def test_clock_follows_safety_sim_in_plan_mode(client, session, up):  # noqa: F8
     clock.reset()
     chat(client, sid, "안녕", [["안녕하세요"]])
     assert "시뮬레이션" not in system_of(-1)
+
+
+# ---------- 진행 변화 · 답변과 제안 일치 · 선제 턴 형식 ----------
+
+@pytest.fixture()
+def planner_now():
+    """planner 의 지금을 여행일 14:20 으로 (실제 진행 기준 계산이 켜지도록)."""
+    from datetime import datetime
+
+    from app.planner import clock as planner_clock
+    saved = planner_clock._clock
+    planner_clock._clock = planner_clock.FixedClock(datetime(2026, 10, 10, 14, 20, tzinfo=planner_clock.KST))
+    yield
+    planner_clock._clock = saved
+
+
+def test_progress_changed_proposal_is_refused_and_replaced(client, trip_plan, up):  # noqa: F811
+    """머무는 곳의 체류를 줄이는 제안을 만든 뒤 그곳을 떠나면(done): 승인은 409 progress_changed,
+    다음 턴은 그 제안을 이어받지 않고 새 제안으로 대체한다."""
+    sid, pid, items = trip_plan
+    up.trip = trip_state(pid, items)
+    p1 = last(chat(client, sid, "늦었어", [[("update_item", {"item_id": items["p-food"], "stay_minutes": 30})],
+                                          ["물회집은 30분만 있어요."]]), "proposal")
+    ok(client.post(f"/planner/plans/{pid}/items/{items['p-food']}/progress", json={"status": "done", "at": "14:20"},
+                   headers=H))
+
+    d = err(client.post(f"/agent/sessions/{sid}/proposals/{p1['id']}/accept", headers=H), 409, "progress_changed")
+    assert d["items"] == [{"item_id": items["p-food"], "title": "물회집", "done_at": "14:20"}]
+    assert ok(client.get(f"/agent/sessions/{sid}", headers=H))["messages"][-1]["cards"][0]["proposal"][
+        "progress_changed"] == [items["p-food"]]
+
+    turn = len(th.llm.calls)
+    p2 = last(chat(client, sid, "카페는 짧게", [[("update_item", {"item_id": items["p-cafe"], "stay_minutes": 30})],
+                                               ["카페를 30분으로 줄여요."]]), "proposal")
+    system = system_of(turn)
+    assert "다녀왔다(완료)" in system and "체류 60분 → 30분" in system and "## 승인 대기 중인 제안" not in system
+    assert [c["item_id"] for c in p2["changes"] if c["kind"] == "updated"] == [items["p-cafe"]]
+    assert ok(client.get(f"/planner/plans/{pid}/proposals/{p1['id']}", headers=H))["status"] == "superseded"
+    ok(client.post(f"/agent/sessions/{sid}/proposals/{p2['id']}/accept", headers=H))
+
+
+def test_answer_is_written_against_confirmed_changes(client, trip_plan, up):  # noqa: F811
+    """최종 답변을 쓰는 호출에는 초안의 확정 변경 목록이 붙는다 (기록에는 남지 않음)."""
+    sid, pid, items = trip_plan
+    up.trip = trip_state(pid, items)
+    chat(client, sid, "늦었어", [[("update_item", {"item_id": items["p-cafe"], "stay_minutes": 30})], ["줄였어요."]])
+    note = th.llm.calls[-1][-1]
+    assert note["role"] == "user" and note["content"].startswith("[시스템] 지금 변경 제안 초안의 확정 변경")
+    assert "'카페' 체류 60분 → 30분" in note["content"] and "다른 방법으로" in note["content"]
+    assert not any(m["content"].startswith("[시스템]") for m in th.llm.calls[0])  # 초안이 없던 첫 호출에는 없음
+
+    chat(client, sid, "고마워", [["네!"]])  # 이어받은 대기 제안이 있으면 첫 호출부터 그 변경이 기준
+    assert "'카페' 체류 60분 → 30분" in th.llm.calls[-1][-1]["content"]
+    assert not any(m["content"].startswith("[시스템]") for m in th.llm.calls[-1][1:-1])
+
+
+def test_event_turn_single_proposal_format(client, trip_plan, up):  # noqa: F811
+    """선제 턴: 추천 카드 도구 없음, 할 일에 '추천안 하나 + 다른 방법 한 줄', 변경 없이 끝내려 하면 빈 초안임을 알린다."""
+    sid, pid, items = trip_plan
+    body = {"event": delay_event(pid, items), "trip": trip_state(pid, items)}
+    th.llm.script = [[("view_plan", {})], ["카페가 늦어져요. 다른 방법으로 카페를 빼도 돼요."]]
+    res = ok(client.post(f"/agent/sessions/{sid}/events", json=body, headers=H))
+    assert res["cards"] == []
+    assert all("recommend_places" not in [t["function"]["name"] for t in tools] for tools in th.llm.tools_seen if tools)
+    opening = th.llm.calls[0][-1]["content"]
+    assert "추천안 하나만" in opening and "다른 방법으로" in opening
+    assert th.llm.calls[1][-1]["content"].startswith("[시스템] 지금 변경 제안 초안이 비어 있다")
+
+    up.trip = trip_state(pid, items)
+    chat(client, sid, "추천해줘", [["네"]])  # 일반 대화에는 추천 카드 도구가 있다
+    assert "recommend_places" in [t["function"]["name"] for t in th.llm.tools_seen[-1]]
+
+
+def test_guide_view_and_changes_follow_live_progress(client, trip_plan, up, planner_now):  # noqa: F811
+    """동행 모드에서 LLM 이 보는 일정·변경 요약은 실제 진행(물회집 13:40 도착) + planner 의 지금 기준이다."""
+    sid, pid, items = trip_plan
+    up.trip = trip_state(pid, items)
+    baseline = th.plan_of(client, pid)["days"][0]
+    events = chat(client, sid, "카페 짧게", [[("update_item", {"item_id": items["p-cafe"], "stay_minutes": 30})],
+                                            ["줄였어요."]])
+    import json as _json
+    plan_json = system_of(0).split("## 현재 일정\n", 1)[1].split("\n\n", 1)[0]
+    food = next(i for i in _json.loads(plan_json)["days"][0]["items"] if i["item_id"] == items["p-food"])
+    assert food["time"] == "13:40~14:40"
+    prop = last(events, "proposal")
+    live_end = prop["before"]["days"][0]["end_at"]
+    assert live_end != baseline["end_at"]
+    assert f"1일차 종료: {live_end} → " in [c["message"] for c in prop["changes"] if c["kind"] == "day_end"][0]
