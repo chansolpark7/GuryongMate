@@ -54,7 +54,8 @@ LLM: 호스트의 Ollama 또는 OpenAI API (Docker 밖)
 - **Flutter 앱**(`app/`): 지도·플래너·채팅 화면
 - **선제 개입 (Guide Agent)**: planner가 남기는 안전 경고(`needs_action`)를 받아 여행 중 먼저 알리고 대안을 제안하는 부분
 - **대중교통 길찾기**: 도보·차량만 지원
-- **여행 중 동행**: 현재 위치·지연 추적, 도착 시 현장 해설(음성), 데모 시뮬레이터
+- **여행 중 동행**: 현재 위치·지연 추적, 도착 시 현장 해설(음성), 데모 시뮬레이터 — 설계: [docs/trip/README.md](docs/trip/README.md)
+- **사용자 맞춤 가이드**: 메모리 문서, 외부 검색으로 장소별 가이드 노트 준비 — 설계: [docs/docent/README.md](docs/docent/README.md)
 
 진행 상황과 우선순위는 [PROJECT.md](PROJECT.md)의 MVP 우선순위를 따른다.
 
