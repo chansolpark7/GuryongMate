@@ -190,7 +190,7 @@ def test_queue_one_at_a_time_priority_and_cooldown(env):
     env.agent.busy = True  # Agent 세션이 응답 중 (409 agent_busy)
     [d] = env.loc(HOUSE, "15:45")["events"]
     ev = env.events(after=d["id"] - 1)[0]
-    assert ev["status"] == "queued" and ev["attempts"] == 1 and "agent_busy" in ev["last_error"]
+    assert ev["status"] == "queued" and ev["attempts"] == 0 and "agent_busy" in ev["last_error"]  # 응답 중은 실패가 아님
     env.planner.add_alert(env.plan_id, "raised", [(item_id(env, 4), "safe", "caution")])
     tick = env.tick("15:46")
     assert [e["type"] for e in tick["events"]] == ["safety_raised"]
@@ -240,6 +240,63 @@ def test_agent_unavailable_keeps_queued(env):
     ev = env.events(after=d["id"] - 1)[0]
     assert ev["status"] == "delivered" and ev["last_error"] is None
     assert ev["agent"] == {"session_id": f"sess-{env.plan_id}-0", "message_id": 501, "proposal_id": 901}
+
+
+def test_agent_failures_back_off_then_fail(env):
+    """접근 불가·오류는 간격을 늘려(30초 → 60초) 다시 보내고, 3번 실패하면 failed 로 남겨 더 보내지 않는다."""
+    visited_until_port(env)
+    env.start("14:10")
+    env.stay(HOUSE, "14:10", 3)
+    env.agent.missing = True
+    [d] = env.loc(HOUSE, "15:45")["events"]
+
+    def ev():
+        return next(e for e in env.events() if e["id"] == d["id"])
+
+    assert (ev()["status"], ev()["attempts"]) == ("queued", 1)
+    env.tick("15:45:20")  # 30초가 안 지남 -> 보내지 않는다
+    assert ev()["attempts"] == 1
+    env.tick("15:45:30")
+    assert (ev()["status"], ev()["attempts"]) == ("queued", 2)
+    env.tick("15:46:20")  # 두 번째 실패 뒤에는 60초
+    assert ev()["attempts"] == 2
+    env.tick("15:46:30")
+    e = ev()
+    assert (e["status"], e["attempts"], e["agent"]) == ("failed", 3, None) and "Not Found" in e["last_error"]
+    # 고쳐져도 failed 는 다시 보내지 않는다 (앱은 이벤트 목록에서 실패를 본다)
+    env.agent.missing = False
+    env.tick("15:50")
+    assert ev()["status"] == "failed" and env.agent.received == []
+    v = ok(env.c.post(env.url(f"/events/{d['id']}/seen"), headers=H))
+    assert v["status"] == "failed" and v["seen_at"]
+
+
+def test_agent_failure_retry_when_clock_goes_back(env):
+    """가상 시각을 되돌리면(실패 시각보다 이름) 기다리지 않고 다시 보낸다."""
+    visited_until_port(env)
+    env.start("14:10")
+    env.stay(HOUSE, "14:10", 3)
+    env.agent.missing = True
+    [d] = env.loc(HOUSE, "15:45")["events"]
+    env.agent.missing = False
+    env.clock.when = at("15:44")
+    assert service.dispatch(_trip_id(env), env.deps, env.clock) == 1
+    assert next(e for e in env.events() if e["id"] == d["id"])["status"] == "delivered"
+
+
+def test_busy_does_not_count_as_failure(env):
+    visited_until_port(env)
+    env.start("14:10")
+    env.stay(HOUSE, "14:10", 3)
+    env.agent.busy = True
+    [d] = env.loc(HOUSE, "15:45")["events"]
+    for hhmm in ("15:46", "15:47", "15:48", "15:49"):
+        env.tick(hhmm)
+    e = next(e for e in env.events() if e["id"] == d["id"])
+    assert (e["status"], e["attempts"]) == ("queued", 0)
+    env.agent.busy = False
+    env.tick("15:50")
+    assert next(e for e in env.events() if e["id"] == d["id"])["status"] == "delivered"
 
 
 # ---------- 안전 ----------

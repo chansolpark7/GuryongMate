@@ -65,7 +65,7 @@ class TripEvent(Base):
     item_ids: Mapped[list[int]] = mapped_column(JSONB, default=list)
     message: Mapped[str] = mapped_column(Text)
     payload: Mapped[dict] = mapped_column(JSONB, default=dict)
-    status: Mapped[str] = mapped_column(String(10))  # queued | delivered | suppressed | handled
+    status: Mapped[str] = mapped_column(String(10))  # queued | delivered | suppressed | handled | failed
     cause_key: Mapped[str] = mapped_column(Text)
     agent: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     card: Mapped[dict | None] = mapped_column(JSONB, nullable=True)

@@ -445,6 +445,29 @@ def tick_all(clients: Clients, clock: Clock, users: list[str] | None = None) -> 
 
 _sending: dict[int, threading.Lock] = {}
 _sending_guard = threading.Lock()
+# 실패한 이벤트를 다시 보낼 수 있는 때: 이벤트 id -> (실패 시각, 다시 보낼 시각). 프로세스 메모리에만 둔다
+# (다시 시작하면 한 번 바로 보내 볼 뿐, 실패 횟수 attempts 는 DB 에 있어 상한은 그대로 지킨다)
+_retry_at: dict[int, tuple[datetime, datetime]] = {}
+
+
+def _waiting_retry(event_id: int, now: datetime) -> bool:
+    """간격을 늘려 다시 보내는 중이라 아직 때가 아님. 가상 시각을 되돌렸으면(실패 시각보다 이름) 기다리지 않는다."""
+    t = _retry_at.get(event_id)
+    return t is not None and t[0] <= now < t[1]
+
+
+def _fail_attempt(ev: TripEvent, error: str, now: datetime) -> None:
+    """전송 실패 한 번. 상한(TRIP_PROACTIVE_MAX_ATTEMPTS)에 닿으면 failed 로 남기고(앱이 이벤트 목록에서 본다) 더 보내지 않는다.
+    아니면 다음 시도까지 TRIP_PROACTIVE_RETRY_SEC 에서 실패마다 두 배로 기다린다."""
+    ev.attempts += 1
+    ev.last_error = error[:500]
+    if ev.attempts >= settings.proactive_max_attempts:
+        ev.status = "failed"
+        _retry_at.pop(ev.id, None)
+        log.warning("trip: 선제 턴 %s번 실패, 이벤트 %s 를 failed 로 남김: %s", ev.attempts, ev.id, error)
+        return
+    wait = timedelta(seconds=settings.proactive_retry_sec * 2 ** (ev.attempts - 1))
+    _retry_at[ev.id] = (now, now + wait)
 
 
 def _proposal_id(result: dict) -> int | None:
@@ -457,7 +480,8 @@ def _proposal_id(result: dict) -> int | None:
 def dispatch(trip_id: int, clients: Clients, clock: Clock) -> int:
     """큐에 있는 단계 3 이벤트를 하나씩 Agent 선제 턴으로 보낸다. 보낸 수.
     한 여행일에 한 번에 하나만 (다른 전송이 진행 중이면 바로 돌아간다 — 그쪽이 끝난 뒤 이어서 보낸다).
-    Agent 가 응답 중(409 agent_busy)이거나 접근할 수 없으면(엔드포인트가 아직 없을 때 포함) queued 로 두고 다음 틱에 다시."""
+    Agent 가 응답 중(409 agent_busy)이면 queued 로 두고 다음 틱에 다시 (실패로 세지 않는다).
+    접근할 수 없거나 오류면 간격을 늘려 다시 보내고, TRIP_PROACTIVE_MAX_ATTEMPTS 번 실패하면 failed (_fail_attempt)."""
     with _sending_guard:
         lock = _sending.setdefault(trip_id, threading.Lock())
     if not lock.acquire(blocking=False):
@@ -480,15 +504,16 @@ def dispatch(trip_id: int, clients: Clients, clock: Clock) -> int:
                 for e in rows:
                     if e.id in suppress:
                         e.status = "suppressed"
-                if pick is None:
+                if pick is None or _waiting_retry(pick.id, clock.now()):
                     return sent
                 ev = next(e for e in rows if e.id == pick.id)
                 auth = background_auth(td.user_id)
                 if td.session_id is None:
                     td.session_id = _resolve_session(clients, td.plan_id, auth)
                 if td.session_id is None:
-                    ev.attempts += 1
-                    ev.last_error = "agent 세션을 정하지 못함"
+                    _fail_attempt(ev, "agent 세션을 정하지 못함", clock.now())
+                    if ev.status == "failed":
+                        continue  # 큐의 다음 이벤트
                     return sent
                 session_id, event_json = td.session_id, event_view(ev).model_dump(mode="json")
                 trip_json = state_view(td, td.plan_id, clock, at_least=_kst(ev.now)).model_dump(mode="json")
@@ -498,13 +523,16 @@ def dispatch(trip_id: int, clients: Clients, clock: Clock) -> int:
             except UpstreamError as e:
                 with SessionLocal.begin() as db:
                     ev = db.get(TripEvent, pick.id)
-                    ev.attempts += 1
-                    ev.last_error = str(e)[:500]
+                    if e.code == "agent_busy":  # 사용자와 대화 중 -> 끝난 뒤 보낸다
+                        ev.last_error = str(e)[:500]
+                    else:
+                        _fail_attempt(ev, str(e), clock.now())
                     if e.code == "session_not_found":  # 세션이 지워짐 -> 다음에 다시 정한다
                         db.get(TripDay, trip_id).session_id = None
                 log.info("trip: 선제 턴 보류 (이벤트 %s): %s", pick.id, e)
                 return sent
 
+            _retry_at.pop(pick.id, None)
             with SessionLocal.begin() as db:
                 ev = db.get(TripEvent, pick.id)
                 ev.attempts += 1

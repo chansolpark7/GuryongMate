@@ -24,6 +24,10 @@ class TripSettings(BaseSettings):
 
     # Event Policy (§4)
     proactive_cooldown_min: float = 10
+    # 선제 턴 전송 실패(agent 접근 불가·오류): 이 횟수만큼 실패하면 failed 로 남기고 더 보내지 않는다.
+    # 다시 보내기 전 기다림은 retry_sec 에서 실패마다 두 배 (trip 의 지금 기준). agent_busy(응답 중)는 실패로 세지 않는다
+    proactive_max_attempts: int = 3
+    proactive_retry_sec: float = 30
     auto_end_min: float = 120
 
     # 다른 서비스 (compose 가 게이트웨이 주소를 넣는다). 컨테이너 안에서는 항상 8000 번 포트
