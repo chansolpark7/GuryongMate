@@ -19,7 +19,8 @@ def test_no_limit_by_default(client, session, scripted):  # noqa: F811
     sid, _ = session
     for _ in range(3):
         assert chat(client, sid, "점심 넣어줘")[-1][0] == "done"
-    assert ok(client.get("/agent/limits", headers=H))["chat"]["hour"] == {"used": 3, "limit": None}
+    # 한도가 없으면 기록도 하지 않는다
+    assert ok(client.get("/agent/limits", headers=H))["chat"]["hour"] == {"used": 0, "limit": None}
 
 
 def test_chat_limit(client, session, scripted, monkeypatch):  # noqa: F811

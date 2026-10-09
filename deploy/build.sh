@@ -12,11 +12,13 @@ for name in "${IMAGES[@]}"; do
   docker build -q -f "$ROOT/$(image_dockerfile "$name")" --label "guryong.src=$(src_hash "$name")" \
     -t "guryongmate/$name:$TAG" "$ROOT/$(image_context "$name")" >/dev/null
 done
-# 노트북에 오래된 태그가 쌓이지 않게: 이미지마다 최근 KEEP_LOCAL_IMAGES 개만 남긴다
-for name in "${IMAGES[@]}"; do
-  docker image ls "guryongmate/$name" --format '{{.CreatedAt}}\t{{.Tag}}' | sort -r | tail -n +$((KEEP_LOCAL_IMAGES + 1)) | cut -f2 |
-    while read -r old; do [[ "$old" != "$TAG" ]] && docker image rm "guryongmate/$name:$old" >/dev/null 2>&1 || true; done
-done
+# 노트북에 오래된 태그가 쌓이지 않게: 이미지마다 최근 KEEP_LOCAL_IMAGES 개만 남긴다 (VM=local 시험에서는 VM 쪽 이미지라 남김)
+if [[ "$VM" != local ]]; then
+  for name in "${IMAGES[@]}"; do
+    docker image ls "guryongmate/$name" --format '{{.CreatedAt}}\t{{.Tag}}' | sort -r | tail -n +$((KEEP_LOCAL_IMAGES + 1)) | cut -f2 |
+      while read -r old; do [[ "$old" != "$TAG" ]] && docker image rm "guryongmate/$name:$old" >/dev/null 2>&1 || true; done
+  done
+fi
 docker image ls --format '{{.Repository}}:{{.Tag}}\t{{.Size}}' | grep "^guryongmate/.*:$TAG" >&2
 ok "빌드 완료: $TAG"
 echo "$TAG"
