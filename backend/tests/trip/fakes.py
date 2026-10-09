@@ -2,6 +2,7 @@
 
 가짜 planner 는 실제 planner 의 시간 모델(docs/planner/README.md §2.1, §8.2)을 단순하게 흉내 낸다:
 도보 이동시간 = 직선거리 × 1.3 / 70m, 차량 = 직선거리 × 1.3 / 400m + 주차 5분 (분 올림), 운영시간 밖·하루 초과·고정 시각 놓침만 본다.
+도착지에 road(실제 길 / 직선 비율)가 있으면 1.3 대신 그 값 (항구를 돌아가는 방파제, 해안도로로 돌아가는 카페 — 실제 길찾기 거리로 맞춤).
 """
 import math
 from copy import deepcopy
@@ -9,7 +10,8 @@ from copy import deepcopy
 from app.trip.clients import Clients, UpstreamError
 from app.trip.geo import distance_m
 
-# 장소 (실제 places 데이터의 좌표·운영시간). outdoor: storm 때 주의 / flood: 침수 감시 구역 반경 안
+# 장소 (실제 places 데이터의 좌표·운영시간). outdoor: storm 때 주의 / flood: 침수 감시 구역 반경 안 /
+# breakwater: 방파제 (storm 의 풍랑 특보로 위험. 북방파제는 places 에 직접 정의한 장소, data/places/manual)
 PLACES = {
     "kto-2834330": {"title": "짬홍", "lat": 35.9913466179, "lng": 129.558841269, "open": ("10:00", "20:00"), "flood": True},
     "kto-2610501": {"title": "구룡포항", "lat": 35.9893051205, "lng": 129.555641609, "outdoor": True},
@@ -18,7 +20,10 @@ PLACES = {
     "kto-2603493": {"title": "구룡포 근대문화역사관", "lat": 35.9905, "lng": 129.5616, "open": ("10:00", "17:30")},
     "kto-127214": {"title": "구룡포해수욕장", "lat": 35.9968322529, "lng": 129.5662849025, "open": ("08:00", "20:00"),
                    "outdoor": True},
-    "kto-2834344": {"title": "카페파도", "lat": 35.9768342269, "lng": 129.5514895569, "open": ("10:00", "21:00")},
+    "kto-2834344": {"title": "카페파도", "lat": 35.9768342269, "lng": 129.5514895569, "open": ("10:00", "21:00"),
+                    "road": 2.28},  # 북방파제에서 차량 3265m (직선 1429m)
+    "poi-gr-breakwater-north": {"title": "구룡포 북방파제", "lat": 35.988078, "lng": 129.559279, "outdoor": True,
+                                "breakwater": True, "road": 1.56},  # 과메기문화관에서 도보 886m (직선 566m)
 }
 
 # safety mock 의 침수 센서 (구룡포수협 스마트맨홀, 구룡포파출소 지표면 수위계)
@@ -36,12 +41,12 @@ def fmt(m: int) -> str:
 
 
 def walk_min(a: dict, b: dict) -> int:
-    return math.ceil(distance_m(a["lat"], a["lng"], b["lat"], b["lng"]) * 1.3 / 70)
+    return math.ceil(distance_m(a["lat"], a["lng"], b["lat"], b["lng"]) * b.get("road", 1.3) / 70)
 
 
 def leg_min(a: dict, b: dict, mode: str | None) -> int:
     if mode == "car":
-        return math.ceil(distance_m(a["lat"], a["lng"], b["lat"], b["lng"]) * 1.3 / 400) + 5
+        return math.ceil(distance_m(a["lat"], a["lng"], b["lat"], b["lng"]) * b.get("road", 1.3) / 400) + 5
     return walk_min(a, b)
 
 
@@ -84,6 +89,11 @@ class FakePlanner:
         it = next(i for i in self.plans[plan_id]["items"] if i["place_id"] == place_id and i["status"] == "planned")
         it["status"] = "skipped"
 
+    def replace(self, plan_id: int, remove: str, add: str, stay: int = 40) -> None:
+        """사용자가 선제 턴의 교체 제안(remove 장소 -> add 장소, 같은 순서)을 승인함."""
+        it = next(i for i in self.plans[plan_id]["items"] if i["place_id"] == remove and i["status"] == "planned")
+        it["place_id"], it["stay"] = add, stay
+
     def add_alert(self, plan_id: int, kind: str, changes: list[tuple[int, str, str]]) -> dict:
         """changes: (item_id, from_risk, to_risk)."""
         p = self.plans[plan_id]
@@ -110,7 +120,7 @@ class FakePlanner:
                 if it["status"] in ("done", "skipped"):
                     continue
                 place = PLACES[it["place_id"]]
-                if place.get("flood"):
+                if place.get("flood") or (place.get("breakwater") and scenario == "storm"):
                     changes.append((it["id"], "safe", "danger"))
                 elif place.get("outdoor") and scenario == "storm":
                     changes.append((it["id"], "safe", "caution"))

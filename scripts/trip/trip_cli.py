@@ -4,6 +4,7 @@
     trip loc 3 35.987 129.558 [--acc 10] [--at 14:20]     위치 한 점
     trip goto 3 kto-2660046 [--wait 120]  그 장소 좌표로 보내고 머무름 시간만큼 시계를 진행 (도착 판정 확인용)
     trip replay 3 scene3_delay.json [--speed 10]          경로 재생 (plan 자리에 new: 재생 파일의 계획을 새로 만듦)
+                                                          (accept 단계: 선제 턴의 제안을 Agent 로 승인)
     trip events 3 [--follow] [--seen 41]  이벤트 보기 (--follow: 폴링, --seen: 확인 표시)
     trip tick 3                           틱(지연·안전 경고·자동 종료)을 지금 한 번
     sim / sim scenario storm / sim now 2026-10-10T14:00 / sim reset    safety 가상 상황·시각
@@ -230,6 +231,9 @@ def cmd_replay(c, a):
             else:
                 c.update_item(plan, item["id"], status="skipped")
                 print(f"{DIM}{act.at:%H:%M:%S}{RESET} 일정에서 뺌: {item['place']['title'] if item['place'] else item['place_id']}")
+        elif act.kind == "accept":
+            _wait_proactive(c, plan)
+            _accept_proactive(c, plan, act.at, act.data)
         elif act.kind == "tick":
             _tick(c, plan, act.at, wait=sim_ok and a.speed == 0)
         elif act.kind == "expect":
@@ -255,6 +259,25 @@ def _tick(c, plan: int, at: datetime, wait: bool = False) -> None:
     except Exception:
         pass
     _print_result(c.trip_tick(plan, at.isoformat()), quiet=True)
+
+
+def _accept_proactive(c, plan: int, at: datetime, expect: dict) -> None:
+    """가장 최근 선제 턴(단계 3)의 제안을 승인한다 (앱의 [전체 적용]). expect {"remove", "add"}: 기대하는 변경 — 확인만 한다."""
+    ev = next((e for e in reversed(c.trip_events(plan, 0, 200))
+               if e["level"] == 3 and (e.get("agent") or {}).get("proposal_id")), None)
+    if ev is None:
+        print(f"{YELLOW}{at:%H:%M:%S} 승인할 선제 제안이 없습니다 (선제 턴이 제안을 만들지 않음).{RESET}")
+        return
+    sid, pid = ev["agent"]["session_id"], ev["agent"]["proposal_id"]
+    try:
+        r = c.accept_proposal(sid, pid)
+    except Exception as e:  # PlannerApiError (409 progress_changed·base_changed 등)
+        print(f"{YELLOW}{at:%H:%M:%S} 제안 #{pid} 승인 실패: {e}{RESET}")
+        return
+    places = {i["place_id"] for d in r["plan"]["days"] for i in d["items"] if i["status"] != "skipped"}
+    print(f"{DIM}{at:%H:%M:%S}{RESET} 선제 제안 #{pid} 승인 ({r['proposal']['status']})")
+    if expect.get("remove") in places or (expect.get("add") and expect["add"] not in places):
+        print(f"{YELLOW}  기대한 변경(빼기 {expect.get('remove')}, 넣기 {expect.get('add')})과 다릅니다. 재생은 계속합니다.{RESET}")
 
 
 def _wait_proactive(c, plan: int, limit_sec: float = 120) -> None:
