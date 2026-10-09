@@ -4,10 +4,11 @@
 - 변경 제안(LLM·이벤트): proposals -> 사용자가 accept 해야 반영 (auto / overwrite)
 - 장소 추천: recommendations -> 후보마다 add / remove 로 즉시 반영
 - 안전 점검: safety -> 방문 장소·시각의 위험 단계 (safety 서비스 판단). 상황이 바뀌면 주기 점검이 경고(alerts)를 남긴다
+- 여행 중: progress (도착·완료 기록, version 대신 progress_version) / projection (현재 기준 재계산, 저장 안 함)
 일정을 바꾸는 요청은 모두 바뀐 뒤의 전체 계획(PlanDetail)을 돌려주고, 계획의 version 을 1 올린다.
 오류는 {"detail": {"code", "message", ...}} 형식이다 (errors.py).
 """
-from datetime import datetime, timezone
+from datetime import datetime, time, timezone
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Body, Depends, Query, Response
@@ -21,6 +22,7 @@ from app.db import get_db
 from app.planner import ops as engine
 from app.planner import recommend
 from app.planner import safety as safety_check
+from app.planner.clock import Clock, get_clock
 from app.planner.errors import PlannerError, PlannerRoute, not_found
 from app.planner.models import (
     PlannerItem,
@@ -50,6 +52,9 @@ from app.planner.schemas import (
     PlanSummary,
     PlanUpdate,
     PreviewResult,
+    ProgressUpdate,
+    ProjectionRequest,
+    ProjectionResult,
     ProposalCreate,
     ProposalDetail,
     ProposalStatus,
@@ -73,6 +78,7 @@ DbSession = Annotated[Session, Depends(get_db)]
 Places = Annotated[PlaceLookup, Depends(get_place_lookup)]
 Safety = Annotated[SafetyClient, Depends(get_safety_client)]
 Routes = Annotated[RouteLookup, Depends(get_route_lookup)]
+Now = Annotated[Clock, Depends(get_clock)]  # 지금 시각 (safety 가상 시각을 따른다, clock.py)
 # 사용자: Authorization: Bearer <access 토큰> (개발 모드 AUTH_REQUIRED=false 면 X-User-Id 헤더). app.core.auth
 UserId = CurrentUser
 
@@ -166,6 +172,43 @@ def update_item(plan_id: int, item_id: int, body: ItemUpdate, db: DbSession, use
 def delete_item(plan_id: int, item_id: int, db: DbSession, user_id: UserId, places: Places) -> PlanDetail:
     op = RemoveItemOp(op="remove_item", item_id=item_id)
     return _apply(db, _get_plan(db, user_id, plan_id, lock=True), [op], places)
+
+
+# ---------- 여행 중: 진행 상태 · 현재 기준 재계산 ----------
+
+@router.post("/plans/{plan_id}/items/{item_id}/progress", response_model=PlanDetail)
+def update_progress(plan_id: int, item_id: int, body: ProgressUpdate, db: DbSession, user_id: UserId,
+                    places: Places, clock: Now) -> PlanDetail:
+    """도착(visiting)·완료(done)·기록 취소(planned). 일정 변경이 아니라 version 은 그대로, progress_version 이 1 오른다.
+    그래서 여행 중 도착할 때마다 대기 중인 제안이 base_changed 가 되지 않는다. 건너뜀은 PATCH (일정 변경)."""
+    plan = _get_plan(db, user_id, plan_id, lock=True)
+    item = next((i for i in plan.items if i.id == item_id), None)
+    if item is None:
+        raise not_found("item_not_found", f"일정 항목 {item_id}")
+    if item.status == "skipped":
+        raise PlannerError(409, "item_skipped", "건너뛴 항목입니다. 다시 일정에 넣으려면 PATCH 로 status 를 바꾸세요.")
+    at = body.at or clock.now().time().replace(second=0, microsecond=0)
+    if body.status == "done" and item.arrived_at is not None and at < item.arrived_at:
+        raise PlannerError(422, "invalid_range", f"완료 시각 {at:%H:%M} 이 도착 시각 {item.arrived_at:%H:%M} 보다 이릅니다.")
+    engine.set_status(item, body.status, None if body.status == "planned" else at)
+    plan.progress_version += 1
+    db.commit()
+    return engine.detail(plan, places)
+
+
+@router.post("/plans/{plan_id}/projection", response_model=ProjectionResult)
+def project_plan(plan_id: int, db: DbSession, user_id: UserId, places: Places, clock: Now,
+                 body: Annotated[ProjectionRequest | None, Body()] = None) -> ProjectionResult:
+    """지금 시각·위치 기준으로 그날 남은 일정을 다시 계산하고, 기준 일정(validate)에 없던 위반을 돌려준다 (저장 안 함).
+    trip 의 지연 판정은 new_violations 만 본다."""
+    body = body or ProjectionRequest()
+    plan = _get_plan(db, user_id, plan_id)
+    current = clock.now()
+    day = body.day or (current.date() - plan.start_date).days + 1
+    now = body.now or time(current.hour, current.minute)
+    result = engine.project(plan, places, day, now, body.position)
+    db.rollback()
+    return result
 
 
 @router.get("/plans/{plan_id}/constraints", response_model=list[ConstraintView])
@@ -408,7 +451,7 @@ def _safety_check(detail: PlanDetail, client: SafetyClient, routes: RouteLookup)
         raise PlannerError(503, "safety_unavailable", "안전 정보 서비스에 접근할 수 없습니다. 잠시 후 다시 시도하세요.",
                            reason=str(e)[:200]) from e
     if result is None:  # 점검할 방문·이동이 없음
-        return safety_check.check(detail, {"visits": [], "data_status": {}, "now": datetime.now(timezone.utc)})
+        return safety_check.check(detail, {"visits": [], "data_status": {}, "now": get_clock().now()})
     return result
 
 

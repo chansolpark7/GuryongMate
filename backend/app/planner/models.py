@@ -24,6 +24,8 @@ class PlannerPlan(Base):
     travel_mode: Mapped[str] = mapped_column(String(10), default="walk")  # 구간 기본 이동 수단: walk | car
     memo: Mapped[str] = mapped_column(Text, default="")
     version: Mapped[int] = mapped_column(Integer, default=1)  # 일정이 바뀔 때마다 1 오른다 (제안의 기준 비교용)
+    # 진행 상태(도착·완료)가 바뀔 때마다 1 오른다. 일정 변경이 아니라 version 과 따로 센다 (앱 화면 갱신용)
+    progress_version: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
@@ -55,6 +57,9 @@ class PlannerItem(Base):
     status: Mapped[str] = mapped_column(String(10), default="planned")  # planned|visiting|done|skipped
     # 직전 장소에서 여기까지 오는 이동 수단. None 이면 계획 기본(plan.travel_mode)
     travel_mode: Mapped[str | None] = mapped_column(String(4), nullable=True)
+    # 여행 중 실제 도착·완료 시각 (진행 상태 API 가 기록). 현재 기준 재계산(projection)의 기준
+    arrived_at: Mapped[time | None] = mapped_column(Time, nullable=True)
+    done_at: Mapped[time | None] = mapped_column(Time, nullable=True)
 
     plan: Mapped[PlannerPlan] = relationship(back_populates="items")
 
@@ -162,6 +167,9 @@ class PlannerSafetyAlert(Base):
 # 이미 만들어진 테이블에 새 컬럼 추가 (해커톤 기간에는 Alembic 을 쓰지 않는다). create_all 직후 매번 실행, 있으면 건너뛴다
 _UPGRADES = [
     "ALTER TABLE planner_item ADD COLUMN IF NOT EXISTS travel_mode VARCHAR(4)",
+    "ALTER TABLE planner_item ADD COLUMN IF NOT EXISTS arrived_at TIME",
+    "ALTER TABLE planner_item ADD COLUMN IF NOT EXISTS done_at TIME",
+    "ALTER TABLE planner_plan ADD COLUMN IF NOT EXISTS progress_version INTEGER NOT NULL DEFAULT 0",
 ]
 for _sql in _UPGRADES:
     event.listen(Base.metadata, "after_create", DDL(_sql).execute_if(dialect="postgresql"))

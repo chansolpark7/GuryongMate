@@ -9,13 +9,14 @@
 import logging
 import threading
 import time as _time
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta
 
 from sqlalchemy import delete, select
 
 from app.db import SessionLocal
 from app.planner import ops as engine
 from app.planner import safety
+from app.planner.clock import get_clock
 from app.planner.models import PlannerPlan, PlannerSafetyAlert, PlannerSafetyState
 from app.planner.places import PlaceLookup, get_place_lookup, settings
 from app.planner.safety_client import SafetyClient, get_safety_client
@@ -25,12 +26,11 @@ from app.planner.travel import RouteLookup, get_route_lookup
 log = logging.getLogger("uvicorn.error")
 LOOKAHEAD = timedelta(days=3)  # 예보 마지막 시각을 모를 때 점검할 기간
 PATH_DAYS = timedelta(days=4)  # 이 안의 이동만 길찾기 경로선을 받는다 (그 뒤는 예보가 없어 판단하지 않음)
-KST = timezone(timedelta(hours=9))
 
 
 def _today() -> date:
-    """경로선을 받을 날짜 범위의 기준 (테스트에서 바꾼다)."""
-    return datetime.now(KST).date()
+    """경로선을 받을 날짜 범위의 기준. planner 의 지금(safety 가상 시각을 따름, clock.py) 기준 (테스트에서 바꾼다)."""
+    return get_clock().now().date()
 
 
 def assess_plan(detail: PlanDetail, client: SafetyClient, routes: RouteLookup,

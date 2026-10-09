@@ -9,7 +9,7 @@ from sqlalchemy import delete
 from app.db import SessionLocal, init_db
 from app.main import app
 from app.planner.models import PlannerPlan
-from app.planner import travel
+from app.planner import clock, travel
 from app.planner.places import PlacesUnavailable, get_place_lookup
 from app.planner.schemas import PlaceInfo
 
@@ -52,6 +52,14 @@ def _estimate_travel():
     saved, travel._lookup = travel._lookup, RoadEstimate()
     yield
     travel._lookup = saved
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _system_clock():
+    """테스트에는 safety 서버가 없다. 지금 시각은 시스템 시각 (필요한 테스트는 FixedClock 으로 바꾼다)."""
+    saved, clock._clock = clock._clock, clock.SystemClock()
+    yield
+    clock._clock = saved
 
 
 @pytest.fixture(scope="module")

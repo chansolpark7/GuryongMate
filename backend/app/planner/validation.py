@@ -3,6 +3,7 @@
 시간은 모두 '자정 기준 분(int)' 으로 계산하고, 출력할 때만 "HH:MM" 으로 바꾼다.
 """
 import re
+from dataclasses import dataclass
 from datetime import time, timedelta
 
 from app.planner.models import PlannerConstraint, PlannerItem, PlannerPlan
@@ -95,12 +96,33 @@ class Leg:
         self.leg = options[mode]
 
 
+@dataclass(frozen=True)
+class Actual:
+    """현재 기준 재계산(projection)의 입력. 그날 타임라인 앞부분을 실제 기록·현재 위치로 고정한다.
+
+    - anchor: 지금 머무는 항목(moving=False, anchor_arrive = 실제 도착) 또는
+      이동 중 향하는 항목(moving=True, anchor_arrive = now + 지금 위치에서 남은 이동시간).
+    - anchor 가 없으면 아직 다녀오지 않은 첫 항목부터 '지금 출발' 로 본다 (now 이전에는 도착하지 않음).
+    """
+    day: int
+    now: int  # 자정 기준 분
+    anchor_id: int | None = None
+    anchor_arrive: int | None = None
+    moving: bool = False
+
+
 def build_schedule(
     plan: PlannerPlan, places: dict[str, PlaceInfo | None], travel: TravelTable | None = None,
+    actual: Actual | None = None,
 ) -> tuple[list[DayView], list[Violation]]:
     """plan.items 를 날짜별로 배치해 도착·시작·종료 시각을 계산하고 위반 목록을 만든다.
     이동시간은 travel (travel_pairs 의 구간을 수단별로 routing 에 물은 결과) 에서 찾고, 없으면 직선거리로 근사한다.
-    구간 수단은 항목마다 다를 수 있다 (leg_mode). 비교용으로 도보·차량 시간을 모두 붙인다."""
+    구간 수단은 항목마다 다를 수 있다 (leg_mode). 비교용으로 도보·차량 시간을 모두 붙인다.
+
+    actual 이 있으면 그날(actual.day)은 현재 기준으로 다시 계산한다 (projection, docs/planner/README.md §8):
+    - 지난 항목(done, 또는 anchor 보다 앞의 항목): 기록된 도착·완료 시각 그대로 (없으면 계산값). 시각 위반은 따지지 않는다
+    - 지금 머무는 항목: 실제 도착부터, 예정 체류가 이미 지났으면 now 에 끝난다고 본다. 고정 시각 놓침은 따지지 않는다
+    - 이동 중 향하는 항목: anchor_arrive 에 도착. 그 뒤 항목은 평소처럼 이어서 계산한다"""
     travel = travel or {}
     violations: list[Violation] = []
     days: list[DayView] = []
@@ -114,6 +136,8 @@ def build_schedule(
         last_end: int | None = None
         views: list[ItemView] = []
 
+        now_day = actual if actual is not None and actual.day == d else None
+        seen_anchor = live = False  # live: 지금 이후 항목(anchor 또는 남은 항목)을 계산하기 시작함
         for it in _timeline(plan, d):
             place = places.get(it.place_id)
             name = _name(place, it.place_id)
@@ -130,16 +154,41 @@ def build_schedule(
                 mode = leg_mode(plan, it)
                 leg = options[mode]
                 legs.append(Leg(it, d, mode, options, name))
-            arrive = cursor + (leg.minutes if leg else 0)
-            start = arrive
-            if it.start_time is not None:
-                fixed = to_min(it.start_time)
-                if arrive > fixed:
-                    violations.append(Violation(
-                        code="fixed_time_missed", severity="error", day=d, item_id=it.id,
-                        message=f"'{name}' 는 {fmt(fixed)} 시작으로 고정돼 있지만 앞 일정 때문에 {fmt(arrive)} 에 도착합니다 ({arrive - fixed}분 늦음)."))
-                start = max(arrive, fixed)
-            end = start + it.stay_minutes
+            fixed = to_min(it.start_time) if it.start_time is not None else None
+            phase = "plan"
+            if now_day is not None:
+                if it.id == now_day.anchor_id:
+                    phase, seen_anchor = ("moving" if now_day.moving else "here"), True
+                elif it.status == "done" or (now_day.anchor_id is not None and not seen_anchor):
+                    phase = "past"
+                elif now_day.anchor_id is None and not live:
+                    cursor = max(cursor, now_day.now)  # 지금 출발
+
+            if phase == "past":
+                arrive = to_min(it.arrived_at) if it.arrived_at else cursor + (leg.minutes if leg else 0)
+                start = arrive if it.arrived_at or fixed is None else max(arrive, fixed)
+                end = max(start, to_min(it.done_at) if it.done_at else start + it.stay_minutes)
+                views.append(_view(it, place, leg, arrive, start, end, mode, options))
+                cursor = last_end = end if not live else max(cursor, end)
+                prev = place if place is not None else prev
+                continue
+            live = live or now_day is not None
+
+            if phase == "here":
+                arrive = now_day.anchor_arrive
+                start = arrive if fixed is None else max(arrive, fixed)  # 이미 와 있다: 고정 시각 놓침은 따지지 않는다
+                end = max(start + it.stay_minutes, now_day.now)
+            else:
+                arrive = now_day.anchor_arrive if phase == "moving" else cursor + (leg.minutes if leg else 0)
+                start = arrive
+                if fixed is not None:
+                    if arrive > fixed:
+                        why = "지금 기준으로" if now_day is not None else "앞 일정 때문에"
+                        violations.append(Violation(
+                            code="fixed_time_missed", severity="error", day=d, item_id=it.id,
+                            message=f"'{name}' 는 {fmt(fixed)} 시작으로 고정돼 있지만 {why} {fmt(arrive)} 에 도착합니다 ({arrive - fixed}분 늦음)."))
+                    start = max(arrive, fixed)
+                end = start + it.stay_minutes
 
             if place is not None:
                 if date.weekday() in closed_weekdays(place.rest_date):
@@ -222,6 +271,7 @@ def _view(it: PlannerItem, place, leg: TravelLeg | None, arrive, start, end, mod
         arrive_at=None if arrive is None else fmt(arrive),
         start_at=None if start is None else fmt(start),
         end_at=None if end is None else fmt(end),
+        arrived_at=it.arrived_at, done_at=it.done_at,
     )
 
 
@@ -266,3 +316,46 @@ def _check_constraint(
         return [v(f"{d}일차 도보 이동이 모두 {total}분으로 하루 도보 상한 {p['minutes']}분을 넘습니다.", day=d)
                 for d, total in _daily_walk(legs).items() if total > p["minutes"]]
     return []
+
+
+# ---------- 현재 기준 재계산 (projection) 비교 ----------
+
+def parse_hhmm(s: str) -> int:
+    """fmt 의 역. 자정을 넘은 "24:30" 도 받는다."""
+    h, m = s.split(":")
+    return int(h) * 60 + int(m)
+
+
+def next_item_id(plan: PlannerPlan, actual: Actual) -> int | None:
+    """다음에 갈 항목: 이동 중이면 향하는 항목, 머무는 중이면 그 뒤 첫 미완료 항목, 아니면 첫 미완료 항목."""
+    items = [i for i in _timeline(plan, actual.day) if i.status != "skipped"]
+    if actual.anchor_id is not None:
+        if actual.moving:
+            return actual.anchor_id
+        n = next((k for k, i in enumerate(items) if i.id == actual.anchor_id), None)
+        if n is not None:
+            items = items[n + 1:]
+    return next((i.id for i in items if i.status != "done"), None)
+
+
+def _key(v: Violation) -> tuple:
+    return v.code, v.day, v.item_id, v.constraint_id
+
+
+def new_violations(baseline: list[Violation], projected: list[Violation]) -> list[Violation]:
+    """재계산 위반 중 기준 일정에 없던 것 (코드 + 날짜 + 항목 + 규칙 기준)."""
+    old = {_key(v) for v in baseline}
+    return [v for v in projected if _key(v) not in old]
+
+
+def delay_minutes(baseline: list[DayView], projected: list[DayView], day: int, next_id: int | None) -> int | None:
+    """다음 항목의 시작 시각 차이 (재계산 - 기준). 다음 항목이 없으면 그날 종료 시각 차이. 비교할 수 없으면 None."""
+    b, p = baseline[day - 1], projected[day - 1]
+    if next_id is not None:
+        bi = next((i for i in b.items if i.id == next_id), None)
+        pi = next((i for i in p.items if i.id == next_id), None)
+        if bi and pi and bi.start_at and pi.start_at:
+            return parse_hhmm(pi.start_at) - parse_hhmm(bi.start_at)
+    if b.end_at and p.end_at:
+        return parse_hhmm(p.end_at) - parse_hhmm(b.end_at)
+    return None

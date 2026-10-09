@@ -2,7 +2,8 @@
 
 - persist=True : DB 에 붙은 계획을 직접 수정하고 version 을 1 올린다 (호출 쪽에서 commit)
 - preview(...)  : 계획을 메모리에 복제해 적용한 결과만 계산 (DB 변경 없음)
-- overwrite(...): 제안의 after 스냅샷으로 계획을 통째로 맞춘다 (항목·규칙 id 는 가능한 한 유지)
+- overwrite(...): 제안의 after 스냅샷으로 계획을 통째로 맞춘다 (항목·규칙 id 는 가능한 한 유지, 진행 상태는 지금 값)
+- project(...)  : 여행 중 현재 기준으로 그날 남은 일정을 다시 계산 (저장 안 함)
 
 한 ops 목록 안에서 새로 만든 항목·규칙은 음수 임시 id(-1, -2, ...)로 다시 참조할 수 있다.
 """
@@ -23,16 +24,22 @@ from app.planner.schemas import (
     PlanDetail,
     PlanOp,
     PlanSummary,
+    PositionMoving,
+    PositionVisiting,
+    ProjectionNext,
+    ProjectionResult,
     RemoveConstraintOp,
     RemoveItemOp,
     UpdateItemOp,
     UpdatePlanOp,
 )
+from app.planner import validation
 from app.planner.travel import get_travel_lookup
-from app.planner.validation import build_schedule, travel_pairs
+from app.planner.validation import Actual, build_schedule, leg_mode, to_min, travel_pairs
 
 
 PLAN_FIELDS = ("title", "start_date", "end_date", "day_start", "day_end", "travel_mode", "memo")
+PROGRESS = ("planned", "visiting", "done")  # 진행 상태. 이 안에서 바뀌는 것은 일정 변경이 아니다 (skipped 는 일정 변경)
 
 
 def check_range(start_date: date, end_date: date, day_start: time, day_end: time) -> None:
@@ -96,8 +103,8 @@ class Applier:
                     item.start_time = op.start_time
                 if op.memo is not None:
                     item.memo = op.memo
-                if op.status is not None:
-                    item.status = op.status
+                if op.status is not None and op.status != item.status:
+                    set_status(item, op.status)
                 if "travel_mode" in sent:
                     item.travel_mode = op.travel_mode
             case RemoveItemOp():
@@ -159,6 +166,19 @@ class Applier:
             it.position = n
 
 
+def set_status(item: PlannerItem, status: str, at: time | None = None) -> None:
+    """상태를 바꾸고 실제 도착·완료 기록을 맞춘다. at 은 visiting 이면 도착, done 이면 완료 시각."""
+    item.status = status
+    if status in ("planned", "skipped"):
+        item.arrived_at = item.done_at = None
+    elif status == "visiting":
+        item.done_at = None
+        if at is not None:
+            item.arrived_at = at
+    elif at is not None:  # done
+        item.done_at = at
+
+
 def check_day(plan: PlannerPlan, day: int) -> None:
     if not 1 <= day <= plan.num_days:
         raise PlannerError(422, "day_out_of_range", f"day 는 1~{plan.num_days} 사이여야 합니다 (여행 {plan.num_days}일).",
@@ -179,7 +199,9 @@ def require_place(places: PlaceLookup, place_id: str) -> PlaceInfo:
 # ---------- 스냅샷 덮어쓰기 ----------
 
 def overwrite(plan: PlannerPlan, after: PlanDetail) -> None:
-    """계획을 after 스냅샷과 같게 맞춘다. 남아 있는 항목·규칙은 id 를 유지하고, 없어진 것은 새로 만든다."""
+    """계획을 after 스냅샷과 같게 맞춘다. 남아 있는 항목·규칙은 id 를 유지하고, 없어진 것은 새로 만든다.
+    남아 있는 항목의 진행 상태(planned/visiting/done 과 도착·완료 시각)는 지금 값을 유지한다. 스냅샷은 제안 당시라
+    그 뒤의 도착·완료를 모르기 때문이다. 건너뜀(skipped)으로 바꾸거나 되돌리는 것은 일정 변경이라 스냅샷을 따른다."""
     for f in PLAN_FIELDS:
         setattr(plan, f, getattr(after, f))
 
@@ -191,10 +213,13 @@ def overwrite(plan: PlannerPlan, after: PlanDetail) -> None:
             if item is None:
                 item = PlannerItem()
                 plan.items.append(item)
+                item.status, item.arrived_at, item.done_at = v.status, v.arrived_at, v.done_at
             else:
                 keep.add(v.id)
+                if v.status == "skipped" or item.status == "skipped":
+                    item.status, item.arrived_at, item.done_at = v.status, v.arrived_at, v.done_at
             item.place_id, item.day, item.position = v.place_id, v.day, v.order
-            item.stay_minutes, item.start_time, item.memo, item.status = v.stay_minutes, v.start_time, v.memo, v.status
+            item.stay_minutes, item.start_time, item.memo = v.stay_minutes, v.start_time, v.memo
             item.travel_mode = v.travel_mode
     for item_id, item in current.items():
         if item_id not in keep:
@@ -232,7 +257,8 @@ def clone(plan: PlannerPlan) -> PlannerPlan:
     return copy
 
 
-def detail(plan: PlannerPlan, places: PlaceLookup) -> PlanDetail:
+def detail(plan: PlannerPlan, places: PlaceLookup, actual: Actual | None = None) -> PlanDetail:
+    """계획 + 계산한 일정. actual 이 있으면 그날을 현재 기준으로 다시 계산한다 (project)."""
     ids = {i.place_id for i in plan.items}
     ids |= {c.params["place_id"] for c in plan.constraints if "place_id" in c.params}
     infos: dict[str, PlaceInfo | None] = {}
@@ -250,7 +276,7 @@ def detail(plan: PlannerPlan, places: PlaceLookup) -> PlanDetail:
         for mode in ("walk", "car"):
             for (a, b), leg in zip(pairs, lookup.legs(pairs, mode)):
                 table[(a.id, b.id, mode)] = leg
-    days, violations = build_schedule(plan, infos, table)
+    days, violations = build_schedule(plan, infos, table, actual)
     fields = PlanSummary.model_fields.keys() - {"item_count"}
     return PlanDetail(
         **{k: getattr(plan, k) for k in fields},
@@ -337,7 +363,7 @@ def diff(before: PlanDetail, after: PlanDetail) -> list[Change]:
         if o.start_time != i.start_time:
             parts.append(f"시작 고정 {o.start_time.strftime('%H:%M') if o.start_time else '없음'} → "
                          f"{i.start_time.strftime('%H:%M') if i.start_time else '없음'}")
-        if o.status != i.status:
+        if o.status != i.status and not (o.status in PROGRESS and i.status in PROGRESS):  # 진행 상태는 일정 변경이 아님
             parts.append(f"상태 {o.status} → {i.status}")
         if o.travel_mode != i.travel_mode:
             mode = {None: "계획 기본", "walk": "도보", "car": "차량"}
@@ -366,3 +392,65 @@ def diff(before: PlanDetail, after: PlanDetail) -> list[Change]:
                 out.append(Change(kind="day_end", day=d.day,
                                   message=f"{d.day}일차 종료: {ends[d.day] or '없음'} → {d.end_at or '없음'}"))
     return out
+
+
+# ---------- 현재 기준 재계산 (여행 중) ----------
+
+POSITION_ID = "@position"  # 이동 중 현재 위치를 이동시간 조회에 넣을 때 쓰는 장소 id
+
+
+def _place(places: PlaceLookup, place_id: str) -> PlaceInfo | None:
+    try:
+        return places.get(place_id)
+    except PlacesUnavailable:
+        return None
+
+
+def _anchor(plan: PlannerPlan, places: PlaceLookup, day: int, now: int,
+            position: PositionVisiting | PositionMoving | None) -> Actual:
+    """지금 위치(없으면 저장된 진행 상태)로 그날 재계산의 기준점을 정한다."""
+    items = sorted((i for i in plan.items if i.day == day and i.status != "skipped"), key=lambda i: i.position)
+    if isinstance(position, PositionVisiting):
+        item = next((i for i in plan.items if i.id == position.item_id), None)
+        if item is None:
+            raise PlannerError(404, "item_not_found", f"일정 항목 {position.item_id} 이 없습니다.")
+        if item not in items:
+            raise PlannerError(422, "invalid_position", f"항목 {item.id} 은 {day}일차의 (건너뛰지 않은) 항목이 아닙니다.",
+                               item_id=item.id)
+        at = position.arrived_at or item.arrived_at
+        return Actual(day, now, item.id, to_min(at) if at else now)
+    if isinstance(position, PositionMoving):
+        # 향하는 항목: 마지막으로 다녀온(머문) 항목 뒤의 첫 planned 항목
+        last = max((n for n, i in enumerate(items) if i.status in ("done", "visiting")), default=-1)
+        target = next((i for i in items[last + 1:] if i.status == "planned"), None)
+        if target is None:
+            return Actual(day, now)
+        dest = _place(places, target.place_id)
+        minutes = 0
+        if dest is not None:
+            here = PlaceInfo(id=POSITION_ID, title="현재 위치", lat=position.lat, lng=position.lng)
+            minutes = get_travel_lookup().legs([(here, dest)], leg_mode(plan, target))[0].minutes
+        return Actual(day, now, target.id, now + minutes, moving=True)
+    here = [i for i in items if i.status == "visiting"]
+    if here:  # 저장된 진행 상태로: 머무는 항목 (여럿이면 일정상 마지막)
+        return Actual(day, now, here[-1].id, to_min(here[-1].arrived_at) if here[-1].arrived_at else now)
+    return Actual(day, now)
+
+
+def project(plan: PlannerPlan, places: PlaceLookup, day: int, now: time,
+            position: PositionVisiting | PositionMoving | None) -> ProjectionResult:
+    """그날을 지금 기준으로 다시 계산해 기준 일정과 비교한다 (저장 안 함). docs/planner/README.md §8."""
+    check_day(plan, day)
+    baseline = detail(plan, places)
+    actual = _anchor(plan, places, day, to_min(now), position)
+    projected = detail(plan, places, actual)
+    next_id = validation.next_item_id(plan, actual)
+    nxt = None
+    if next_id is not None:
+        b = next(i for i in baseline.days[day - 1].items if i.id == next_id)
+        p = next(i for i in projected.days[day - 1].items if i.id == next_id)
+        nxt = ProjectionNext(item_id=next_id, planned_start=b.start_at, eta=p.arrive_at, start_at=p.start_at)
+    return ProjectionResult(
+        day=day, now=now.strftime("%H:%M"), plan=projected, baseline_violations=baseline.violations,
+        new_violations=validation.new_violations(baseline.violations, projected.violations),
+        delay_minutes=validation.delay_minutes(baseline.days, projected.days, day, next_id), next=nxt)
