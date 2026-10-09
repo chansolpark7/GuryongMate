@@ -25,6 +25,7 @@ LLM은 일정을 직접 바꾸지 않는다. 결과는 두 종류의 **카드**�
 | 404 | `proposal_not_found` / `recommendation_not_found` / `candidate_not_found` | 대상이 없거나 **이 세션이 만든 카드가 아님** |
 | 404 | `plan_not_found` | 세션 생성 시 계획이 없음 |
 | 409 | `agent_busy` | 이 세션이 응답을 만드는 중 (§4.4) |
+| 429 | `rate_limited` | 사용자당 LLM 호출 수 한도를 넘음 (대화·선제 턴·가이드 준비, `AGENT_LIMIT_*`, 공개 서버). 추가 필드 `kind`·`limit`·`window`(`1시간`·`하루`)·`retry_after`(초). `message` 를 그대로 보여주면 된다 |
 | 409·422 | planner 오류 코드 | 카드 동작(승인·추가 등)에서 planner가 거부한 경우, 코드와 추가 필드를 **그대로** 전달 (예: 409 `base_changed`) |
 | 503 | `upstream_unavailable` | planner·places 서비스에 접근할 수 없거나, 형식 없는 서버 오류(게이트웨이 502 등)를 돌려줌. planner가 더 구체적인 코드(예: `places_unavailable`)를 주면 그 코드를 그대로 전달 |
 
@@ -41,6 +42,7 @@ LLM은 일정을 직접 바꾸지 않는다. 결과는 두 종류의 **카드**�
 | GET | `/agent/sessions/{session_id}` | | 200 `SessionDetail` |
 | DELETE | `/agent/sessions/{session_id}` | | 204 (대화 기록 삭제. 이미 만든 제안·추천은 planner에 남는다) |
 | GET | `/agent/info` | | 200 `{"provider": "claude:claude-haiku-5-5"}` (디버깅용. 각본 LLM 이면 `scripted:scripts`) |
+| GET | `/agent/limits` | | 200 내 LLM 호출 수와 한도: `{"chat"|"event"|"guide": {"hour"|"day": {"used", "limit"}}}` (`limit` null = 제한 없음, 이때는 세지 않아 `used` 0) |
 | POST | `/agent/plans/{plan_id}/guide/prepare` | `GuidePrepareRequest` (생략 가능) | 202 `GuideJobView` — 가이드 준비 작업 (§12) |
 | GET | `/agent/plans/{plan_id}/guide/jobs/{job_id}` | | 200 `GuideJobView` (§12) |
 | DELETE | `/agent/me` | | 204 — 이 사용자의 세션·메시지를 모두 삭제 (account 탈퇴가 부른다) |
@@ -280,6 +282,9 @@ LLM은 일정을 직접 바꾸지 않는다. 결과는 두 종류의 **카드**�
 | `AGENT_WEB_SEARCH_CONTEXT` | `low` | OpenAI 내장 검색 `search_context_size` (`low`·`medium`·`high`, 클수록 비쌈) |
 | `AGENT_GUIDE_MAX_STEPS` | `6` | 가이드 준비 작업에서 장소 하나의 LLM 호출 최대 횟수 (마지막은 도구 없이 노트 JSON 강제) |
 | `AGENT_GUIDE_PASSAGES` | `6` | 가이드 준비 작업이 장소마다 미리 찾아 주는 근거 조각 수 |
+| `AGENT_LIMIT_CHAT_HOUR`·`_DAY` | `0` | 사용자당 대화 턴(다시 제안 포함) 상한, 1시간·24시간. `0` 이면 제한 없음(개발 기본). 공개 서버 값: `deploy/backend.env.example` (docs/deploy/README.md §3.3) |
+| `AGENT_LIMIT_EVENT_HOUR`·`_DAY` | `0` | 선제 턴 상한. 넘으면 trip 이 실패로 세고 다시 보낸다 |
+| `AGENT_LIMIT_GUIDE_HOUR`·`_DAY` | `0` | 가이드 준비 작업 상한 (새 작업 하나 = 계획의 장소 여러 곳) |
 | `AGENT_SCRIPTED_DIR` | (비움) | 각본 LLM 의 각본 디렉터리 (§7.2). 비우면 `backend/app/agent/scripts` |
 | `AGENT_SCRIPTED_DELAY_MS` | `30` | 각본 LLM 이 텍스트·추론 조각(6자) 사이에 두는 지연. 0 이면 바로 |
 | `AGENT_SCRIPTED_LATENCY_MS` | `300` | 각본 LLM 호출마다 첫 조각 전 지연 (실제 LLM 의 첫 토큰 지연 흉내) |

@@ -4,6 +4,7 @@ Google 계정 로그인과 ID/비밀번호 로그인을 제공하고, 다른 서
 다른 서비스(planner, agent …)는 account를 호출하지 않고 공용 코드(`app.core.auth`)로 토큰 서명만 확인한다.
 
 결정 사항
+- **공개 서버**(docs/deploy/README.md §3)는 가입(`POST /auth/signup`)을 게이트웨이에서 관리 토큰으로만 연다. 팀원·멘토 계정은 `deploy/create_user.sh` 로 만든다. Google 로그인(계정 자동 생성)은 서버에서 켜지 않는다.
 - 로그인 방식마다 **별도 계정**이다. 같은 이메일로 Google 로그인과 ID/비밀번호 가입을 하면 서로 다른 계정이 된다.
 - 토큰은 **access(1시간) + refresh(30일)**를 쓴다. refresh는 한 번 쓰면 새로 바뀐다(rotation).
 - 비밀번호 찾기(재설정)는 이번 범위에서 빼고, 로그인한 상태에서 비밀번호 변경만 지원한다.

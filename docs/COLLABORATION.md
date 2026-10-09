@@ -42,7 +42,7 @@ LLM: Claude API(운영 기본, Haiku 5.5) · OpenAI · 호스트 Ollama(host.doc
 - `backend/`는 하나의 Python 프로젝트·이미지다. compose가 같은 이미지를 `SERVICE=places`, `SERVICE=planner`처럼 **환경변수만 다르게** 여러 번 띄운다.
 - `SERVICE=places`인 컨테이너는 `app/places/`의 **테이블과 API만** 연다. 서비스 문서도 `/places/docs`에만 있다.
 - `SERVICE=all`(기본값)은 모든 모듈을 한 프로세스로 띄운다. 테스트(`backend/tests/conftest.py`)가 이 모드를 쓴다.
-- **새 서비스 추가**: `backend/app/<이름>/`에 `router.py`·`models.py`를 만들고, compose에 `SERVICE: <이름>` 서비스와 `infra/gateway/Caddyfile`에 경로 한 줄을 추가한다(공용 파일 변경 → 별도 커밋).
+- **새 서비스 추가**: `backend/app/<이름>/`에 `router.py`·`models.py`를 만들고, compose에 `SERVICE: <이름>` 서비스(`docker-compose.yml`과 운영용 `docker-compose.prod.yml` 둘 다)와 `infra/gateway/routes.caddy`에 경로 한 줄을 추가한다(공용 파일 변경 → 별도 커밋).
 - 무거운 런타임(모델 서버 등)은 `services/<이름>/`에 별도 Dockerfile로 둔다. 백엔드 이미지를 가볍게 유지하기 위해서다.
 
 ### 공용 파일 (수정 시 반드시 별도 커밋, 가능하면 `dev`에 먼저 반영)
@@ -110,8 +110,10 @@ docker compose run --rm planner pytest tests/planner   # 테스트 (어느 백�
 - 백엔드 코드는 볼륨으로 마운트되고 `--reload`로 실행된다. 저장하면 각 서비스가 재시작된다. 임베딩 모델은 별도 컨테이너라 영향이 없다.
 - `places-init`은 비어 있는 것만 채운다. 장소 데이터를 다시 적재하려면 `docker compose run --rm places python -m app.places.ingest load --embed`를 실행한다.
 - DB를 완전히 초기화하려면 `docker compose down -v` 후 `up`.
-- **게이트웨이 설정(`infra/gateway/Caddyfile`)은 자동으로 다시 읽히지 않는다.** 바뀌면 `docker compose restart gateway`.
+- **게이트웨이 설정(`infra/gateway/Caddyfile`, 경로는 `routes.caddy`)은 자동으로 다시 읽히지 않는다.** 바뀌면 `docker compose restart gateway`.
   `up -d --build`만으로는 게이트웨이 컨테이너가 재시작되지 않아, 새 경로(예: `/safety`)가 `{"detail":"Not Found"}`로 나온다.
+
+- **공개 서버(GCP VM)** 는 `main` 만 운영 compose(`docker-compose.prod.yml`)로 배포한다. 노트북에서 `deploy/update.sh` — [docs/deploy/README.md](deploy/README.md)
 
 ### 메모리 (Docker Desktop 한도 약 3.8GB)
 
@@ -151,5 +153,5 @@ API 키는 각 worktree의 `backend/.env`에 둔다 (`backend/.env.example` 참�
 1. 작업 전 `git merge dev`로 최신 공용 파일을 반영한다.
 2. 기능 브랜치를 `dev`에 머지한다. 공용 파일 충돌이 나면 양쪽 변경을 모두 살리는 방향으로 해결한다.
 3. `docker compose up -d --build` 후 `curl :8000/health`와 `docker compose run --rm places pytest tests`(전체 테스트) 통과를 확인한다.
-   - 머지로 `Caddyfile`이 바뀌었으면 `docker compose restart gateway` 후 새 경로가 열리는지(`curl :8000/<서비스>/docs`)도 확인한다.
+   - 머지로 `Caddyfile`·`routes.caddy`가 바뀌었으면 `docker compose restart gateway` 후 새 경로가 열리는지(`curl :8000/<서비스>/docs`)도 확인한다.
    - `backend/.env.example`에 새 항목이 생겼으면 자기 `backend/.env`에도 추가한다 (예: safety 의 `DT_SERVICE_KEY`).

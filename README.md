@@ -121,7 +121,7 @@ GuryongMate/
 
 | 브랜치 | 용도 |
 |---|---|
-| `main` | 데모 가능한 안정 버전 |
+| `main` | 데모 가능한 안정 버전. 공개 테스트·발표 서버(GCP VM)에는 main 만 배포한다 — [docs/deploy/README.md](docs/deploy/README.md) |
 | `dev` | 통합 브랜치. 기능 브랜치를 여기에 머지 |
 | `feat/<기능>` | 기능 개발 (기능마다 git worktree를 따로 쓴다) |
 

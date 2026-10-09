@@ -4,7 +4,7 @@
 
 | | |
 |---|---|
-| 서버 | GCP VM 에서 `docker compose` 전체 스택 (gateway 하나로 접속) |
+| 서버 | GCP VM 에서 운영 compose(`docker-compose.prod.yml`) 전체 스택, gateway 하나로 접속. 배포·운영: [docs/deploy/README.md](../deploy/README.md) |
 | 앱 | 노트북의 Android 에뮬레이터. **데모 위치 모드**(설정 33)로 서버에 들어온 위치를 지도에 그린다 (발표장은 구룡포가 아니다) |
 | 진행 | `scripts/demo/run_demo.py` — 노트북에서 실행, 서버에 위치·시각·가상 상황·대화를 보내고 단계마다 앱에 보여야 할 것을 안내 |
 | 장면 | PROJECT.md §3 의 4장면을 **한 계획으로 이어서** (① 계획 → ② 도착·해설 → ③ 지연 → ④ DT 안전) |
@@ -27,7 +27,7 @@
 - 시각은 safety 의 가상 시각 하나를 모든 서비스가 따른다 (docs/trip/README.md §5). 스크립트가 장면마다 10/9 10:00(여행 전날) → 10/10 12:25 … 로 옮긴다.
 - 장면 ④ 의 '실제 DT 데이터 → 가상 악천후' 전환은 safety 의 `SAFETY_SIM_ENABLED=true` 가 필요하다 (docs/safety/README.md §1 `/safety/sim`).
 
-### 서버 설정 (VM 의 `backend/.env`, 루트 `.env`)
+### 서버 설정 (VM `~/guryongmate/backend.env`, `.env` — docs/deploy/README.md §2)
 
 | 변수 | 발표 값 | 왜 |
 |---|---|---|
@@ -36,16 +36,18 @@
 | `SAFETY_SOURCE` | `live` | 실제 E-UM 디지털트윈·기상청 데이터로 시작 |
 | `SAFETY_SIM_ENABLED` | `true` | 실행 중 실제 ↔ 가상 전환, 가상 시각 |
 | `DT_SERVICE_KEY`, `DATA_GO_KR_SERVICE_KEY` | (키) | 실제 데이터. 없으면 장면 ④ 실데이터 단계만 '판단 보류' 로 보인다 |
-| `AUTH_REQUIRED` | `true` | 공개 VM 이므로 로그인 필수. 대신 즉시 안전 점검(`POST /planner/safety/scan`)을 못 쓴다 → 아래 |
-| `PLANNER_SAFETY_WATCH_SEC` (루트 `.env`) | `10` | 기본 60초. 가상 악천후로 바꾼 뒤 planner 가 상황 변화를 알아채는 주기 — 장면 ④ 의 선제 턴이 이만큼 늦게 시작한다 |
-| `TRIP_TICK_SEC` (루트 `.env`) | 기본 30 | 스크립트가 필요한 때 틱을 직접 부른다 |
+| `AUTH_REQUIRED` | `true` | 공개 VM 이므로 로그인 필수 (운영 compose 가 고정). 즉시 안전 점검(`POST /planner/safety/scan`)·가상 상황 변경·trip 틱은 **관리 토큰**으로만 (아래) |
+| `PLANNER_SAFETY_WATCH_SEC` (`.env`) | `10` | 운영 compose 기본 10. 관리 토큰이 있으면 진행 스크립트가 즉시 점검을 부르므로 기다리지 않는다 (토큰 없이는 이 주기만큼 늦게 시작) |
+| `TRIP_TICK_SEC` (`.env`) | 기본 30 | 스크립트가 필요한 때 틱을 직접 부른다 (관리 토큰 필요) |
+| `GATEWAY_ADMIN_TOKEN` (`.env`) | (첫 배포가 생성) | 데모 조작 API 를 여는 관리 토큰. 진행 스크립트는 환경변수 `GURYONG_ADMIN_TOKEN` 으로 받는다: `export GURYONG_ADMIN_TOKEN=$(deploy/admin_token.sh)` |
+| `AGENT_LIMIT_*` | 시간당 대화 30 등 | 사용자당 LLM 호출 수 제한 (docs/deploy/README.md §3.3). 리허설을 여러 번 하면 데모 사용자가 걸릴 수 있다 → 발표 전 `GET /agent/limits` 확인 |
 
 ---
 
 ## 2. 발표 당일 체크리스트
 
 ### T-60분 (서버)
-- [ ] `docker compose ps` — 모든 서비스 `healthy`/`running` (places-init 은 `exited 0`)
+- [ ] `deploy/status.sh` (노트북) — 모든 서비스 `healthy`/`running` (places-init 은 `exited 0`), 헬스 체크·디스크·메모리
 - [ ] 서비스 점검 (진행 스크립트 시작 화면도 같은 것을 보여준다, T-15):
   ```bash
   curl http://<VM>:8000/agent/info          # {"provider": "claude:claude-haiku-5-5"}
@@ -70,6 +72,7 @@
 
 ### T-15분 (진행 스크립트)
 ```bash
+export GURYONG_ADMIN_TOKEN=$(deploy/admin_token.sh)    # 관리 토큰 (공개 서버의 가상 상황·즉시 점검·틱)
 python scripts/demo/run_demo.py --url http://<VM>:8000
 ```
 - 시작 화면에서 **LLM**(`claude:claude-haiku-5-5` 초록 / `scripted` 노랑), **안전**(실제 ↔ 가상 전환 가능), **길찾기**(Valhalla 정상)를 확인한다.
@@ -150,13 +153,11 @@ python scripts/demo/run_demo.py --url http://<VM>:8000 --chat app          # 대
 **각본 LLM 으로 바꾼다** (`AGENT_PROVIDER=scripted`). 실제 LLM 을 부르지 않고 데모 문장에 정해진 답을 한다 (docs/agent/README.md §7.2).
 
 ```bash
-# VM 에서 (저장소 루트)
-sed -i 's/^AGENT_PROVIDER=.*/AGENT_PROVIDER=scripted/' backend/.env
-docker compose up -d agent          # agent 컨테이너만 다시 만든다 (env_file 변경 반영)
-curl -s localhost:8000/agent/info   # {"provider": "scripted:scripts"}
+# 노트북에서 (VM 의 backend.env 를 바꾸고 agent 컨테이너만 다시 만든다)
+deploy/llm.sh scripted             # {"provider": "scripted:scripts"}
 ```
 - 걸리는 시간: **약 6~8초** (§6 실측). 그 뒤 실패한 단계를 다시 하거나 빨리 감기(각본 LLM 이면 장면 ④ 앞까지 약 40초).
-- 되돌리기: 같은 명령으로 `AGENT_PROVIDER=claude`.
+- 되돌리기: `deploy/llm.sh claude`.
 - 바꾼 뒤 이어서 하기:
   - **대화 단계**(`s1_chat`·`s2_ask`·`s2_shorter`·`s3_keep`·`s1_cafe`)에서 실패: 그 단계에서 `r`(다시).
   - **선제 턴**(`s3_delay`·`s4_storm`)이 실패: 같은 원인으로는 다시 알리지 않는다 (중복 억제, docs/trip/README.md §4.1). 진행 스크립트를 끝내고(`q`)
@@ -176,7 +177,7 @@ curl -s localhost:8000/agent/info   # {"provider": "scripted:scripts"}
 - 실제 날씨가 이미 나쁘면(실데이터에 주의·위험) `s4_live` 로 바꾸는 순간 planner 가 실제 위험으로 경고를 낼 수 있다. 이것도 이야기가 되지만, 흐름을 지키려면 `s4_live` 를 건너뛴다.
 
 ### 4.3 서버 다운 (게이트웨이 응답 없음·5xx 연속)
-- 1분 안에 판단한다: VM 에서 `docker compose ps` → 멈춘 서비스만 `docker compose restart <서비스>` (수십 초).
+- 1분 안에 판단한다: `deploy/status.sh` → 멈춘 서비스만 VM 에서 `cd ~/guryongmate && docker compose -f docker-compose.prod.yml restart <서비스>` (수십 초).
   전체를 다시 띄우면 수 분 걸린다 (임베딩·Valhalla 준비).
 - 1분 안에 안 되면 **백업 영상**(§5)으로 넘어간다. 영상은 장면별로 잘라 두어 이어서 틀 수 있게 한다.
 - 다시 살아나면 `--fast-to <다음 장면 첫 단계>` 로 이어서 할 수 있다 (가상 시각 맞춤 포함).

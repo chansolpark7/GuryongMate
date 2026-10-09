@@ -11,7 +11,7 @@ name: guryongmate
 x-logging: &logging
   driver: json-file
   options:
-    max-size: "10m"   # 컨테이너마다 로그 최대 30MB (디스크가 작다)
+    max-size: "5m"    # 컨테이너마다 로그 최대 15MB, 13개 합쳐 200MB 이하 (디스크가 작다)
     max-file: "3"
 
 x-backend: &backend
