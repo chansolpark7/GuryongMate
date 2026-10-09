@@ -334,8 +334,8 @@ def note_body(raw: dict, toolbox: Toolbox) -> tuple[dict | None, str]:
             picked.append(src)
     sources, keys = [], set()
     for s in picked + toolbox.citations:
-        # 근거 조각은 주소가 같고(관광공사) 제목으로 구분, 웹 자료는 주소로 구분
-        key = (s["url"], s["title"] if s["url"] == KTO_SOURCE_URL else "")
+        # 근거 조각은 주소가 같거나(관광공사) 없어서(직접 정의한 장소) 제목으로 구분, 웹 자료는 주소로 구분
+        key = (s["url"], s["title"] if s["url"] in (KTO_SOURCE_URL, "") else "")
         if key in keys:
             continue
         keys.add(key)

@@ -40,7 +40,7 @@ LLM은 일정을 직접 바꾸지 않는다. 결과는 두 종류의 **카드**�
 | GET | `/agent/sessions?plan_id=` | | 200 `SessionView[]` (최근 대화순) |
 | GET | `/agent/sessions/{session_id}` | | 200 `SessionDetail` |
 | DELETE | `/agent/sessions/{session_id}` | | 204 (대화 기록 삭제. 이미 만든 제안·추천은 planner에 남는다) |
-| GET | `/agent/info` | | 200 `{"provider": "openai:gpt-5.4-mini"}` (디버깅용) |
+| GET | `/agent/info` | | 200 `{"provider": "claude:claude-haiku-5-5"}` (디버깅용. 각본 LLM 이면 `scripted:scripts`) |
 | POST | `/agent/plans/{plan_id}/guide/prepare` | `GuidePrepareRequest` (생략 가능) | 202 `GuideJobView` — 가이드 준비 작업 (§12) |
 | GET | `/agent/plans/{plan_id}/guide/jobs/{job_id}` | | 200 `GuideJobView` (§12) |
 | DELETE | `/agent/me` | | 204 — 이 사용자의 세션·메시지를 모두 삭제 (account 탈퇴가 부른다) |
@@ -254,7 +254,7 @@ LLM은 일정을 직접 바꾸지 않는다. 결과는 두 종류의 **카드**�
 
 | 변수 | 기본값 | 설명 |
 |---|---|---|
-| `AGENT_PROVIDER` | `openai` | `openai`(기본, gpt-5.4-mini), `local`(Ollama 등) 또는 `claude`(Claude API, §7.1) |
+| `AGENT_PROVIDER` | `claude` | **운영 기본 `claude`**(Claude API, Haiku 5.5, §7.1). `openai`(gpt-5.4-mini), `local`(Ollama 등), `scripted`(각본 LLM — 개발·테스트·비상 데모, LLM 호출 없음, §7.2) |
 | `AGENT_LOCAL_API` | `ollama` | `ollama`(네이티브 API, 권장) 또는 `openai`(LM Studio·vLLM 같은 OpenAI 호환 서버) |
 | `AGENT_LOCAL_BASE_URL` | `http://host.docker.internal:11434` | 호스트의 Ollama. OpenAI 호환 서버면 `…/v1`까지 |
 | `AGENT_LOCAL_MODEL` | `qwen3.6:35b` | |
@@ -280,6 +280,9 @@ LLM은 일정을 직접 바꾸지 않는다. 결과는 두 종류의 **카드**�
 | `AGENT_WEB_SEARCH_CONTEXT` | `low` | OpenAI 내장 검색 `search_context_size` (`low`·`medium`·`high`, 클수록 비쌈) |
 | `AGENT_GUIDE_MAX_STEPS` | `6` | 가이드 준비 작업에서 장소 하나의 LLM 호출 최대 횟수 (마지막은 도구 없이 노트 JSON 강제) |
 | `AGENT_GUIDE_PASSAGES` | `6` | 가이드 준비 작업이 장소마다 미리 찾아 주는 근거 조각 수 |
+| `AGENT_SCRIPTED_DIR` | (비움) | 각본 LLM 의 각본 디렉터리 (§7.2). 비우면 `backend/app/agent/scripts` |
+| `AGENT_SCRIPTED_DELAY_MS` | `30` | 각본 LLM 이 텍스트·추론 조각(6자) 사이에 두는 지연. 0 이면 바로 |
+| `AGENT_SCRIPTED_LATENCY_MS` | `300` | 각본 LLM 호출마다 첫 조각 전 지연 (실제 LLM 의 첫 토큰 지연 흉내) |
 
 새 공급자는 `llm.py`에 같은 이벤트(`TextDelta`, `ReasoningDelta`, `ToolCall`, `Finish`)를 내는 Provider를 추가하면 된다.
 내장 웹 검색을 지원하면 `builtin_web_search = True` 로 두고 `stream(..., web_search=n)` 을 받아 `WebSearchCall`(검색 한 번)·`Citation`(인용 URL)을 낸다.
@@ -303,6 +306,9 @@ LLM은 일정을 직접 바꾸지 않는다. 결과는 두 종류의 **카드**�
 - 가격: 입력 $0.75, 캐시된 입력 $0.075, 출력(추론 포함) $4.50 / 100만 토큰
 - 시나리오 4종 18턴(5턴 대화 포함): 턴당 평균 입력 4.1만 토큰(그중 83%가 캐시), 출력 800토큰, LLM 호출 5.3회
 - **턴당 평균 약 $0.011 (약 16원), 최대 $0.025 (약 37원)**. 로그(`[agent] session=… usage`)와 `done.usage`로 확인할 수 있다.
+
+운영은 Claude API(Haiku 5.5)다 (2026-10-09 결정, 아래 비교). 키 없이 서버를 띄우면 Agent 턴은 `llm_unavailable` 로 끝난다 —
+개발·테스트·앱 화면 검증에서 LLM 을 부르지 않으려면 `AGENT_PROVIDER=scripted`(§7.2).
 
 ### 7.1 Claude API (`AGENT_PROVIDER=claude`)
 
@@ -396,6 +402,64 @@ Sonnet 5.5 의 thinking 블록도 읽지 못한다. Haiku 5.5 에는 서버측 f
 - 같은 날 확인: chat 두 턴(두 번째 턴 입력의 86% 캐시), 장면 ③ 재생(`--speed 0`, 기대 4개 통과)에서 delay 선제 턴이 근거 + 추천안 1개(체류 줄여 17:27 종료)
   + "다른 방법" 한 줄로 답했고, "과메기문화관은 꼭 가고 싶어"에는 `must_include` 규칙을 넣은 새 제안이 이전 제안을 대체했다 (Sonnet 5.5).
 
+### 7.2 각본 LLM (`AGENT_PROVIDER=scripted`)
+
+`backend/app/agent/scripted_llm.py`의 `ScriptedProvider`. **실제 LLM 을 부르지 않고** 각본 파일대로 답한다. 같은 입력에 매번 같은
+도구 호출·텍스트를 내므로 앱 화면 검증, fixture 녹화(`scripts/app/record_fixtures.py`, docs/app/fixtures.md), 테스트, 키·네트워크가 없을 때의
+**비상 데모**에 쓴다. 운영에는 쓰지 않는다.
+
+- **도구는 진짜로 실행된다**: 각본은 "어떤 도구를 어떤 인자로 부를지"와 최종 답변만 정한다. 하네스가 도구를 실행하므로 planner 제안·추천 카드,
+  docent 메모리, 가이드 노트, 검토 관문, base_changed·progress_changed·agent_busy 같은 흐름과 SSE(`status`·`step`·`thinking`·`text`·`proposal`·
+  `recommendation`·`steps_done`·`done`)는 실제와 같다. `usage` 는 0 (토큰을 쓰지 않음), `calls` 는 각본 단계 수.
+- **스트리밍**: 텍스트·추론을 6자 조각으로 나눠 `AGENT_SCRIPTED_DELAY_MS`(30ms) 간격, 호출마다 `AGENT_SCRIPTED_LATENCY_MS`(300ms) 뒤에 보낸다.
+  가이드 노트 JSON 은 화면에 흐르지 않으니 400자 조각으로 보낸다.
+- **상태가 없다**: 호출마다 메시지 목록에서 지금 상황을 읽는다 — 턴의 사용자 메시지(하네스 안내 `[시스템] …` 제외), 그 뒤 assistant 메시지 수(각본의 몇 번째 단계),
+  선제 턴(`[이벤트] 일정 지연: …` → `delay`), 가이드 준비(시스템 프롬프트·`## 장소 (place_id …)`), 동행 모드(`## 현재 상황 (여행 중)`), 대기 제안(`## 승인 대기 중인 제안`),
+  검토 관문이 되돌린 호출(마지막 메시지가 검토 안내).
+- **각본 파일** `backend/app/agent/scripts/*.json` (이름순으로 이어 붙이고, 위에서부터 처음 맞는 턴을 쓴다. 파일을 고치면 다음 호출부터 다시 읽는다):
+
+  ```jsonc
+  {"fallback": "맞는 각본이 없을 때 답 (기본: 데모 문장으로 말해 달라는 안내)",
+   "turns": [{"id": "scene3_keep_museum",
+              "when": {"user": "과메기\s*문화관.*유지", "pending": true},   // user(정규식) | event(delay·safety_raised) | guide_place(정규식)
+                                                                           // | mode(plan·guide) | pending | system(정규식). 모두 맞아야 함
+              "steps": [{"thinking": "…", "tools": [{"name": "discard_changes"}]},
+                        {"tools": [{"name": "add_rule", "args": {"type": "must_include", "place_id": "kto-2660046"}}]},
+                        {"tools": [{"name": "update_item", "args": {"item_id": "$item:kto-2610501", "stay_minutes": 30}}]},
+                        {"text": "… {{end:1}}에 끝나 18시 전에 마칠 수 있어요."}],   // 마지막 단계(도구 없음)가 답변. {"json": {…}} 은 노트 JSON
+              "on_review": [ … ],          // 검토 관문이 되돌리면 이어서 할 단계 (없으면 같은 답을 다시 낸다 -> 관문 횟수만큼 되돌린 뒤 제안)
+              "error": "llm_unavailable"}]} // 이 턴은 LLM 오류 (llm_unavailable | llm_quota | llm_refused)
+  ```
+- **참조** (도구 결과에 따라 달라지는 값): 인자 값 전체가 `"$…"` 이거나 텍스트 안의 `{{…}}`.
+  `item:<place_id>` 지금 일정(가장 최근 도구 결과의 일정, 없으면 시스템 프롬프트의 현재 일정)의 항목 id — 이번 턴에 넣은 항목은 음수 임시 id /
+  `order:<place_id>` 순서 / `start:<place_id>` 시작 시각 / `end:<n>` n일차 종료 시각 / `last:<도구>.<경로>` 이번 턴 그 도구의 최근 결과
+  (예: `last:search_places.items[0].place_id`) / `memory:<분류>` view_memory·remember 결과의 항목 id. 못 찾으면 인자는 빠지고 텍스트는 빈 문자열.
+- 그 호출에 주지 않은 도구는 부르지 않는다 (예: 선제 턴의 `recommend_places`) — 실제 모델과 같게.
+
+**데모 각본** (`scripts/demo.json`, `scripts/guide_notes.json`, 데모 데이터 docs/app/README.md §6.1)
+
+| 각본 id | 언제 | 하는 일 |
+|---|---|---|
+| `scene1_plan` | "엄마랑 구룡포 일정 짜줘" (엄마·어머니 + 일정·코스 + 짜·만들) | 동행 기억(plan) → 장소 찾기 5번 → `end_before 18:00` → 5곳 추가 → 검토. 관문이 문제 3건(북방파제→카페 도보 45분 `long_walk`, 그래서 18:10 종료 — `day_overflow`·`end_before`)으로 되돌리면 그 구간을 차량으로 → 문제 없음 → 제안 카드 (17:38 종료) |
+| `scene1_recommend_cafe` | "갈 만한 카페 추천해줘" | 추천 카드 (카페파도·까멜리아인구룡포) |
+| `f2_longer_lunch` / `f2_repropose_lunch` | "구룡포항 점심은 1시간으로 늘려줘" / 그 제안의 다시 제안 | 구룡포항 50→60분 (base_changed 녹화용) |
+| `repropose_default` | 그 밖의 다시 제안 | 일정 확인 후 "바꿀 것 없음" |
+| `scene2_house_built` · `scene2_name` | "언제 지어진 집들이에요?" · "왜 이름이 구룡포야?" | 가이드 노트 확인 → 자료 찾기 → 해설 |
+| `scene2_shorter` | "더 짧게" | `remember(style, "해설은 핵심만 짧게", user)` → `style_length: short` |
+| `scene3_delay` | 선제 턴 `delay` | 일정 확인 → 과메기문화관 빼기 → 검토 → 세 문장 답변 |
+| `scene3_keep_museum` | "과메기문화관은 유지해줘" (대기 제안 있을 때) | 초안 비우기 → `must_include` → 구룡포항 30분 → 새 제안이 이전 제안 대체 |
+| `scene4_safety` | 선제 턴 `safety_raised` | 안전 확인 → 실내 찾기 → 북방파제를 근대문화역사관으로 교체. 관문이 차량 구간(침수 감시 구역)을 되돌리면 이유를 덧붙인 답 |
+| `error_llm_unavailable` | "[테스트] LLM 오류" | `error` `llm_unavailable` (오류 화면 확인용) |
+| `guide_*` | 가이드 준비 (데모 6곳) | 근거 조각 출처(P1…)를 단 고정 노트 |
+
+```bash
+# backend/.env: AGENT_PROVIDER=scripted, SAFETY_SOURCE=mock, AUTH_REQUIRED=false
+python scripts/planner/cli.py chat 1 --new --thinking -m "엄마랑 구룡포 일정 짜줘" -m /accept -m "갈 만한 카페 추천해줘"
+python scripts/planner/cli.py trip replay new scene3_delay --speed 0   # delay 선제 턴 -> 제안
+python scripts/planner/cli.py chat <계획> -m "과메기문화관은 유지해줘"
+python scripts/planner/cli.py trip replay new scene4_safety --speed 0  # safety_raised 선제 턴 -> 교체 제안 -> 승인(accept 단계)
+```
+
 ## 8. 로컬 LLM 메모 (qwen3.6:35b-a3b Q4, RTX 5070 12GB)
 
 - 첫 호출은 모델 로드로 30초 이상 걸린다. 일정 하나를 새로 짜는 턴은 1~2분.
@@ -435,6 +499,8 @@ docker compose run --rm agent pytest tests/agent   # 대본대로 움직이는 �
   대기 제안이 있는 장소 질문(관문·확정 변경 안내 없음, 대기 안내 한 줄), 이어받은 초안을 바꾼 턴의 관문, `style_length` 답변 길이, 같은 `event.id` 재전송·오류 뒤 재시도도 본다.
 - `test_docent_tools.py`: 메모리 도구·근거 조각·가이드 노트·웹 검색 상한(함수 도구와 내장 검색)·가이드 준비 작업(성공·출처 없음·LLM 오류·JSON 형식·
   인용 -> 출처). places 근거 조각·장소 상세·docent 검색·페이지·trip 은 가짜, 메모리·노트는 같은 앱의 docent.
+- `test_scripted.py`: 각본 LLM (§7.2). 각본 고르기·단계·참조(`$item`·`{{end:1}}`·`last`·`memory`)·검토 관문 `on_review`·주지 않은 도구 건너뛰기·
+  LLM 오류 각본·각본 다시 읽기, 데모 각본의 도구 이름·참조 형식과 데모 문장마다 맞는 각본, 데모 6곳의 노트 JSON.
 - `test_llm.py`: Responses 공급자 형식 (내장 `web_search` 도구·`max_tool_calls`, `web_search_call`·`url_citation` 파싱 포함).
 - `test_claude_llm.py`: Claude 공급자. 가짜 Anthropic 스트림 이벤트를 실제 SDK 로 읽는다 (요청 본문·캐시 지점·thinking 블록 왕복·usage·거절·오류, 키 없이).
 - `test_harness.py`의 append_only 테스트: 한 턴의 호출마다 앞 호출의 메시지가 그대로 앞부분인지(기록 편집 없음), 시스템 프롬프트·도구 목록이 그대로인지,

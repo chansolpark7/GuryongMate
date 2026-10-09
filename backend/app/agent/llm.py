@@ -3,7 +3,8 @@
 - OllamaProvider: Ollama 네이티브 /api/chat (요청마다 컨텍스트 길이 지정). 로컬 기본값
 - OpenAIResponsesProvider: OpenAI Responses API. ChatGPT 기본값 (GPT-5.x 의 추론 + 도구)
 - OpenAICompatProvider: OpenAI 호환 Chat Completions. LM Studio, vLLM 등 (ChatGPT 도 추론 없이 가능)
-- ClaudeProvider (claude_llm.py): Claude API (anthropic SDK). 기록을 추가만 하는 공급자 (append_only)
+- ClaudeProvider (claude_llm.py): Claude API (anthropic SDK). 기록을 추가만 하는 공급자 (append_only). 운영 기본값
+- ScriptedProvider (scripted_llm.py): 각본 LLM. LLM 을 부르지 않고 각본대로 도구 호출·텍스트를 낸다 (개발·테스트·비상 데모)
 하네스는 LLMProvider 인터페이스만 알고, 어떤 모델인지는 설정(config.py)에서만 정해진다.
 공급자가 내장 웹 검색을 지원하면 builtin_web_search = True 이고, stream(..., web_search=n) 으로 이번 호출에서
 최대 n 번 검색하게 한다 (OpenAI Responses 의 web_search 도구, Claude 의 웹 검색 서버 도구). 검색 호출은 WebSearchCall,
@@ -389,4 +390,8 @@ def get_llm() -> LLMProvider:
 
         return ClaudeProvider(s.claude_model, api_key=s.claude_api_key or None, effort=s.claude_effort,
                               max_tokens=s.claude_max_tokens, thinking_mismatch=s.claude_thinking_mismatch, timeout=s.request_timeout_sec)
+    if s.provider == "scripted":
+        from app.agent.scripted_llm import ScriptedProvider
+
+        return ScriptedProvider(s.scripted_dir or None, delay_ms=s.scripted_delay_ms, latency_ms=s.scripted_latency_ms)
     raise ValueError(f"알 수 없는 AGENT_PROVIDER: {s.provider}")
