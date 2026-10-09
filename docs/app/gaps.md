@@ -1,20 +1,20 @@
 # gaps — 화면과 백엔드 사이의 빈 곳
 
-> 기준: `dev` (da2b60e, 2026-10-09). 백엔드 문서에 없는 API·필드는 앱 명세에서 지어내지 않고 여기에 적는다.
+> 기준: `dev` (da2b60e, 2026-10-09). §0·b1·b2·b17 은 trip·docent·agent 동행 모드 머지 후(2bcea49) 갱신. 백엔드 문서에 없는 API·필드는 앱 명세에서 지어내지 않고 여기에 적는다.
 > 상태 표시: **필수** = 데모 4장면이 막힘 / 권장 / 나중.
 
-## 0. 먼저 알아둘 것 — 동행 모드의 서버가 아직 없다
+## 0. 동행 모드 서버 상태 (2026-10-09 갱신)
 
 | 서비스 | 문서 | `dev` 코드 | 영향받는 화면 |
 |---|---|---|---|
-| trip (여행일·위치·이벤트) | `docs/trip/README.md` (설계) | `backend/app/trip/` **빈 디렉터리** | 11~16, 19, 22~24, 29(여행 중 카드), 30 — 동행 모드 전부 |
-| docent (메모리·가이드 노트) | `docs/docent/README.md` (설계) | `backend/app/docent/` **빈 디렉터리** | 16, 17, 18(메모리 칩), 31, 32 |
-| agent 선제 턴 `POST /agent/sessions/{sid}/events` | trip §4.2 | 없음 (router 에 없음) | 19, 22 |
-| agent 가이드 준비 `POST /agent/plans/{id}/guide/prepare`·`…/jobs/{job_id}` | docent §3.3 | 없음 | 32 |
-| agent 동행 모드 도구 (`get_guide_note`, `remember` …) | docent §4 | 없음 | 18 |
+| trip (여행일·위치·이벤트) | `docs/trip/README.md` | **구현됨** | 11~16, 19, 22~24, 29(여행 중 카드), 30 — 동행 모드 전부 |
+| docent (메모리·가이드 노트 저장, 검색 대행) | `docs/docent/README.md` | **구현됨** | 16, 17, 18(메모리 칩), 31, 32 |
+| agent 선제 턴 `POST /agent/sessions/{sid}/events`, 동행 모드(현재 상황 블록) | trip §4.2, agent §11 | **구현됨** | 19, 22 |
+| agent 가이드 준비 `POST /agent/plans/{id}/guide/prepare`·`…/jobs/{job_id}` | docent §3.3 | 없음 (작업 E 예정) | 32 |
+| agent docent 도구 (`get_guide_note`, `remember` …, 외부 검색은 OpenAI 내장 `web_search`) | docent §2.1·§4 | 없음 (작업 E 예정) | 18 |
 | planner 진행 상태·재계산 | planner §8 | **구현됨** | (trip 이 씀) |
 
-앱은 이 명세대로 화면을 먼저 만들고, 서버가 없을 때는 **가짜 게이트웨이**(기존 `test/fixtures.dart` 방식)로 이벤트·노트를 흘려 화면 흐름을 확인한다. 이벤트 처리기는 서버 응답 형식(trip §3.3)을 그대로 받게 만든다.
+앱은 이 명세대로 화면을 먼저 만들고, 아직 없는 부분(가이드 준비·docent 도구)은 **가짜 게이트웨이**(기존 `test/fixtures.dart` 방식)로 이벤트·노트를 흘려 화면 흐름을 확인한다. 이벤트 처리기는 서버 응답 형식(trip §3.3)을 그대로 받게 만든다.
 
 ---
 
@@ -41,8 +41,8 @@
 
 | # | 필요한 것 | 어디서 | 지금 가능한 대안 | 우선 |
 |---|---|---|---|---|
-| b1 | trip·docent 서비스, agent 선제 턴·가이드 준비 (§0) | 동행 모드 전부 | 가짜 게이트웨이 | **필수** |
-| b2 | `near_hazard` 의 `payload` 필드 (구역 id·name·kind·risk·reason) | 23 패널의 구역명·근거 줄, 지도 강조 | `message` 한 줄만 쓰고, 구역은 `GET /safety/avoid` 에서 현재 위치에 가장 가까운 것 | **필수** |
+| b1 | ~~trip·docent 서비스, agent 선제 턴~~ (구현됨) / agent 가이드 준비·docent 도구 (§0) | 16·17·18·32 | 가짜 게이트웨이 | **필수** |
+| b2 | ~~`near_hazard` 의 `payload` 필드~~ **구현됨**: `payload.zones[]` = `{id, name, kind, risk, reason, distance_m}` | 23 패널의 구역명·근거 줄, 지도 강조 | — | 해결 |
 | b3 | 선제 메시지 구분 필드 | 19·22 "먼저 알려드려요" | 이벤트 `agent.message_id` 와 메시지 id 매칭 (events.md §3.1). 세션 메시지에 `origin:"event"` 같은 필드가 있으면 더 단순 | 권장 |
 | b4 | 메모리 갱신을 알리는 SSE 단계 (`remember`/`forget` 의 Step `kind`·title, 예 `memory` "기억하기") | 18 "기억했어요" 칩 | 턴 끝에 `GET /docent/memory` 의 `memory_version` 비교 | **필수**(장면 ②) |
 | b5 | docent 도구들의 Step `kind`·title (`get_guide_note` "가이드 노트 확인", `search_passages`·`web_search` "자료 찾기") | 18 진행 단계 문구 | 서버가 title 을 정하면 앱은 그대로 보여줌 (앱 변경 없음) | 권장 |
@@ -57,7 +57,7 @@
 | b14 | 혼잡도 데이터 | 기존 디자인의 "혼잡 낮음" 칩, 지도 레이어 | **없음.** 칩은 지우고 레이어는 "데이터 없음"으로 비활성 (28-S1) | — |
 | b15 | 날씨 칩(기온) | 기존 디자인의 "18°" | 안전 배지로 대체 (위험 단계 + 근거). 기온은 safety 가 판단에 쓰지 않음 (폭염·한파 미반영, safety §7) | — |
 | b16 | 실행 취소 API | 08 스낵바 | 앱이 역 ops 계산 (아래 c9 한계) | 나중 |
-| b17 | agent 날짜 표시 시계 | 데모 가상 시각 | trip §5 "확인 필요": agent `prompts.py` 가 시스템 시각 → 데모 전에 safety 시계로 맞추기 | **필수**(데모) |
+| b17 | ~~agent 날짜 표시 시계~~ **구현됨**: agent 도 safety·trip 시계를 따른다 (agent §11) | 데모 가상 시각 | — | 해결 |
 | b19 | 해설 길이 선호를 구조화한 값 (예: memory summary 의 `style_length: short\|long`) | 16 [짧게]/[자세히] 강조 | 메모리 `style` 문장에서 "짧"/"핵심"/"자세" 키워드로 앱이 추정 | 권장 |
 | b18 | 웹 빌드 CORS | — | 모바일·데스크톱으로만 실행 (기존과 같음) | 나중 |
 
