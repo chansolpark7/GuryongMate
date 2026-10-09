@@ -133,6 +133,82 @@ def test_overwrite_keeps_current_progress(client):
     assert (house["status"], house["done_at"]) == ("done", "13:30")
 
 
+def test_accept_refuses_when_target_done_since_proposal(client):
+    """머무는 동안 만든 '체류 줄이기' 제안을 그곳을 떠난(done) 뒤 승인하면 반영하지 않는다 (§5.4 progress_changed)."""
+    pid, ids = trip(client)
+    ok(progress(client, pid, ids["p-house"], "done", "13:30"))
+    ok(progress(client, pid, ids["p-food"], "visiting", "13:40"))
+    stale = ok(client.post(f"/planner/plans/{pid}/proposals", headers=H, json={
+        "ops": [{"op": "update_item", "item_id": ids["p-food"], "stay_minutes": 35},
+                {"op": "update_item", "item_id": ids["p-museum"], "stay_minutes": 30}]}), 201)
+    fine = ok(client.post(f"/planner/plans/{pid}/proposals", headers=H, json={
+        "ops": [{"op": "update_item", "item_id": ids["p-museum"], "stay_minutes": 40}]}), 201)
+    assert stale["progress_changed"] == []
+    ok(progress(client, pid, ids["p-food"], "done", "14:20"))
+
+    detail = ok(client.get(f"/planner/plans/{pid}/proposals/{stale['id']}", headers=H))
+    assert detail["progress_changed"] == [ids["p-food"]] and detail["base_changed"] is False
+    for mode in ("auto", "overwrite"):
+        d = err(client.post(f"/planner/plans/{pid}/proposals/{stale['id']}/accept", json={"mode": mode}, headers=H),
+                409, "progress_changed")
+        assert d["items"] == [{"item_id": ids["p-food"], "title": "물회집", "done_at": "14:20"}]
+        assert "물회집" in d["message"]
+    plan = get_plan(client, pid)
+    assert view(plan, ids["p-food"])["stay_minutes"] == 60 and view(plan, ids["p-museum"])["stay_minutes"] == 60
+    assert ok(client.get(f"/planner/plans/{pid}/proposals/{stale['id']}", headers=H))["status"] == "pending"
+
+    # 다녀온 곳을 건드리지 않는 제안은 그대로 승인된다
+    assert ok(client.get(f"/planner/plans/{pid}/proposals/{fine['id']}", headers=H))["progress_changed"] == []
+    r = ok(client.post(f"/planner/plans/{pid}/proposals/{fine['id']}/accept", headers=H))
+    assert view(r["plan"], ids["p-museum"])["stay_minutes"] == 40
+
+
+def test_accept_refuses_removing_item_done_since_proposal(client):
+    pid, ids = trip(client)
+    prop = ok(client.post(f"/planner/plans/{pid}/proposals", headers=H, json={
+        "ops": [{"op": "remove_item", "item_id": ids["p-house"]}]}), 201)
+    ok(progress(client, pid, ids["p-house"], "done", "13:30"))
+    d = err(client.post(f"/planner/plans/{pid}/proposals/{prop['id']}/accept", headers=H), 409, "progress_changed")
+    assert [x["item_id"] for x in d["items"]] == [ids["p-house"]]
+
+
+@pytest.fixture
+def at_1610():
+    saved = clock._clock
+    clock._clock = FixedClock(datetime(2026, 10, 10, 16, 10, tzinfo=KST))
+    yield
+    clock._clock = saved
+
+
+def test_proposal_snapshots_follow_live_progress(client, at_1610):
+    """여행 중인 날의 제안 전후 비교는 실제 진행 + planner 의 지금 기준이다 (projection 과 같음, §8.4).
+    물회집에 15:00 도착해 16:10 까지 머무는 중 -> 문화관 16:16~17:16 (계획 기준이면 14:42~15:42)."""
+    pid, ids = trip(client)
+    ok(progress(client, pid, ids["p-house"], "done", "13:30"))
+    ok(progress(client, pid, ids["p-food"], "visiting", "15:00"))
+    assert get_plan(client, pid)["days"][0]["end_at"] == "15:42"  # 계획 조회는 기준 그대로
+    ops = [{"op": "update_item", "item_id": ids["p-museum"], "stay_minutes": 30}]
+
+    prev = ok(client.post(f"/planner/plans/{pid}/preview", json={"ops": ops}, headers=H))
+    assert view(prev["plan"], ids["p-museum"])["start_at"] == "16:16"
+    assert [c["message"] for c in prev["changes"] if c["kind"] == "day_end"] == ["1일차 종료: 17:16 → 16:46"]
+
+    prop = ok(client.post(f"/planner/plans/{pid}/proposals", json={"ops": ops}, headers=H), 201)
+    assert prop["before"]["days"][0]["end_at"] == "17:16" and prop["after"]["days"][0]["end_at"] == "16:46"
+    assert view(prop["before"], ids["p-food"])["end_at"] == "16:10"
+    assert [c["message"] for c in prop["changes"] if c["kind"] == "day_end"] == ["1일차 종료: 17:16 → 16:46"]
+    r = ok(client.post(f"/planner/plans/{pid}/proposals/{prop['id']}/accept", headers=H))
+    assert r["proposal"]["decision"] == "applied"
+
+
+def test_proposal_snapshots_plan_basis_without_progress(client, at_1610):
+    """그날 진행 기록이 없으면(여행 전·다른 날) 계획 기준 그대로."""
+    pid, ids = trip(client)
+    prop = ok(client.post(f"/planner/plans/{pid}/proposals", headers=H, json={
+        "ops": [{"op": "update_item", "item_id": ids["p-museum"], "stay_minutes": 30}]}), 201)
+    assert [c["message"] for c in prop["changes"] if c["kind"] == "day_end"] == ["1일차 종료: 15:42 → 15:12"]
+
+
 # ---------- 현재 기준 재계산 ----------
 
 def test_projection_from_stored_progress_light_delay(client):

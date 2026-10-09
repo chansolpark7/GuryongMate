@@ -398,6 +398,9 @@ class ProposalDetail(ProposalSummary):
     after: PlanDetail = Field(description="승인하면 될 일정 (기록, 새 항목 id 는 음수)")
     current_version: int
     base_changed: bool = Field(description="제안 이후 일정이 바뀌었는지 (current_version != base_version)")
+    progress_changed: list[int] = Field(
+        default_factory=list,
+        description="제안 이후 다녀온(done) 항목 중 이 제안이 바꾸거나 지우는 항목 id. 있으면 승인은 409 progress_changed")
 
     @field_serializer("ops")
     def _ops_as_sent(self, ops: list) -> list[dict]:

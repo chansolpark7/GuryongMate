@@ -287,19 +287,44 @@ def detail(plan: PlannerPlan, places: PlaceLookup, actual: Actual | None = None)
     )
 
 
-def simulate(plan: PlannerPlan, ops: list[PlanOp], places: PlaceLookup, with_index: bool = False) -> PlanDetail:
-    """ops 를 사본에 적용한 결과 (DB 변경 없음). 적용할 수 없으면 PlannerError."""
+def simulate(plan: PlannerPlan, ops: list[PlanOp], places: PlaceLookup, with_index: bool = False,
+             now: datetime | None = None) -> PlanDetail:
+    """ops 를 사본에 적용한 결과 (DB 변경 없음). 적용할 수 없으면 PlannerError.
+    now 를 주면 그날 진행 기록이 있을 때 실제 진행 기준으로 계산한다 (live_actual)."""
     copy = clone(plan)
     Applier(copy, places, persist=False).apply_all(ops, with_index=with_index)
-    return detail(copy, places)
+    return detail(copy, places, live_actual(copy, places, now))
 
 
 def preview(plan: PlannerPlan, ops: list[PlanOp], places: PlaceLookup,
-            with_index: bool = True) -> tuple[PlanDetail, PlanDetail, list[Change]]:
-    """(현재, 적용 후, 변경 요약). 적용할 수 없으면 PlannerError (op_index 포함)."""
-    after = simulate(plan, ops, places, with_index)
-    before = detail(plan, places)
+            with_index: bool = True, now: datetime | None = None) -> tuple[PlanDetail, PlanDetail, list[Change]]:
+    """(현재, 적용 후, 변경 요약). 적용할 수 없으면 PlannerError (op_index 포함).
+    now 를 주면 여행 중인 날은 둘 다 실제 진행 + now 기준이다 (변경 요약의 종료 시각도 현실 기준)."""
+    after = simulate(plan, ops, places, with_index, now)
+    before = detail(plan, places, live_actual(plan, places, now))
     return before, after, diff(before, after)
+
+
+def live_actual(plan: PlannerPlan, places: PlaceLookup, now: datetime | None) -> Actual | None:
+    """now 가 계획 기간 안이고 그날 진행 기록(visiting·done)이 있으면 그날을 실제 진행 기준으로 다시 계산할 기준점
+    (projection 과 같은 기준, 위치는 저장된 진행 상태). 아니면 None (계획 기준 그대로)."""
+    if now is None:
+        return None
+    day = (now.date() - plan.start_date).days + 1
+    if not 1 <= day <= plan.num_days or not any(i.day == day and i.status in ("visiting", "done") for i in plan.items):
+        return None
+    return _anchor(plan, places, day, now.hour * 60 + now.minute, None)
+
+
+def progress_changed(before: PlanDetail, after: PlanDetail, current: PlannerPlan) -> list[dict]:
+    """제안 이후 다녀온(done) 항목 중 제안이 바꾸거나 지우는 것. 승인하면 지난 일을 바꾸게 된다 (409 progress_changed)."""
+    was_done = {i.id for d in before.days for i in d.items if i.status == "done"}
+    done_now = {i.id: i for i in current.items if i.status == "done" and i.id not in was_done}
+    touched = {c.item_id for c in diff(before, after) if c.kind in ("updated", "moved", "removed")}
+    titles = {i.id: _title(i) for d in before.days for i in d.items}
+    return [{"item_id": i, "title": titles.get(i, done_now[i].place_id),
+             "done_at": done_now[i].done_at.strftime("%H:%M") if done_now[i].done_at else None}
+            for i in sorted(touched & done_now.keys())]
 
 
 # ---------- 변경 요약 ----------
