@@ -67,7 +67,15 @@ LLM 이 대화에서 알게 된 사용자 정보를 **문서로 정리해 두고
 | **외부 웹 검색 (새로)** | `web_search` → `GET /docent/search?q=` | 지자체·박물관 공식 페이지, 언론, 블로그 후기 | 출처별 등급 |
 | **페이지 읽기 (새로)** | `read_page` → `GET /docent/page?url=` | 검색 결과 본문 (텍스트만, 길이 제한) | 출처별 등급 |
 
-### 2.1 외부 검색 공급자 — 네이버 검색 API 로 시작 (구현됨)
+### 2.1 외부 검색 공급자 — OpenAI 내장 웹 검색으로 결정 (2026-10-09)
+- **가이드 노트 준비·여행 중 추가 질문의 외부 검색은 OpenAI Responses API 내장 `web_search` 도구를 쓴다.** agent 의 기본 LLM 이 이미 OpenAI(Responses API)라
+  키 발급 없이 바로 쓸 수 있고, 검색·페이지 읽기·요약을 모델이 한 번에 하며 출처 URL 인용(`url_citation`)이 붙는다. 공지사항 같은 페이지도 대부분 이것으로 읽는다.
+- 인용 URL 은 docent 의 출처 등급 규칙(§2.2, `app/docent/tiers.py`)으로 분류해 노트 `sources` 에 저장한다 (신뢰도 표시 유지).
+- 브라우저(Chromium) 기반 읽기는 하지 않는다 (서버 메모리·속도·보안 부담. 로그인·JavaScript 전용 페이지는 범위 밖).
+- 아래 네이버 연동(`/docent/search`)과 페이지 읽기(`/docent/page`)는 지우지 않고 **대안**으로 둔다: 로컬 LLM(`AGENT_PROVIDER=local`)일 때, 또는 내장 검색의 한국 지역 정보가 부족할 때.
+- 데모 전에 구룡포 장소 2~3곳으로 내장 검색 결과(한국어 지역 정보 양·출처)를 확인하고 이 절에 기록한다.
+
+#### 대안: 네이버 검색 API (구현됨)
 docent 가 공급자를 감싸서 같은 형식으로 돌려준다 (agent 는 공급자를 모른다). 공급자 키는 docent 서비스에만 둔다.
 
 - 인터페이스: `app/docent/search.py` 의 `SearchProvider` (`name`, `async search(q, limit) -> [RawResult]`). 공급자를 바꾸거나 늘리려면 이것을 구현하고 `get_search_provider` 에서 고른다.
