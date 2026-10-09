@@ -93,8 +93,8 @@ void main() {
     await tapText(tester, '로그인');
     expect(find.textContaining('로그인을 여러 번 실패해 잠겼어요'), findsOneWidget);
     expect(find.textContaining(RegExp(r'로그인 \(\d\d:\d\d 남음\)')), findsOneWidget);
-    final btn = tester.widget<TextButton>(find.ancestor(of: find.textContaining('남음'), matching: find.byType(TextButton)));
-    expect(btn.onPressed, isNull);
+    expect(find.ancestor(of: find.textContaining('남음'), matching: find.byType(TextButton)), findsNothing, reason: '누를 수 없는 회색 버튼');
+    expect(find.textContaining('에 다시 시도할 수 있어요'), findsOneWidget);
   });
 
   testWidgets('시작: 저장된 refresh 로 01 건너뜀 / refresh_token_reused → 01 + 안내', (tester) async {

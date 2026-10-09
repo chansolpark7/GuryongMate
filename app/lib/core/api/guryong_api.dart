@@ -189,8 +189,13 @@ class GuryongApi {
 
   Future<Situation> situation() async => Situation.fromJson(_m(await client.get('/safety/situation')));
 
-  Future<List<AvoidZone>> avoidZones({String minRisk = 'caution'}) async =>
-      _l(_m(await client.get('/safety/avoid', {'min_risk': minRisk}))['zones']).map(AvoidZone.fromJson).toList();
+  Future<List<AvoidZone>> avoidZones({String minRisk = 'caution'}) async => (await avoid(minRisk: minRisk)).$1;
+
+  /// 지금 피할 구역과 safety 기준 시각(가상 시각이면 그 시각) — 28 범례 "지금 기준 HH:MM".
+  Future<(List<AvoidZone>, DateTime?)> avoid({String minRisk = 'caution'}) async {
+    final j = _m(await client.get('/safety/avoid', {'min_risk': minRisk}));
+    return (_l(j['zones']).map(AvoidZone.fromJson).toList(), j['now'] == null ? null : DateTime.parse(j['now'] as String));
+  }
 
   Future<SimState> sim() async => SimState.fromJson(_m(await client.get('/safety/sim')));
 

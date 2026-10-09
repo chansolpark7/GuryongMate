@@ -51,7 +51,7 @@
 | b7 | 한 번에 여러 대안 카드 (장면 ③ "대안 2개") | 19 | 카드 1개 + 텍스트 대안 + 후속 칩 | 나중 |
 | b8 | 하루 요약 API | 30 | 앱이 PlanDetail·이벤트·제안·메모리로 계산 | 나중 |
 | b9 | ~~가이드 준비 작업 응답 형식~~ **구현됨**: `GuideJobView` = `total`·`finished`·`ready`·`failed`·`current`·`eta_sec`·`places[{place_id, title, status, error, sources, …}]` (agent §12) | 32 진행 바 | 작업 조회 3초마다. 작업이 사라졌으면(404 `job_not_found`, 서버 재시작) 노트 목록으로 | 해결 |
-| b10 | safety outlook 응답 필드 이름 (요약·위험 시간대·만조·특보) — 문서에 `safe_windows` 외 필드명이 없음 | 27 | `/safety/docs` 로 확인 후 명세 보완. 시간 띠는 `GET /safety/situation` `hours[].levels` | 권장 |
+| b10 | ~~safety outlook 응답 필드 이름~~ **확인함** (L1, `backend/app/safety/schemas.py` `Outlook`): `summary{max_pop,total_pcp_mm,max_wind_ms,max_wave_m,temp_min,temp_max,sky}`·`hazards`·`safe_windows[{place_kind,start,end,has_info}]`·`tides[{time,kind,level_cm}]`·`warnings`·`seasonal_notes`·`recheck_from`. safety README §1 에는 아직 필드 목록이 없다 | 27 | 앱은 위 필드로 그린다. 시간 띠는 `GET /safety/situation` `hours[].levels` | 문서 보완 권장 |
 | b11 | 메모리 일괄 삭제 | 31 모두 지우기 | 항목마다 `DELETE /docent/memory/{id}` | 나중 |
 | b12 | 앱 백그라운드 알림 (OS 푸시·백그라운드 위치) | 화면이 꺼진 동안의 지연·안전 | 앱을 켜면 쌓인 이벤트를 정리해 보여줌 (events.md §2) | 나중 |
 | b13 | 앱에서 "장소로 즉시 이동"(도착 판정용 머무름 90초 포함) | 33 데모 조작 | 발표는 CLI `trip goto` / `trip replay` 로 위치를 넣고 앱은 데모 위치 모드로 그리기 | 권장 |
@@ -61,8 +61,14 @@
 | b17 | ~~agent 날짜 표시 시계~~ **구현됨**: agent 도 safety·trip 시계를 따른다 (agent §11) | 데모 가상 시각 | — | 해결 |
 | b19 | ~~해설 길이 선호를 구조화한 값~~ **구현됨**: `GET /docent/memory`·`/summary` 의 `style_length: short\|long\|null` (docent §5.1) | 16 [짧게]/[자세히] 강조 | `style_length` 를 그대로 쓴다 (null 이면 선호 없음) | 해결 |
 | b18 | 웹 빌드 CORS | — | 모바일·데스크톱으로만 실행 (기존과 같음) | 나중 |
+| b20 | 가이드 노트 목록(`GET /docent/plans/{id}/notes`)에 출처 수·실패 이유가 없음 (L1 에서 확인) | 32 "준비됨 · 출처 n개", failed 행 문구 | 준비 작업(`GuideJobView.places[].sources`·`error`)이 있을 때만 보이고, 화면을 다시 열면 "준비됨"만 | 권장 |
+| b21 | 규칙 변경 요약(`Change.message`, `rule_added`)에 코드 표기가 섞임 — 예 `규칙 추가: end_before {'time': '18:00'} (18시 전에 끝내기)` (L1 에서 확인) | 06·36 카드의 조건 줄 | 앱이 끝의 괄호 안 사람 말만 쓰고, 괄호가 없으면 "여행 조건" (`proposal_actions.dart` `ruleText`). planner 가 사람 말 필드를 따로 주면 더 단순 | 권장 |
+| b22 | 장소 추천 후보에 그 장소까지의 이동 시간이 없음 (L1 에서 확인) | 06B 카드 메타 "도보 6분" | `in_plan` 후보만 일정 항목의 이동 시간을 보여 주고, `not_in_plan` 은 분류·추천 이유만 (Figma 의 별점도 데이터가 없어 뺌) | 나중 |
 
 ## (c) 기존 앱 코드(`origin/feat/app` 의 `app/`)에서 고칠 것
+
+> **L1 (feat/app-l1, 2026-10-10) 처리 현황**: c1~c12·c14·c15 반영. c13(trip 위치 전송기·이벤트 폴러·TripState·데모 위치 모드 동작)은 동행 모드 단계(L2)에서.
+> 화면별 비교와 남은 차이는 [review/l1.md](review/l1.md).
 
 | # | 위치 | 지금 | 바꿀 것 | 명세 |
 |---|---|---|---|---|

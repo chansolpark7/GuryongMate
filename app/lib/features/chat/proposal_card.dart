@@ -409,7 +409,7 @@ class _CandidateCard extends StatelessWidget {
     final leg = item?.legMode ?? travelMode;
     final travel = item?.travelMinutes;
     final meta = [if (type.isNotEmpty) type, if (travel != null) '${leg == 'car' ? '차량' : '도보'} ${item!.estimated ? '약 ' : ''}$travel분'].join(' · ');
-    final time = c.startAt != null ? '${c.startAt} – ${c.endAt}' : (c.timeHint == null ? null : '${c.timeHint} 무렵 · ${c.stayMinutes}분');
+    final time = c.startAt != null ? '${c.startAt} – ${c.endAt}' : (c.timeHint == null ? null : '${c.timeHint} 무렵');
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(16), border: Border.all(color: const Color(0xFFECEEF2))),

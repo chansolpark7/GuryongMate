@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:provider/provider.dart';
@@ -310,7 +311,25 @@ class _LoginIdScreenState extends State<LoginIdScreen> {
         child: ListView(padding: const EdgeInsets.fromLTRB(20, 8, 20, 24), children: [
           Text('아이디로 로그인', style: AppText.title),
           const SizedBox(height: 4),
-          Text('구룡메이트 계정으로 계속해요', style: AppText.meta.copyWith(fontSize: 14)),
+          if (remaining != null && until != null)
+            // 34-S1: 잠김 박스가 부제 자리를 대신한다
+            Container(
+              margin: const EdgeInsets.only(top: 12),
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(color: AppColors.dangerSoft, borderRadius: BorderRadius.circular(12)),
+              child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                const Icon(Icons.lock_outline, size: 20, color: AppColors.danger),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text('로그인을 여러 번 실패해 잠겼어요', style: AppText.label.copyWith(color: AppColors.danger, fontWeight: FontWeight.w700)),
+                    Text('${two(until.hour)}:${two(until.minute)}에 다시 시도할 수 있어요', style: AppText.caption.copyWith(color: AppColors.danger)),
+                  ]),
+                ),
+              ]),
+            )
+          else
+            Text('구룡메이트 계정으로 계속해요', style: AppText.meta.copyWith(fontSize: 14)),
           const SizedBox(height: 28),
           AuthField(label: '아이디', controller: _id, hint: '아이디', error: _idError, autofocus: true),
           const SizedBox(height: 20),
@@ -323,27 +342,16 @@ class _LoginIdScreenState extends State<LoginIdScreen> {
             onToggleObscure: () => setState(() => _obscure = !_obscure),
             onSubmitted: (_) => _submit(),
           ),
-          if (remaining != null && until != null) ...[
-            const SizedBox(height: 16),
-            Container(
-              padding: const EdgeInsets.all(14),
-              decoration: BoxDecoration(color: AppColors.dangerSoft, borderRadius: BorderRadius.circular(12)),
-              child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                const Icon(Icons.lock_outline, size: 18, color: AppColors.danger),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text('로그인을 여러 번 실패해 잠겼어요 · ${two(until.hour)}:${two(until.minute)}에 다시 시도할 수 있어요',
-                      style: AppText.meta.copyWith(color: AppColors.danger)),
-                ),
-              ]),
-            ),
-          ],
           const SizedBox(height: 28),
-          AppButton(
-            label: remaining == null ? '로그인' : '로그인 (${two(remaining.inMinutes)}:${two(remaining.inSeconds % 60)} 남음)',
-            loading: _busy,
-            onPressed: _valid ? _submit : null,
-          ),
+          if (remaining != null)
+            Container(
+              height: 52,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(color: const Color(0xFFE5E7EB), borderRadius: BorderRadius.circular(12)),
+              child: Text('로그인 (${two(remaining.inMinutes)}:${two(remaining.inSeconds % 60)} 남음)', style: AppText.section.copyWith(color: AppColors.text3)),
+            )
+          else
+            AppButton(label: '로그인', loading: _busy, onPressed: _valid ? _submit : null),
           const SizedBox(height: 16),
           Row(mainAxisAlignment: MainAxisAlignment.center, children: [
             Text('처음이신가요? ', style: AppText.meta.copyWith(fontSize: 14)),
@@ -381,10 +389,17 @@ class _SignupScreenState extends State<SignupScreen> {
   @override
   void initState() {
     super.initState();
+    // 서버 오류는 글자를 고쳤을 때만 지운다 (포커스·커서 이동으로도 리스너가 불린다)
+    var last = ['', '', ''];
     for (final c in [_id, _pw, _name]) {
-      c.addListener(() => setState(() {
-            _idServer = _pwServer = _nameServer = null;
-          }));
+      c.addListener(() {
+        final now = [_id.text, _pw.text, _name.text];
+        final changed = !listEquals(now, last);
+        last = now;
+        setState(() {
+          if (changed) _idServer = _pwServer = _nameServer = null;
+        });
+      });
     }
   }
 

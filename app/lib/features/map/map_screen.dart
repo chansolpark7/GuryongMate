@@ -136,11 +136,11 @@ class _MapScreenState extends State<MapScreen> {
     final at = _zonesAt;
     if (at != null && DateTime.now().difference(at) < const Duration(seconds: 60)) return;
     _zonesAt = DateTime.now();
-    c.api.avoidZones().then((z) {
+    c.api.avoid().then((r) {
       if (mounted) {
         setState(() {
-          _zones = z;
-          _zonesLoadedAt = DateTime.now();
+          _zones = r.$1;
+          _zonesLoadedAt = r.$2 ?? DateTime.now();
         });
       }
     }).catchError((_) {});

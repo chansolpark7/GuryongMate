@@ -45,6 +45,7 @@ Future<AppSession> signedInSession(FixtureGateway gw, {Map<String, Object> prefs
 Widget app(AppSession session, Widget home) => ChangeNotifierProvider.value(
       value: session,
       child: MaterialApp(
+        debugShowCheckedModeBanner: false,
         theme: buildTheme(),
         locale: const Locale('ko', 'KR'),
         supportedLocales: const [Locale('ko', 'KR')],

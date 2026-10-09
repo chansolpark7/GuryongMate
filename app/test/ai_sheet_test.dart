@@ -69,12 +69,12 @@ void main() {
 
     await say(tester, '엄마랑 구룡포 일정 짜줘');
     await tester.pump(const Duration(milliseconds: 1100));
-    expect(find.text('기억해 두고 있어요.'), findsOneWidget);
+    expect(find.text('기억해 두고 있어요'), findsOneWidget);
     expect(find.text('기억하기'), findsOneWidget);
     expect(find.byTooltip('중단'), findsOneWidget, reason: '응답 중에는 Stop');
 
     await tester.pump(const Duration(milliseconds: 600)); // 1700ms: 장소 찾기를 다시 하는 중 (같은 id 가 running 으로)
-    expect(find.text('장소를 찾고 있어요.'), findsOneWidget);
+    expect(find.text('장소를 찾고 있어요'), findsOneWidget);
     expect(find.text('장소 찾기'), findsOneWidget, reason: '같은 id 는 한 줄');
     expect(find.text('잠시만요…'), findsOneWidget);
 
@@ -84,7 +84,7 @@ void main() {
     expect(find.text('18:00 전 종료'), findsOneWidget);
 
     await tester.pump(const Duration(milliseconds: 900)); // 3200ms: 검토 단계 결과
-    expect(find.text('일정을 검토하고 있어요.'), findsOneWidget);
+    expect(find.text('일정을 검토하고 있어요'), findsOneWidget);
     expect(find.text('문제 3건'), findsOneWidget);
 
     for (var i = 0; i < 40; i++) {

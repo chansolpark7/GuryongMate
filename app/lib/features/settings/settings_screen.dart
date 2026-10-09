@@ -212,6 +212,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
               SwitchListTile(
                 value: s.demoLocationMode,
                 onChanged: s.setDemoLocationMode,
+                activeTrackColor: AppColors.primary,
+                activeThumbColor: Colors.white,
                 title: Text('데모 위치 모드', style: AppText.label.copyWith(fontWeight: FontWeight.w700)),
                 subtitle: Text('GPS 대신 서버에 들어온 위치(CLI·재생기)를 지도에 그려요', style: AppText.caption),
               ),

@@ -429,7 +429,7 @@ class ActivityCard extends StatelessWidget {
           Row(children: [
             const Icon(Icons.auto_awesome, size: 16, color: AppColors.ai),
             const SizedBox(width: 6),
-            Expanded(child: Text(turn.status ?? '요청을 확인하고 있어요', style: AppText.section.copyWith(fontSize: 15))),
+            Expanded(child: Text((turn.status ?? '요청을 확인하고 있어요').replaceFirst(RegExp(r'\.$'), ''), style: AppText.section.copyWith(fontSize: 15))),
           ]),
           if (turn.steps.isNotEmpty) ...[const SizedBox(height: 8), StepList(steps: turn.steps)],
         ]),

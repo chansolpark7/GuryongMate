@@ -327,7 +327,8 @@ class _Metrics extends StatelessWidget {
     final useSafety = !safetyFailed && rb != null && ra != null && (rb != ra || eb == ea);
     final (endB, endA) = dayEndChange(proposal);
     final first = useSafety ? _Metric('위험한 곳', '$rb곳', '$ra곳', ra.compareTo(rb)) : _Metric('규칙 위반', '$eb건', '$ea건', ea.compareTo(eb));
-    final end = _Metric('종료', endB ?? before?.endAt ?? '-', endA ?? after?.endAt ?? '-', 0);
+    final eFrom = endB ?? before?.endAt, eTo = endA ?? after?.endAt;
+    final end = _Metric('종료', eFrom ?? '-', eTo ?? '-', eFrom == null || eTo == null ? 0 : eTo.compareTo(eFrom)); // 일찍 끝나면 좋아짐
     final tb = before?.travelMinutes ?? 0, ta = after?.travelMinutes ?? 0;
     final move = _Metric('이동', '$tb분', '$ta분', ta.compareTo(tb));
     return Row(children: [
@@ -344,7 +345,7 @@ class _Metric {
   final String label;
   final String from;
   final String to;
-  final int trend; // <0 좋아짐, >0 나빠짐 (종료는 0: 변화만 보여 줌)
+  final int trend; // <0 좋아짐(Green), >0 나빠짐(Amber), 0 이면서 값이 바뀌면 Amber
 }
 
 class _MetricBox extends StatelessWidget {

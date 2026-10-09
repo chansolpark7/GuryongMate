@@ -69,6 +69,8 @@ ThemeData buildTheme() {
   return base.copyWith(
     textTheme: base.textTheme.apply(bodyColor: AppColors.text, displayColor: AppColors.text),
     appBarTheme: const AppBarTheme(backgroundColor: AppColors.background, surfaceTintColor: Colors.transparent, elevation: 0),
+    // Figma 의 뒤로 = iOS 꺾쇠 (Planner 앱바와 같게)
+    actionIconTheme: ActionIconThemeData(backButtonIconBuilder: (_) => const Icon(Icons.arrow_back_ios_new, size: 20)),
     bottomSheetTheme: const BottomSheetThemeData(backgroundColor: AppColors.surface, surfaceTintColor: Colors.transparent),
     dialogTheme: const DialogThemeData(backgroundColor: AppColors.surface, surfaceTintColor: Colors.transparent),
     popupMenuTheme: const PopupMenuThemeData(color: AppColors.surface, surfaceTintColor: Colors.transparent),
