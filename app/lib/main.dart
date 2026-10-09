@@ -6,6 +6,7 @@ import 'core/app_session.dart';
 import 'core/theme/app_theme.dart';
 import 'features/auth/login_screen.dart';
 import 'features/plans/plan_list_screen.dart';
+import 'features/trip/trip_overlay.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -54,6 +55,8 @@ class _GuryongAppState extends State<GuryongApp> {
     return MaterialApp(
       title: '구룡메이트',
       navigatorKey: _nav,
+      // 동행 중 전역 오버레이(23 위험 구역 경고 · 16 도착 카드 · 토스트 · 선제 미리보기)는 모든 화면·시트 위에 (README §4)
+      builder: withTripOverlay,
       debugShowCheckedModeBanner: false,
       theme: buildTheme(),
       locale: const Locale('ko', 'KR'),

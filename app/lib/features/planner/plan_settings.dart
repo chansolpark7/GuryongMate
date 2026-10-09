@@ -12,9 +12,19 @@ import 'plan_controller.dart';
 Future<void> showPlanMenu(BuildContext context, PlanController c) async {
   final action = await showModalBottomSheet<String>(
     context: context,
+    isScrollControlled: true, // 동행 메뉴(여행 시작/종료)까지 들어가 기본 높이(9/16)를 넘는다
     showDragHandle: true,
     builder: (ctx) => SafeArea(
       child: Column(mainAxisSize: MainAxisSize.min, children: [
+        if (c.tripActive && c.onEndTrip != null)
+          ListTile(leading: const Icon(Icons.flag_outlined), title: const Text('여행 종료'), subtitle: Text('오늘 동행을 마치고 하루 요약을 봐요', style: AppText.caption), onTap: () => Navigator.pop(ctx, 'trip_end'))
+        else if (c.onStartTrip != null)
+          ListTile(
+            leading: const Icon(Icons.near_me_outlined, color: AppColors.primary),
+            title: const Text('여행 시작'),
+            subtitle: Text('도착 해설 · 늦어질 때 대안 · 위험 구역 알림', style: AppText.caption),
+            onTap: () => Navigator.pop(ctx, 'trip_start'),
+          ),
         ListTile(leading: const Icon(Icons.edit_outlined), title: const Text('여행 정보 수정'), onTap: () => Navigator.pop(ctx, 'edit')),
         ListTile(
           leading: const Icon(Icons.rule),
@@ -40,6 +50,10 @@ Future<void> showPlanMenu(BuildContext context, PlanController c) async {
   );
   if (!context.mounted) return;
   switch (action) {
+    case 'trip_start':
+      await c.onStartTrip?.call();
+    case 'trip_end':
+      await c.onEndTrip?.call();
     case 'edit':
       await _editPlan(context, c);
     case 'rules':

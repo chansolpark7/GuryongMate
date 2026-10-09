@@ -85,8 +85,8 @@ class _PlanListScreenState extends State<PlanListScreen> {
     }
   }
 
-  Future<void> _open(int planId, {String? aiPrompt}) async {
-    await Navigator.of(context).push(MaterialPageRoute(builder: (_) => PlannerShell(planId: planId, initialAiPrompt: aiPrompt)));
+  Future<void> _open(int planId, {String? aiPrompt, bool startTrip = false}) async {
+    await Navigator.of(context).push(MaterialPageRoute(builder: (_) => PlannerShell(planId: planId, initialAiPrompt: aiPrompt, startTrip: startTrip)));
     _load();
   }
 
@@ -213,7 +213,7 @@ class _PlanListScreenState extends State<PlanListScreen> {
                 ],
                 if (upcoming.isNotEmpty) ...[
                   const _SectionTitle('다가오는 여행'),
-                  for (final (i, r) in upcoming.indexed) _PlanCard(row: r, index: i, today: today, onTap: () => _open(r.plan.id), onLongPress: () => _actions(r.plan)),
+                  for (final (i, r) in upcoming.indexed) _PlanCard(row: r, index: i, today: today, onTap: () => _open(r.plan.id), onStartTrip: () => _open(r.plan.id, startTrip: true), onLongPress: () => _actions(r.plan)),
                   const SizedBox(height: 12),
                 ],
                 if (past.isNotEmpty) ...[
@@ -277,7 +277,7 @@ Widget _overallBadge(SafetyCheck s, {String suffix = ''}) {
   return RiskChip(risk: risk, label: label);
 }
 
-/// 여행 중 카드 (Green 테두리 #CDEFD9 r20). [동행 화면 열기] → 14 (동행 모드 화면은 다음 단계, 지금은 계획 화면을 연다).
+/// 여행 중 카드 (Green 테두리 #CDEFD9 r20). [동행 화면 열기] → 14 (셸이 state 를 읽고 Today 탭으로 연다).
 class _TripCard extends StatelessWidget {
   const _TripCard({required this.row, required this.onOpen});
   final _PlanRow row;
@@ -326,7 +326,10 @@ class _TripCard extends StatelessWidget {
 }
 
 class _PlanCard extends StatelessWidget {
-  const _PlanCard({required this.row, required this.today, this.index = 0, this.past = false, required this.onTap, required this.onLongPress});
+  const _PlanCard({required this.row, required this.today, this.index = 0, this.past = false, required this.onTap, required this.onLongPress, this.onStartTrip});
+
+  /// 여행일인데 시작 전: [오늘 여행 시작] → 11.
+  final VoidCallback? onStartTrip;
   final _PlanRow row;
   final DateTime today;
   final int index;
@@ -392,6 +395,10 @@ class _PlanCard extends StatelessWidget {
                     const InfoChip(label: '안전 정보 없음', icon: Icons.cloud_off_outlined),
                   if (row.pendingProposals > 0) InfoChip(label: 'AI 제안 ${row.pendingProposals}개', icon: Icons.auto_awesome, fg: AppColors.ai, bg: AppColors.aiSoft),
                 ]),
+                if (dday == '오늘 여행' && onStartTrip != null) ...[
+                  const SizedBox(height: 10),
+                  AppButton(label: '오늘 여행 시작', icon: Icons.near_me_outlined, kind: ButtonKind.soft, height: 40, onPressed: onStartTrip),
+                ],
               ] else ...[
                 const SizedBox(height: 6),
                 Text(md(p.updatedAt), style: AppText.caption),

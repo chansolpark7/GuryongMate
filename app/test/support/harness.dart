@@ -10,6 +10,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:guryong_mate/core/app_session.dart';
 import 'package:guryong_mate/core/theme/app_theme.dart';
 import 'package:guryong_mate/core/token_store.dart';
+import 'package:guryong_mate/features/trip/trip_overlay.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -36,6 +37,8 @@ Future<AppSession> signedInSession(FixtureGateway gw, {Map<String, Object> prefs
   final f11 = loadFixture('f11_login.json');
   final refresh = (f11['exchanges'] as List).firstWhere((e) => e['name'] == 'refresh')['response'] as Map<String, dynamic>;
   gw.overrides.putIfAbsent('POST /auth/refresh', () => (_) => Res.json(200, refresh));
+  // 계획 화면은 들어올 때 여행 상태를 묻는다 (L2 모드 전환). 동행 테스트가 아니면 여행 전(inactive).
+  gw.overrides.putIfAbsent('GET /trip/plans/{id}/state', () => (r) => Res.json(200, inactiveTripState(int.parse(r.path.split('/')[3]))));
   final store = MemoryTokenStore(access: '<old_access>', refresh: '<refresh_token>', user: jsonEncode(refresh['user']));
   final s = await AppSession.load(clientFactory: gw.client, tokenStore: store);
   await s.restore();
@@ -47,6 +50,7 @@ Widget app(AppSession session, Widget home) => ChangeNotifierProvider.value(
       child: MaterialApp(
         debugShowCheckedModeBanner: false,
         theme: buildTheme(),
+        builder: withTripOverlay, // 동행 전역 오버레이 (main.dart 와 같게)
         locale: const Locale('ko', 'KR'),
         supportedLocales: const [Locale('ko', 'KR')],
         localizationsDelegates: const [GlobalMaterialLocalizations.delegate, GlobalWidgetsLocalizations.delegate, GlobalCupertinoLocalizations.delegate],
@@ -80,7 +84,8 @@ Future<void> tapText(WidgetTester tester, String text, {int frames = 10}) async 
 /// AI 시트 안의 위젯을 화면(헤더 아래 ~ 입력창 위) 안으로 끌어온다. 시트 목록은 DraggableScrollableSheet 의
 /// 컨트롤러라 ensureVisible 로는 스크롤되지 않는다.
 Future<void> reveal(WidgetTester tester, Finder f) async {
-  final sheet = find.descendant(of: find.byType(DraggableScrollableSheet), matching: find.byType(Scrollable));
+  // 맨 위 시트 (Today 패널도 DraggableScrollableSheet 라 AI 시트는 마지막)
+  final sheet = find.descendant(of: find.byType(DraggableScrollableSheet).last, matching: find.byType(Scrollable));
   if (sheet.evaluate().isEmpty) {
     await tester.ensureVisible(f);
     await tester.pump();
@@ -108,3 +113,20 @@ Future<void> tapIn(WidgetTester tester, Finder f, {int frames = 10}) async {
 
 /// 디버그: 화면의 글자 전부.
 String texts(WidgetTester tester) => tester.widgetList<Text>(find.byType(Text)).map((t) => t.data ?? t.textSpan?.toPlainText()).join(' | ');
+
+Map<String, dynamic> inactiveTripState(int planId, {String now = '2026-10-09T10:00:00+09:00'}) => {
+      'plan_id': planId,
+      'active': false,
+      'day': null,
+      'date': null,
+      'started_at': null,
+      'ended_at': null,
+      'ended_reason': null,
+      'now': now,
+      'clock': 'sim',
+      'location': null,
+      'current': null,
+      'next': null,
+      'delay_minutes': null,
+      'session_id': null,
+    };

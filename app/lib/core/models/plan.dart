@@ -362,6 +362,7 @@ class ProposalDetail {
     required this.before,
     required this.after,
     this.decision,
+    this.decidedAt,
     this.baseChanged = false,
     this.progressChanged = const [],
   });
@@ -377,6 +378,7 @@ class ProposalDetail {
   final PlanDetail? before;
   final PlanDetail? after;
   final String? decision; // applied | overwritten
+  final DateTime? decidedAt;
 
   /// 제안 이후 일정이 바뀜 → [전체 적용] 이 409 base_changed (36).
   final bool baseChanged;
@@ -398,6 +400,7 @@ class ProposalDetail {
         before: j['before'] == null ? null : PlanDetail.fromJson(j['before'] as Map<String, dynamic>),
         after: j['after'] == null ? null : PlanDetail.fromJson(j['after'] as Map<String, dynamic>),
         decision: j['decision'] as String?,
+        decidedAt: j['decided_at'] == null ? null : DateTime.tryParse(j['decided_at'] as String)?.toLocal(),
         baseChanged: j['base_changed'] as bool? ?? false,
         progressChanged: ((j['progress_changed'] as List?) ?? const []).map((e) => e as int).toList(),
       );

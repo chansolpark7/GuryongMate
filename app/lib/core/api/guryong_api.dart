@@ -211,4 +211,23 @@ class GuryongApi {
       })));
 
   Future<TripState> tripState(int planId) async => TripState.fromJson(_m(await client.get('/trip/plans/$planId/state')));
+
+  /// 여행일 시작. 409 not_trip_day {start_date, end_date} 는 ApiException.detail 로.
+  Future<TripState> tripStart(int planId, {String? sessionId}) async =>
+      TripState.fromJson(_m(await client.post('/trip/plans/$planId/start', {'session_id': ?sessionId})));
+
+  Future<TripState> tripEnd(int planId) async => TripState.fromJson(_m(await client.post('/trip/plans/$planId/end')));
+
+  /// 위치 한 점 또는 모아 둔 점들 (최대 100, 오래된 순). 409 trip_not_active 면 여행일이 끝난 것.
+  Future<LocationResult> sendLocation(int planId, List<LocationPoint> points) async => LocationResult.fromJson(_m(await client.post(
+        '/trip/plans/$planId/location',
+        points.length == 1 ? points.first.toJson() : {'points': [for (final p in points) p.toJson()]},
+      )));
+
+  Future<List<TripEvent>> tripEvents(int planId, {int after = 0, int limit = 50}) async =>
+      _l(await client.get('/trip/plans/$planId/events', {'after': after, 'limit': limit})).map(TripEvent.fromJson).toList();
+
+  Future<void> eventSeen(int planId, int eventId) => client.post('/trip/plans/$planId/events/$eventId/seen');
+
+  Future<GuideNote> guideNoteDetail(int planId, String placeId) async => GuideNote.fromJson(await guideNote(planId, placeId));
 }

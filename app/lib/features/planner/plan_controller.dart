@@ -60,7 +60,12 @@ class PlanController extends ChangeNotifier {
 
   int day = 1;
   int? selectedItemId;
-  int tab = 0; // 0 Planner, 1 Map
+  int tab = 0; // 0 Planner, 1 Map, 2 Today (동행 모드)
+
+  /// 동행 중인지 (셸이 TripController 상태로 맞춘다). Planner ⋯ 메뉴의 여행 시작/종료.
+  bool tripActive = false;
+  Future<void> Function()? onStartTrip;
+  Future<void> Function()? onEndTrip;
   AppliedProposal? lastApplied;
 
   /// 안전 점검 (25). 일정 version·progress_version 이 바뀌면 다시 부른다.
@@ -309,6 +314,20 @@ class PlanController extends ChangeNotifier {
     aiUpdates.clear();
     _notify();
   }
+
+  final _impact = <int, Future<(int, int)?>>{};
+
+  /// 22 영향 박스 "위험한 곳 n → m": 지금 점검(남은 방문)과 ops 미리보기의 주의·위험 방문 수. 제안마다 한 번.
+  Future<(int, int)?> safetyImpact(ProposalDetail p) => _impact.putIfAbsent(p.id, () async {
+        try {
+          int risky(SafetyCheck s) => s.items.where((i) => i.isVisit && i.elevated && plan?.item(i.itemId)?.status != 'done').length;
+          final before = safety ?? await api.safety(planId);
+          final after = await api.safetyPreview(planId, p.ops);
+          return (risky(before), after.items.where((i) => i.isVisit && i.elevated && (i.itemId < 0 || plan?.item(i.itemId)?.status != 'done')).length);
+        } catch (_) {
+          return null;
+        }
+      });
 
   void markAiAdded(int itemId, String reason) {
     aiUpdates[itemId] = AiUpdate(kind: 'added', toTime: plan?.item(itemId)?.startAt, reason: reason);

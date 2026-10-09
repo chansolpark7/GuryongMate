@@ -1,4 +1,5 @@
-// account · docent · trip 응답 중 계획 모드 화면에서 쓰는 것 (docs/account §2, docs/docent §5, docs/trip §1).
+// account · docent 응답 (docs/account §2, docs/docent §5). trip 모델은 trip.dart (예전 경로로도 쓸 수 있게 다시 내보낸다).
+export 'trip.dart';
 
 class UserView {
   UserView({required this.id, required this.provider, required this.loginId, required this.email, required this.displayName});
@@ -77,25 +78,4 @@ class GuideNoteSummary {
 
   factory GuideNoteSummary.fromJson(Map<String, dynamic> j) =>
       GuideNoteSummary(placeId: j['place_id'] as String, status: j['status'] as String? ?? 'pending');
-}
-
-/// trip 여행 상태 (29 여행 중 카드에서만 쓴다).
-class TripState {
-  TripState({required this.active, required this.currentItemId, required this.currentState, required this.nextTitle, required this.startedAt});
-  final bool active;
-  final int? currentItemId;
-  final String? currentState; // visiting | moving | idle
-  final String? nextTitle;
-  final DateTime? startedAt;
-
-  factory TripState.fromJson(Map<String, dynamic> j) {
-    final cur = j['current'] as Map?;
-    return TripState(
-      active: j['active'] as bool? ?? false,
-      currentItemId: cur?['item_id'] as int?,
-      currentState: cur?['state'] as String?,
-      nextTitle: (j['next'] as Map?)?['title'] as String?,
-      startedAt: j['started_at'] == null ? null : DateTime.parse(j['started_at'] as String),
-    );
-  }
 }
