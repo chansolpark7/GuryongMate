@@ -1,7 +1,7 @@
-"""GuryongMate API 클라이언트 (planner·places·agent). CLI 가 쓰고, 다른 Python 도구에서도 재사용할 수 있다.
+"""GuryongMate API 클라이언트 (planner·places·agent·trip·safety). CLI 가 쓰고, 다른 Python 도구에서도 재사용할 수 있다.
 
 메서드는 API 응답 JSON(dict)을 그대로 돌려준다. 오류는 PlannerApiError (code·message·detail).
-명세: docs/planner/README.md, docs/agent/README.md, docs/account/README.md
+명세: docs/planner/README.md, docs/agent/README.md, docs/account/README.md, docs/trip/README.md
 """
 import json
 import os
@@ -282,3 +282,43 @@ class PlannerClient:
     def candidate(self, session_id: str, rec_id: int, cand_id: int, action: str) -> dict:
         """action: add | remove"""
         return self._req("POST", f"/agent/sessions/{session_id}/recommendations/{rec_id}/candidates/{cand_id}/{action}")
+
+    # ----- 여행 중 (trip) -----
+    def trip_start(self, plan_id: int, session_id: str | None = None) -> dict:
+        return self._req("POST", f"/trip/plans/{plan_id}/start", json={"session_id": session_id} if session_id else None)
+
+    def trip_end(self, plan_id: int) -> dict:
+        return self._req("POST", f"/trip/plans/{plan_id}/end")
+
+    def trip_state(self, plan_id: int) -> dict:
+        return self._req("GET", f"/trip/plans/{plan_id}/state")
+
+    def trip_location(self, plan_id: int, points: list[dict]) -> dict:
+        """points: [{lat, lng, accuracy?, recorded_at?, source?}] (오래된 순). -> {state, events, accepted, ignored}"""
+        body = points[0] if len(points) == 1 else {"points": points}
+        return self._req("POST", f"/trip/plans/{plan_id}/location", json=body)
+
+    def trip_events(self, plan_id: int, after: int = 0, limit: int = 50) -> list[dict]:
+        return self._req("GET", f"/trip/plans/{plan_id}/events", params={"after": after, "limit": limit})
+
+    def trip_tick(self, plan_id: int, now: str | None = None) -> dict:
+        return self._req("POST", f"/trip/plans/{plan_id}/tick", params={"now": now} if now else None)
+
+    # ----- 가상 상황·시각 (safety, SAFETY_SOURCE=mock) -----
+    def sim(self) -> dict:
+        return self._req("GET", "/safety/sim")
+
+    def set_sim(self, scenario: str | None = None, now: str | None = None, reset_clock: bool = False) -> dict:
+        body = {k: v for k, v in {"scenario": scenario, "now": now}.items() if v is not None}
+        if reset_clock:
+            body["reset_clock"] = True
+        return self._req("PUT", "/safety/sim", json=body)
+
+    def safety_scan(self, force: bool = False) -> dict:
+        """planner 안전 점검을 지금 한 번 (개발 모드에서만)."""
+        return self._req("POST", "/planner/safety/scan", params={"force": str(force).lower()})
+
+    # ----- 길찾기 -----
+    def route(self, stops: list[tuple[float, float]], mode: str = "walk") -> dict:
+        body = {"mode": mode, "stops": [{"lat": a, "lng": b} for a, b in stops], "steps": False}
+        return self._req("POST", "/routing/route", json=body)

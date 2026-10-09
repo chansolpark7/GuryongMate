@@ -3,3 +3,4 @@ import os
 
 os.environ["SERVICE"] = "all"
 os.environ["PLANNER_SAFETY_WATCH_SEC"] = "0"  # 백그라운드 주기 점검은 끈다 (테스트가 직접 tick 을 부른다)
+os.environ["TRIP_TICK_SEC"] = "0"  # trip 백그라운드 틱도 끈다 (compose 의 trip 컨테이너에서 테스트를 돌려도)

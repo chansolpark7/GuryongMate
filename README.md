@@ -18,6 +18,7 @@ Flutter 앱 (예정) ──► gateway :8000 (Caddy)
                       ├─ /planner      ──► planner   일정·검증·변경 제안·장소 추천
                       ├─ /safety       ──► safety    안전 정보 (디지털 트윈 + 기상·조위)
                       ├─ /routing      ──► routing   길찾기 (이동시간·경로선·위험 구역 우회)
+                      ├─ /trip         ──► trip      여행 중 상태·이벤트 (위치 → 도착·지연·위험 판정)
                       └─ /agent        ──► agent     LLM 채팅 (SSE)·도구 실행
                      embedding    임베딩 모델 서버 (내부 전용)
                      valhalla     길찾기 엔진, OSM 포항 데이터 (내부 전용)
@@ -39,6 +40,7 @@ LLM: 호스트의 Ollama 또는 OpenAI API (Docker 밖)
 | **agent** | 대화형 여행 계획 Agent | 세션 기반 채팅(SSE 스트리밍) / LLM 도구 호출로 장소 검색·일정 변경 / **계획 → 검토 → 수정** 루프(일정 규칙 + 안전) / 안전 점검·날씨 전망, 장소 사이 도보·차량 시간과 "지금 출발해도 안전한지" / 결과를 **변경 제안·장소 추천 카드**로 전달 / 로컬 LLM(Ollama)·OpenAI 선택 | [docs/agent/README.md](docs/agent/README.md) |
 | **safety** | 구룡포 안전 정보 | 디지털 트윈(E-UM) 수위·방파제 실측과 기상청 예보·특보, 조위 예보를 "이 시각, 이 장소(또는 이 경로)가 위험한가"로 해석 / 위험 3단계(안전·주의·위험)와 참고 정보 / 방문·이동 경로 평가(`/safety/assess`), 날짜별 전망, 현재 상태, 상황 변화 감지(`/safety/situation`) / 키 없이 쓰는 mock 모드와 **가상 상황**(`/safety/sim`) | [docs/safety/README.md](docs/safety/README.md) |
 | **routing** | 길찾기 (외부 지도 API 없이) | OSM 포항 데이터로 직접 띄운 Valhalla로 **도보·차량** 이동시간 계산(planner 일정에 사용) / 경로선(GeoJSON)과 **한국어 회전 안내** / safety의 침수 센서 실측을 받아 **위험 구역을 피하는 경로**와 원래 경로 비교 / 엔진이 없으면 직선거리 근사로 대체 | [docs/routing/README.md](docs/routing/README.md) |
+| **trip** | 여행 중 상태·이벤트 | 여행일 시작·종료(동행 모드) / 위치(앱 GPS·CLI·재생기 모두 같은 API)로 **도착·출발 판정** → planner 진행 상태, 도착하면 해설 카드 / planner 현재 기준 재계산으로 **지연 판정**(늦어서 새 위반이 생길 때만) / planner 안전 경고 수집과 **위험 구역 접근 즉시 경고**(safety `/avoid`) / Event Policy(우선순위·중복 억제·쿨다운·Agent 선제 턴 큐) / 백그라운드 틱 / 데모 장면 재생기(`trip replay`) | [docs/trip/README.md](docs/trip/README.md) |
 | **account** | 로그인·토큰 | Google 로그인, ID/비밀번호 가입·로그인 / JWT access(1시간)·refresh(30일, rotation) 발급 / 다른 서비스는 공용 코드(`app.core.auth`)로 토큰만 검증 | [docs/account/README.md](docs/account/README.md) |
 | **embedding** | 임베딩 모델 서버 | `intfloat/multilingual-e5-base` (CPU, TEI 호환 `/embed` API) | [services/embedding/app.py](services/embedding/app.py), [docs/places/README.md](docs/places/README.md#임베딩-로컬-embedding-컨테이너) |
 | **valhalla** | 길찾기 엔진 | Valhalla 3.9.0. 첫 실행 때 대한민국 OSM을 받아 포항 영역만 잘라 그래프 빌드 (약 3분, 이후 재사용) | [services/valhalla/](services/valhalla/), [docs/routing/README.md §4](docs/routing/README.md) |
@@ -52,9 +54,9 @@ LLM: 호스트의 Ollama 또는 OpenAI API (Docker 밖)
 
 ### 아직 없는 것
 - **Flutter 앱**(`app/`): 지도·플래너·채팅 화면
-- **선제 개입 (Guide Agent)**: planner가 남기는 안전 경고(`needs_action`)를 받아 여행 중 먼저 알리고 대안을 제안하는 부분
+- **선제 개입 (Guide Agent)**: trip 이 판정한 단계 3 이벤트(지연·안전)를 받아 Agent 가 먼저 말을 걸고 대안을 제안하는 부분 (`POST /agent/sessions/{sid}/events`, 동행 모드 프롬프트). trip 쪽 큐·전송은 구현됨
 - **대중교통 길찾기**: 도보·차량만 지원
-- **여행 중 동행**: 현재 위치·지연 추적, 도착 시 현장 해설(음성), 데모 시뮬레이터 — 설계: [docs/trip/README.md](docs/trip/README.md)
+- **현장 해설**: 도착 카드(trip `arrived` 이벤트)를 눌렀을 때의 해설(음성) — 설계: [docs/docent/README.md](docs/docent/README.md)
 - **사용자 맞춤 가이드**: 메모리 문서, 외부 검색으로 장소별 가이드 노트 준비 — 설계: [docs/docent/README.md](docs/docent/README.md)
 
 진행 상황과 우선순위는 [PROJECT.md](PROJECT.md)의 MVP 우선순위를 따른다.

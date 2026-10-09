@@ -12,6 +12,7 @@ Flutter 앱 ──► gateway (:API_PORT, 기본 8000)   Caddy. URL 앞부분으
                 ├─ /agent*    ──► agent       LLM 채팅 (SSE) · 도구 실행
                 ├─ /safety*   ──► safety      구룡포 안전 정보 (디지털트윈 실측 + 기상 예보·특보)
                 ├─ /routing*  ──► routing     길찾기 (이동시간·경로선·한국어 안내·위험 구역 우회)
+                ├─ /trip*     ──► trip        여행 중 상태·이벤트 (위치 → 도착·지연·위험 판정, Agent 선제 턴 큐)
                 └─ /auth* /users* ──► account   로그인 (Google·ID/비밀번호)·사용자 정보
                embedding   임베딩 모델 서버 (내부 전용, places 가 호출)
                valhalla    길찾기 엔진, OSM 포항 데이터 (내부 전용, routing 이 호출)
@@ -29,6 +30,7 @@ LLM: 호스트의 Ollama(host.docker.internal:11434) 또는 OpenAI API — Docke
 | safety | 안전 정보 담당 | `backend/app/safety/` | `backend/app/safety/`, `backend/tests/safety/`, `docs/safety/`, `docs/dt/`, `docs/external/` | 없음 | `/safety/docs` |
 | routing | 길찾기 담당 | `backend/app/routing/` | `backend/app/routing/`, `backend/tests/routing/`, `scripts/routing/`, `docs/routing/` | 없음 | `/routing/docs` |
 | valhalla | 길찾기 담당 | `services/valhalla/` | `services/valhalla/` | 없음 (볼륨 `guryongmate-valhalla`) | 내부 `http://valhalla:8002/status` |
+| trip | 동행 담당 | `backend/app/trip/` | `backend/app/trip/`, `backend/tests/trip/`, `scripts/trip/`, `docs/trip/` | `trip_*` | `/trip/docs` |
 | account | 계정 담당 | `backend/app/account/` | `backend/app/account/`, `backend/requirements/account.txt`, `backend/tests/account/`, `docs/account/` | `account_*` | `/account/docs` |
 | gateway·db·공용 | 공용 | — | 아래 "공용 파일" | — | — |
 
@@ -109,7 +111,7 @@ docker compose run --rm planner pytest tests/planner   # 테스트 (어느 백�
 | 컨테이너 | 상주 메모리 |
 |---|---|
 | embedding | 약 1.0GB |
-| places · planner · agent · safety · routing · account | 각 약 100MB |
+| places · planner · agent · safety · routing · account · trip | 각 약 100MB |
 | valhalla | 약 60~100MB (포항 영역 타일 18MB) |
 | db | 약 50MB |
 | gateway | 약 15MB |
@@ -132,6 +134,7 @@ worktree마다 compose 프로젝트(컨테이너·DB 볼륨)가 따로 생긴다
 | `GuryongMate-wt/safety` | `API_PORT=8004`, `DB_PORT=5436` |
 | `GuryongMate-wt/account` | `API_PORT=8005`, `DB_PORT=5437` |
 | `GuryongMate-wt/routing` | `API_PORT=8006`, `DB_PORT=5438` |
+| `GuryongMate-wt/trip` | `API_PORT=8007`, `DB_PORT=5439` |
 
 API 키는 각 worktree의 `backend/.env`에 둔다 (`backend/.env.example` 참고).
 

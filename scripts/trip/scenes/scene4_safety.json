@@ -1,0 +1,26 @@
+{
+  "name": "장면 ④ DT 안전 대응",
+  "description": "점심(짬홍) 중에 폭풍 특보·침수 센서 상승(storm). planner 안전 경고 → safety_raised(단계 3, Agent 선제 턴). 이어서 구룡포항으로 걸어가며 구룡포수협 침수 감시 구역 옆을 지나면 near_hazard(단계 1, LLM 없이 즉시 경고).",
+  "plan_fixture": "seoyun_mom_1010",
+  "plan": {
+    "title": "엄마랑 구룡포", "start_date": "2026-10-10", "day_start": "12:30", "day_end": "18:00",
+    "items": [
+      {"place_id": "kto-2834330", "stay_minutes": 60},
+      {"place_id": "kto-2610501", "stay_minutes": 30},
+      {"place_id": "kto-1909659", "stay_minutes": 60},
+      {"place_id": "kto-2660046", "stay_minutes": 60},
+      {"place_id": "kto-2603493", "stay_minutes": 40}
+    ]
+  },
+  "start": "2026-10-10T12:25:00+09:00",
+  "scenario": "calm",
+  "steps": [
+    {"goto": "kto-2834330", "stay": 40},
+    {"expect": {"type": "near_hazard", "not": true}},
+    {"sim": {"scenario": "storm"}, "tick": true},
+    {"stay": 2},
+    {"expect": {"type": "safety_raised", "level": 3}},
+    {"walk_to": "kto-2610501"},
+    {"expect": {"type": "near_hazard"}}
+  ]
+}
