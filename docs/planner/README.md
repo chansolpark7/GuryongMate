@@ -10,12 +10,16 @@
 | **변경 제안** (`proposals`) | LLM·이벤트가 만들고 사용자가 승인 | 승인할 때 |
 | **장소 추천** (`recommendations`) | LLM이 후보를 만들고 사용자가 하나씩 추가·빼기 | 누를 때마다 즉시 |
 
+여행 중 **진행 상태**(도착·완료 기록, §8.1)는 일정 변경이 아니다. `version` 대신 `progress_version`이 오른다.
+
 일정을 바꾸지 않는 점검은 두 가지다. 둘 다 결정론적이고, 서로 섞지 않는다.
 
 | 점검 | 무엇을 | 결과 |
 |---|---|---|
 | **검증** (`validate`, §2.4) | 일정 자체의 문제 (운영시간·휴무·고정 시각·규칙) | 위반 `error`/`warning` |
 | **안전 점검** (`safety`, §7) | 방문 장소·시각의 안전 (safety 서비스 판단) | 위험 3단계 `safe`/`caution`/`danger` + 주기 점검 경고 |
+
+여행 중에는 검증을 **지금 시각·위치 기준으로 다시 계산**해(`projection`, §8.2) 기준 일정에 없던 위반만 골라 준다 (trip 의 지연 판정).
 
 ---
 
@@ -45,7 +49,8 @@
 | HTTP | code | 언제 | 추가 필드 |
 |---|---|---|---|
 | 422 | `invalid_request` | 헤더·경로·쿼리·본문이 스키마에 맞지 않음 (필수값 누락, 타입·형식 오류, 범위 밖 값, 모르는 필드, 바꿀 값이 없는 PATCH, null 불가 필드에 null) | `errors: [{loc, msg}]` |
-| 422 | `invalid_range` | 기간·하루 시간대 조건 위반 (종료일 < 시작일, 14일 초과, `day_end` ≤ `day_start`) | |
+| 422 | `invalid_range` | 기간·하루 시간대 조건 위반 (종료일 < 시작일, 14일 초과, `day_end` ≤ `day_start`), 진행 상태의 완료 시각 < 도착 시각 | |
+| 422 | `invalid_position` | 재계산의 `position.item_id`가 그날의 (건너뛰지 않은) 항목이 아님 | `item_id` |
 | 422 | `place_not_found` | `place_id`가 places에 없음 | `place_id` |
 | 422 | `day_out_of_range` | `day`가 1~여행 일수 밖 | `day`, `num_days` |
 | 422 | `duplicate_candidate` | 추천 후보에 같은 (장소, 날짜)가 두 번 | |
@@ -58,6 +63,7 @@
 | 409 | `base_changed` | 제안을 기본 모드로 승인하려는데 제안 이후 일정이 바뀜 (§5.4) | `base_version`, `current_version`, `since_proposal`, `overwrite_effect` |
 | 409 | `already_in_plan` | 추천 후보 [추가]인데 이미 그날 일정에 있음 | `item_id` |
 | 409 | `not_in_plan` | 추천 후보 [빼기]인데 그날 일정에 없음 | |
+| 409 | `item_skipped` | 건너뛴(`skipped`) 항목의 진행 상태를 바꾸려 함 (다시 넣으려면 `PATCH`) | |
 | 503 | `places_unavailable` | places 서비스에 접근할 수 없음 | |
 | 503 | `safety_unavailable` | safety 서비스에 접근할 수 없음 (안전 점검) | `reason` |
 
@@ -85,7 +91,9 @@
 
 ### 2.2 `version`
 - 계획을 만들면 `1`이다. **일정을 바꾸는 요청이 성공할 때마다 1 오른다**(직접 편집, `ops`, 제안 승인, 추천 추가·빼기).
-- 조회, `preview`, 제안 생성·거절, 추천 생성은 `version`을 바꾸지 않는다.
+- 조회, `preview`, 제안 생성·거절, 추천 생성, **진행 상태 기록(§8.1)**, 재계산(§8.2)은 `version`을 바꾸지 않는다.
+- `progress_version`: 계획을 만들면 `0`이다. 진행 상태 API(§8.1)가 성공할 때마다 1 오른다 (앱 화면 갱신용). 제안의 기준 비교에는 쓰지 않는다.
+  그래서 여행 중 도착·완료를 기록해도 대기 중인 제안은 `base_changed`가 되지 않는다.
 - 일정을 바꾸는 요청은 계획 행을 잠그고 처리한다. 동시에 들어온 요청은 차례로 처리되므로 같은 `version` 위에 두 변경이 겹치지 않는다(예: 같은 기준의 제안 둘을 동시에 승인하면 하나만 반영되고 나머지는 409 `base_changed`).
 - 제안은 만들 때의 `version`(`base_version`)을 기억한다. 둘이 같으면 "제안 이후 일정이 안 바뀜"이다.
 
@@ -95,7 +103,7 @@
 // PlanSummary
 {"id": 3, "user_id": "seoyun", "title": "엄마랑 구룡포", "start_date": "2026-10-10", "end_date": "2026-10-10",
  "day_start": "12:30", "day_end": "18:00", "travel_mode": "walk",   // 구간 기본 수단
- "memo": "", "version": 7,
+ "memo": "", "version": 7, "progress_version": 3,
  "item_count": 4, "created_at": "...", "updated_at": "..."}
 
 // PlanDetail = PlanSummary + 아래
@@ -115,7 +123,8 @@
  "travel_source": "road",                     // road: 실제 길 / estimate: 직선거리 근사 (앱은 "약 10분") / 첫 항목·건너뜀은 null
  "travel_options": {"walk": {"minutes": 10, "distance_m": 584, "source": "road"},   // 같은 구간 도보·차량 비교
                     "car": {"minutes": 8, "distance_m": 628, "source": "road"}},     // 첫 항목·건너뜀은 null
- "arrive_at": "14:43", "start_at": "15:00", "end_at": "16:00"}                      // 건너뜀은 null
+ "arrive_at": "14:43", "start_at": "15:00", "end_at": "16:00",                     // 계획 기준 계산값. 건너뜀은 null
+ "arrived_at": "14:50", "done_at": null}           // 여행 중 실제 도착·완료 시각 (§8.1). 기록이 없으면 null
 
 // ConstraintView
 {"id": 4, "type": "end_before", "params": {"time": "18:00"}, "hard": true, "source": "user", "note": ""}
@@ -203,8 +212,9 @@ params에 정의되지 않은 키가 있으면 422 `invalid_request`다.
 // ItemUpdate: 보낸 필드만 바꾼다. 하나도 없으면 422. null 이 허용되는 필드는 start_time·travel_mode 둘뿐.
 {"day": "다른 날로 이동", "order": "순서 (day 와 함께 주면 그 날의 해당 순서)", "stay_minutes": 30,
  "start_time": "HH:MM 고정 | null = 고정 해제", "memo": "...",
- "status": "planned|visiting|done|skipped",
+ "status": "planned|visiting|done|skipped",   // 일정 변경이라 version 이 오른다. 여행 중 도착·완료는 §8.1 progress 로
  "travel_mode": "walk|car | null = 계획 기본 수단으로"}
+// status 를 planned·skipped 로 바꾸면 arrived_at·done_at 이, visiting 으로 바꾸면 done_at 이 지워진다.
 // ConstraintCreate
 {"type": "must_include|exclude|end_before|max_travel_minutes|max_walk_minutes|max_daily_walk_minutes", "params": {...}, "hard": true,
  "source": "user|llm (기본 user)", "note": "0~300자"}
@@ -294,6 +304,11 @@ pending ──accept──▶ accepted (decision: applied | overwritten)
 - `after`에 있고 지금 계획에도 있는 항목(양수 id): 그 항목을 `after` 값으로 고친다. id가 유지된다.
 - `after`에 있지만 지금 없는 항목(음수 id, 또는 그사이 삭제된 항목): 새로 만든다. 새 id가 붙는다.
 - 지금 있지만 `after`에 없는 항목: 삭제한다.
+- **진행 상태는 지금 값을 유지한다.** 남아 있는 항목의 `status`(planned/visiting/done)와 `arrived_at`·`done_at`은 바꾸지 않는다
+  (스냅샷은 제안 당시라 그 뒤의 도착·완료를 모른다). 건너뜀(`skipped`)으로 바꾸거나 되돌리는 것만 `after`를 따른다.
+- 같은 이유로 변경 요약(`changes`, `since_proposal`, `overwrite_effect`)에 planned/visiting/done 사이의 상태 변화는 나오지 않는다.
+
+`auto` 승인은 제안의 `ops`를 지금 일정에 다시 적용하므로 진행 상태는 (ops가 직접 바꾸지 않는 한) 그대로다.
 
 ---
 
@@ -493,7 +508,77 @@ planner 가 `PLANNER_SAFETY_WATCH_SEC`(compose 기본 60초)마다 `GET /safety/
 
 ---
 
-## 8. 구조
+## 8. 여행 중 (진행 상태 · 현재 기준 재계산)
+
+trip 서비스(`docs/trip/README.md`)가 위치로 도착·출발·지연을 판정할 때 쓴다. 앱·CLI도 같은 API를 쓸 수 있다.
+
+### 8.1 진행 상태
+
+| 메서드 | 경로 | 본문 | 성공 | 오류 |
+|---|---|---|---|---|
+| POST | `/planner/plans/{plan_id}/items/{item_id}/progress` | `{"status": "visiting"\|"done"\|"planned", "at"?: "HH:MM"}` | 200 `PlanDetail` | 404 `plan_not_found`·`item_not_found`, 409 `item_skipped`, 422 `invalid_request`·`invalid_range` |
+
+- **`version`을 올리지 않고 `progress_version`을 1 올린다.** 도착할 때마다 대기 중인 제안이 `base_changed`가 되지 않게 하기 위해서다.
+- `visiting`: `arrived_at = at`, `done_at`은 지운다. `done`: `done_at = at` (`arrived_at`은 그대로, 없으면 null). `planned`: 둘 다 지운다 (`at` 무시).
+- `at`을 생략하면 planner의 지금 시각(§8.3)을 분 단위로 쓴다. `done`의 `at`이 `arrived_at`보다 이르면 422 `invalid_range`.
+- 건너뜀(`skipped`)은 일정 변경이다. `PATCH …/items/{item_id}` `{"status": "skipped"}`로 하고 `version`이 오른다.
+  건너뛴 항목에 진행 상태를 보내면 409 `item_skipped`.
+- 한 항목만 바꾼다. 다른 항목을 자동으로 `done`으로 만들지 않는다 (판단은 trip).
+- 진행 상태는 계획 기준 시각(`arrive_at` 등)을 바꾸지 않는다. 검증(§2.4)·안전 점검(§7)은 지금처럼 `done` 항목(과 그 항목까지의 이동)을 뺀다.
+
+### 8.2 현재 기준 재계산 (projection)
+
+| 메서드 | 경로 | 본문 | 성공 | 오류 |
+|---|---|---|---|---|
+| POST | `/planner/plans/{plan_id}/projection` | `ProjectionRequest` (생략 가능) | 200 `ProjectionResult` (저장 안 함) | 404, 422 `invalid_request`·`day_out_of_range`·`invalid_position` |
+
+```jsonc
+// ProjectionRequest (모두 선택)
+{"day": 1,                 // 생략하면 planner 의 오늘 (§8.3). 계획 기간 밖이면 422 day_out_of_range
+ "now": "15:05",           // 생략하면 planner 의 지금
+ "position": {"state": "visiting", "item_id": 12, "arrived_at": "14:05"}   // 장소 안. arrived_at 생략 시 항목의 arrived_at, 없으면 now
+          // | {"state": "moving", "lat": 35.98, "lng": 129.55}           // 이동 중
+          // 생략: 저장된 진행 상태로 본다 (그날 visiting 항목이 있으면 거기 머무는 중, 여럿이면 일정상 마지막)
+}
+
+// ProjectionResult
+{"day": 1, "now": "15:05",
+ "plan": PlanDetail,                    // 재계산한 일정. plan.violations = 재계산 위반
+ "baseline_violations": [Violation],    // 기준 일정 (GET /validate 와 같음)
+ "new_violations": [Violation],         // 재계산 위반 중 기준에 없던 것. trip 의 delay 판정은 이것만 본다
+ "delay_minutes": 35,                   // 다음 항목의 시작 시각 차이 (재계산 - 기준, 음수 = 여유). 다음 항목이 없으면 그날 종료 시각 차이
+ "next": {"item_id": 13, "planned_start": "15:00", "eta": "15:35", "start_at": "15:35"}}   // 다음에 갈 항목. 없으면 null
+```
+
+**계산** (`validation.build_schedule(actual=Actual(...))`, 순수 함수). 그날만 다시 계산하고 다른 날은 기준 그대로다.
+
+| 항목 | 시각 | 위반 검사 |
+|---|---|---|
+| 지난 항목: `done`, 또는 기준점보다 앞의 항목 | 기록된 `arrived_at`~`done_at` (없으면 계산값) | 시각 위반(고정·운영시간·휴무) 안 봄 |
+| 기준점 — 머무는 항목 (`visiting`) | 실제 도착부터. 예정 체류가 이미 지났으면 `now`에 끝난다고 본다. 고정 시각이 있으면 그때까지 기다린다 | 고정 시각 놓침은 안 봄 (이미 와 있다). 운영시간·휴무는 봄 |
+| 기준점 — 이동 중 향하는 항목 | `now + 지금 위치 → 그 장소 이동시간` (routing, 실패하면 직선 근사. 구간 수단은 그 항목의 `leg_mode`) | 모두 봄 |
+| 그 뒤 항목 | 평소처럼 이어서 계산. 고정한 `start_time`은 그대로 고정 (늦으면 `fixed_time_missed`) | 모두 봄 |
+| 기준점이 없을 때 (시작 전·사이에 위치 모름) | 아직 다녀오지 않은 첫 항목부터 `max(직전 종료, now)`에 직전 장소에서 출발 | 모두 봄 |
+
+- 이동 중 향하는 항목: 마지막으로 다녀온·머문 항목 뒤의 첫 `planned` 항목. 없으면 기준점 없음으로 본다.
+- 순서를 건너뛰어 뒤 항목에 와 있으면(`position.item_id`가 뒤쪽), 그 앞의 다녀오지 않은 항목은 지난 항목으로 보고 위반을 따지지 않는다.
+  순서를 바꾸려면 일정 변경(제안)으로 한다.
+- 규칙(`end_before` 등)·하루 초과(`day_overflow`)는 재계산한 종료 시각으로 본다.
+- `new_violations`: (`code`, `day`, `item_id`, `constraint_id`)가 기준 위반에 없는 것. 메시지는 비교하지 않는다.
+  예: 늦게 도착해 운영시간 종료(`outside_open_hours`), 하루 초과(`day_overflow`), 고정 시각 놓침(`fixed_time_missed`), hard 규칙 위반.
+  늦어졌어도 새 위반이 없으면 빈 목록이다 (가벼운 지연 → trip 은 알리지 않음).
+
+### 8.3 지금 시각 (시계)
+
+planner의 '지금'은 safety의 시각을 따른다 (`docs/trip/README.md` §5). trip·agent·safety와 같은 시각을 봐야 데모의 가상 시각이 맞기 때문이다.
+
+- `PLANNER_CLOCK=safety`(기본): `GET /safety/sim`의 `now`와 시스템 시각의 차이를 `PLANNER_CLOCK_CACHE_SEC`(기본 5초) 동안 기억해 쓴다.
+  safety가 가상 상황이 아니면(`404 sim_disabled`) 시스템 시각, 접근할 수 없으면 20초 동안 시스템 시각.
+- `PLANNER_CLOCK=system`: 시스템 시각만.
+- 쓰는 곳: 진행 상태 `at`·재계산 `day`/`now`의 기본값, 안전 점검의 경로선 날짜 범위(`safety_watch._today`), 점검할 방문이 없을 때의 `checked_at`.
+  주기 점검(§7.4)은 원래 safety 상황의 `now`를 쓴다. 기록용 시각(`updated_at`, `decided_at`, `created_at`)은 실제 시각 그대로다.
+
+## 9. 구조
 
 | 파일 | 역할 |
 |---|---|
@@ -501,9 +586,10 @@ planner 가 `PLANNER_SAFETY_WATCH_SEC`(compose 기본 60초)마다 `GET /safety/
 | `backend/app/planner/schemas.py` | 공개 요청·응답 스키마 |
 | `backend/app/planner/errors.py` | 오류 형식(§1.3)과 요청 검증 오류 변환 |
 | `backend/app/planner/router.py` | API |
-| `backend/app/planner/ops.py` | 변경 연산 엔진, 스냅샷 덮어쓰기, 변경 요약(diff) |
+| `backend/app/planner/ops.py` | 변경 연산 엔진, 스냅샷 덮어쓰기, 변경 요약(diff), 현재 기준 재계산(`project`) |
 | `backend/app/planner/recommend.py` | 추천 후보 상태 계산, [추가] 위치 계산 |
-| `backend/app/planner/validation.py` | 타임라인 계산·위반 검사 (순수 함수) |
+| `backend/app/planner/validation.py` | 타임라인 계산·위반 검사, 현재 기준 재계산·비교 (순수 함수) |
+| `backend/app/planner/clock.py` | 지금 시각 (safety 가상 시각을 따름, §8.3) |
 | `backend/app/planner/travel.py` | 이동시간 조회 (routing HTTP API, 캐시 하루) + 직선거리 근사 |
 | `backend/app/planner/places.py` | places HTTP API 조회 (캐시 5분), planner 설정 |
 | `backend/app/planner/safety.py` | 안전 점검: 방문 목록 만들기, 결과 정리, 지난 점검과 비교 (순수 함수) |
@@ -511,7 +597,7 @@ planner 가 `PLANNER_SAFETY_WATCH_SEC`(compose 기본 60초)마다 `GET /safety/
 | `backend/app/planner/safety_watch.py` | 주기 점검·경고 저장 |
 | `backend/app/planner/background.py` | 서버가 떠 있는 동안 주기 점검 스레드 실행 (`main.py` 가 연다) |
 
-## 9. 실행·테스트
+## 10. 실행·테스트
 
 ```bash
 # worktree 루트 .env: API_PORT=8002, DB_PORT=5434
@@ -519,11 +605,11 @@ docker compose up -d --build                       # 장소 데이터·임베딩
 docker compose run --rm planner pytest tests/planner
 ```
 
-`PLANNER_PLACES_BASE_URL`·`PLANNER_ROUTING_BASE_URL`·`PLANNER_SAFETY_BASE_URL`로 places·routing·safety 주소를 바꿀 수 있다. compose에서는 게이트웨이(`http://gateway`), 단독 실행(`SERVICE=all`) 기본값은 `http://127.0.0.1:8000`이다.
+`PLANNER_PLACES_BASE_URL`·`PLANNER_ROUTING_BASE_URL`·`PLANNER_SAFETY_BASE_URL`로 places·routing·safety 주소를 바꿀 수 있다 (시계도 `PLANNER_SAFETY_BASE_URL`을 쓴다). compose에서는 게이트웨이(`http://gateway`), 단독 실행(`SERVICE=all`) 기본값은 `http://127.0.0.1:8000`이다.
 
-테스트는 이동시간 기대값을 고정하려고 routing 대신 직선거리 근사를 쓴다 (`tests/planner/conftest.py`). routing 클라이언트 자체는 `tests/planner/test_travel.py`가 가짜 응답으로 확인한다.
+테스트는 이동시간 기대값을 고정하려고 routing 대신 직선거리 근사를 쓰고, 시계는 시스템 시각이다 (`tests/planner/conftest.py`, 필요한 테스트는 `FixedClock`). routing 클라이언트 자체는 `tests/planner/test_travel.py`가 가짜 응답으로 확인한다.
 
-## 10. CLI
+## 11. CLI
 
 호스트 Python에 `httpx`가 있으면 된다. 로그인하지 않았으면 개발 모드처럼 `--user`(`X-User-Id`)로 보낸다(서버가 `AUTH_REQUIRED=false`일 때만 동작). Windows에서는 `localhost` 대신 `127.0.0.1`을 쓴다(`localhost`는 요청마다 약 10초 지연).
 
@@ -548,7 +634,8 @@ safety 1 / alerts 1 [--status new]            안전 점검 (방문·이동 구�
 chat 1                                          Planner Agent 와 대화 (docs/agent/README.md)
 ```
 
-## 11. 다음 단계
+## 12. 다음 단계
 - 운영시간·휴무 구조화: places가 파싱해 제공하면 `validation.py`를 그 값으로 바꾼다.
 - 걷기 편한 길: routing의 `easy_walk`(계단·언덕 회피, 3.6km/h)를 계획 설정으로 노출한다 ("오래 걷기 부담" 사용자).
+- CLI 에 진행 상태·재계산 명령 추가 (trip CLI 와 함께, `docs/trip/README.md` §8).
 - 경고 → Guide Agent 호출 (`needs_action` 경고). Planning Agent 는 §7.2 를 `check_safety` 도구·검토 관문으로 이미 쓴다 (`docs/agent/README.md` §5).
