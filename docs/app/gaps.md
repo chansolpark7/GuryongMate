@@ -44,12 +44,12 @@
 | b1 | ~~trip·docent 서비스, agent 선제 턴~~ (구현됨) / agent 가이드 준비·docent 도구 (§0) | 16·17·18·32 | 가짜 게이트웨이 | **필수** |
 | b2 | ~~`near_hazard` 의 `payload` 필드~~ **구현됨**: `payload.zones[]` = `{id, name, kind, risk, reason, distance_m}` | 23 패널의 구역명·근거 줄, 지도 강조 | — | 해결 |
 | b3 | 선제 메시지 구분 필드 | 19·22 "먼저 알려드려요" | 이벤트 `agent.message_id` 와 메시지 id 매칭 (events.md §3.1). 세션 메시지에 `origin:"event"` 같은 필드가 있으면 더 단순 | 권장 |
-| b4 | 메모리 갱신을 알리는 SSE 단계 (`remember`/`forget` 의 Step `kind`·title, 예 `memory` "기억하기") | 18 "기억했어요" 칩 | 턴 끝에 `GET /docent/memory` 의 `memory_version` 비교 | **필수**(장면 ②) |
-| b5 | docent 도구들의 Step `kind`·title (`get_guide_note` "가이드 노트 확인", `search_passages`·`web_search` "자료 찾기") | 18 진행 단계 문구 | 서버가 title 을 정하면 앱은 그대로 보여줌 (앱 변경 없음) | 권장 |
+| b4 | ~~메모리 갱신을 알리는 SSE 단계~~ **구현됨**: `remember` → Step `kind:"memory"` title "기억하기", `detail` = 저장한 문장 (항목마다 따로, 합치지 않음). `forget` → `forget` "기억 지우기" (agent §3.2) | 18 "기억했어요" 칩 | `memory` 단계가 `done` 이면 칩 "기억했어요 · {detail}" | 해결 |
+| b5 | ~~docent 도구들의 Step `kind`·title~~ **구현됨**: `get_guide_note` → `guide` "가이드 노트 확인", `search_passages`·`web_search`·`read_page`·내장 웹 검색 → `research` "자료 찾기", `view_memory` → `recall` "기억 확인" (agent §3.2) | 18 진행 단계 문구 | 서버 title 을 그대로 보여줌 (앱 변경 없음) | 해결 |
 | b6 | 답변 출처 (근거 조각·웹 출처) | 18 출처 칩 | 숨김 | 나중 |
 | b7 | 한 번에 여러 대안 카드 (장면 ③ "대안 2개") | 19 | 카드 1개 + 텍스트 대안 + 후속 칩 | 나중 |
 | b8 | 하루 요약 API | 30 | 앱이 PlanDetail·이벤트·제안·메모리로 계산 | 나중 |
-| b9 | 가이드 준비 작업 응답 형식 (진행 수, 장소별 상태, 남은 시간) | 32 진행 바 | 노트 목록 status 를 3초마다 다시 읽어 개수로 표시 | 권장 |
+| b9 | ~~가이드 준비 작업 응답 형식~~ **구현됨**: `GuideJobView` = `total`·`finished`·`ready`·`failed`·`current`·`eta_sec`·`places[{place_id, title, status, error, sources, …}]` (agent §12) | 32 진행 바 | 작업 조회 3초마다. 작업이 사라졌으면(404 `job_not_found`, 서버 재시작) 노트 목록으로 | 해결 |
 | b10 | safety outlook 응답 필드 이름 (요약·위험 시간대·만조·특보) — 문서에 `safe_windows` 외 필드명이 없음 | 27 | `/safety/docs` 로 확인 후 명세 보완. 시간 띠는 `GET /safety/situation` `hours[].levels` | 권장 |
 | b11 | 메모리 일괄 삭제 | 31 모두 지우기 | 항목마다 `DELETE /docent/memory/{id}` | 나중 |
 | b12 | 앱 백그라운드 알림 (OS 푸시·백그라운드 위치) | 화면이 꺼진 동안의 지연·안전 | 앱을 켜면 쌓인 이벤트를 정리해 보여줌 (events.md §2) | 나중 |
@@ -58,7 +58,7 @@
 | b15 | 날씨 칩(기온) | 기존 디자인의 "18°" | 안전 배지로 대체 (위험 단계 + 근거). 기온은 safety 가 판단에 쓰지 않음 (폭염·한파 미반영, safety §7) | — |
 | b16 | 실행 취소 API | 08 스낵바 | 앱이 역 ops 계산 (아래 c9 한계) | 나중 |
 | b17 | ~~agent 날짜 표시 시계~~ **구현됨**: agent 도 safety·trip 시계를 따른다 (agent §11) | 데모 가상 시각 | — | 해결 |
-| b19 | 해설 길이 선호를 구조화한 값 (예: memory summary 의 `style_length: short\|long`) | 16 [짧게]/[자세히] 강조 | 메모리 `style` 문장에서 "짧"/"핵심"/"자세" 키워드로 앱이 추정 | 권장 |
+| b19 | ~~해설 길이 선호를 구조화한 값~~ **구현됨**: `GET /docent/memory`·`/summary` 의 `style_length: short\|long\|null` (docent §5.1) | 16 [짧게]/[자세히] 강조 | `style_length` 를 그대로 쓴다 (null 이면 선호 없음) | 해결 |
 | b18 | 웹 빌드 CORS | — | 모바일·데스크톱으로만 실행 (기존과 같음) | 나중 |
 
 ## (c) 기존 앱 코드(`origin/feat/app` 의 `app/`)에서 고칠 것
