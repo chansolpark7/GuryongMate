@@ -11,6 +11,7 @@ x-backend: &backend
   volumes:
     - ./backend:/srv
     - ./data:/data
+    - ./scripts:/scripts:ro   # 테스트가 재생 파일(scripts/trip/scenes)을 읽는다
   command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir /srv/app
   healthcheck:
     test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
@@ -29,6 +30,9 @@ x-backend-env: &backend-env
   PLANNER_ROUTING_BASE_URL: http://gateway
   ROUTING_SAFETY_BASE_URL: http://gateway
   ROUTING_VALHALLA_URL: http://valhalla:8002
+  TRIP_PLANNER_BASE_URL: http://gateway
+  TRIP_SAFETY_BASE_URL: http://gateway
+  TRIP_AGENT_BASE_URL: http://gateway
 
 services:
   gateway:
@@ -44,6 +48,7 @@ services:
       - safety
       - account
       - routing
+      - trip
 
   db:
     image: pgvector/pgvector:pg16
@@ -152,6 +157,18 @@ services:
     environment:
       <<: *backend-env
       SERVICE: account
+    depends_on:
+      db:
+        condition: service_healthy
+
+  # 여행 중 상태·이벤트 (위치 -> 도착·출발·지연·위험 구역 판정, Agent 선제 턴). docs/trip/README.md
+  trip:
+    <<: *backend
+    environment:
+      <<: *backend-env
+      SERVICE: trip
+      # 백그라운드 틱(초): 지연 재판정·안전 경고 수집·선제 턴 큐 전송·자동 종료. 0 이면 끔
+      TRIP_TICK_SEC: ${TRIP_TICK_SEC:-30}
     depends_on:
       db:
         condition: service_healthy
