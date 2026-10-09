@@ -62,11 +62,15 @@ class Session:
 
 class PlannerClient:
     """로그인했으면(세션 파일) Authorization: Bearer 로, 아니면 개발 모드처럼 X-User-Id 로 부른다.
-    access 토큰이 만료돼 401 이 오면 refresh 로 한 번 갱신하고 다시 보낸다."""
+    access 토큰이 만료돼 401 이 오면 refresh 로 한 번 갱신하고 다시 보낸다.
+    admin_token(없으면 환경변수 GURYONG_ADMIN_TOKEN): 공개 서버의 데모 조작 API(가상 상황·즉시 안전 점검·trip 틱·가입)를
+    여는 관리 토큰. 모든 요청에 X-Admin-Token 으로 붙인다 (docs/deploy/README.md §3)."""
 
     def __init__(self, base_url: str = "http://127.0.0.1:8000", user_id: str = "demo", timeout: float = 10,
-                 session: Session | None = None):
-        self._http = httpx.Client(base_url=base_url, timeout=timeout)
+                 session: Session | None = None, admin_token: str | None = None):
+        admin_token = admin_token or os.environ.get("GURYONG_ADMIN_TOKEN")
+        self._http = httpx.Client(base_url=base_url, timeout=timeout,
+                                  headers={"X-Admin-Token": admin_token} if admin_token else None)
         self._user_id = user_id
         self.session = session or Session(base_url)
 
