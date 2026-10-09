@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../../core/models/agent.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/common.dart';
 import '../planner/plan_controller.dart';
@@ -52,17 +53,25 @@ class _AiSheetState extends State<_AiSheet> {
     super.initState();
     _chat = context.read<ChatController>();
     _chat.addListener(_autoScroll);
+    _chat.onNotice = (e) {
+      if (mounted) showError(context, e);
+    };
     _input.text = widget.prefill ?? '';
     _input.addListener(() => setState(() {}));
     _chat.init().then((_) {
       final s = widget.sendNow;
-      if (s != null && mounted) _chat.send(s);
+      if (s != null && mounted) {
+        _chat.send(s);
+      } else if (mounted) {
+        _chat.reloadSession(); // 다시 열면 카드도 서버 상태로 (다른 곳에서 승인·대체됐을 수 있다)
+      }
     });
   }
 
   @override
   void dispose() {
     _chat.removeListener(_autoScroll);
+    _chat.onNotice = null;
     _sheet.dispose();
     _input.dispose();
     _focus.dispose();
@@ -72,7 +81,7 @@ class _AiSheetState extends State<_AiSheet> {
   /// 새 내용이 오면 맨 아래로 (사용자가 위로 올려 읽는 중이면 그대로 둔다).
   void _autoScroll() {
     final s = _scroll;
-    final len = _chat.turns.fold<int>(0, (n, t) => n + t.text.length + t.steps.length * 10 + (t.proposal == null ? 0 : 1000));
+    final len = _chat.turns.fold<int>(0, (n, t) => n + t.text.length + t.steps.length * 10 + t.cards.length * 1000 + (t.collapsed ? 5 : 0));
     if (s == null || !s.hasClients || len == _lastLen) return;
     _lastLen = len;
     final nearBottom = s.position.maxScrollExtent - s.position.pixels < 160;
@@ -84,7 +93,11 @@ class _AiSheetState extends State<_AiSheet> {
 
   void _send([String? text]) {
     final msg = (text ?? _input.text).trim();
-    if (msg.isEmpty || _chat.busy) return;
+    if (msg.isEmpty) return;
+    if (_chat.busy) {
+      showInfo(context, '구룡메이트가 답하는 중이에요. 잠시 후 다시 눌러 주세요');
+      return;
+    }
     _input.clear();
     _chat.send(msg);
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -150,11 +163,17 @@ class _AiSheetState extends State<_AiSheet> {
                     if (chat.initializing && chat.turns.isEmpty)
                       const Padding(padding: EdgeInsets.all(32), child: Center(child: CircularProgressIndicator()))
                     else if (chat.initError != null && chat.sessionId == null)
-                      StateView(title: 'AI Planner에 연결하지 못했어요', message: '${chat.initError}', actionLabel: '다시 시도', onAction: chat.init)
+                      StateView(
+                        icon: Icons.dns_outlined,
+                        title: '구룡메이트에 연결하지 못했어요',
+                        message: '잠시 후 다시 시도해 주세요. 일정은 그대로예요.',
+                        actionLabel: '다시 시도',
+                        onAction: chat.init,
+                      )
                     else if (chat.turns.isEmpty)
                       _Welcome(day: plan.day, onPick: _send)
                     else
-                      for (final (i, t) in chat.turns.indexed) _TurnView(turn: t, isLast: i == chat.turns.length - 1, onFollowUp: _send),
+                      for (final (i, t) in chat.turns.indexed) TurnView(turn: t, isLast: i == chat.turns.length - 1, onFollowUp: _send),
                   ],
                 ),
               ),
@@ -184,7 +203,7 @@ class _Header extends StatelessWidget {
             const SizedBox(width: 10),
             Expanded(
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisAlignment: MainAxisAlignment.center, children: [
-                Text('AI Planner', style: AppText.headline),
+                Text('구룡메이트', style: AppText.headline),
                 Text('${plan.plan?.title ?? ''} · Day ${plan.day}', style: AppText.caption, overflow: TextOverflow.ellipsis),
               ]),
             ),
@@ -212,9 +231,10 @@ class _Welcome extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // 빠른 실행 (c10): agent 에 check_safety·safety_outlook 이 있으므로 "날씨·안전 확인"을 둔다.
     final actions = [
       (Icons.route, '경로 최적화', 'Day $day 동선을 이동 시간이 짧아지도록 최적화해줘'),
-      (Icons.rule, '일정 문제 해결', 'Day $day 일정에 있는 경고를 해결해줘'),
+      (Icons.verified_user_outlined, '날씨·안전 확인', 'Day $day 날씨와 안전 확인해줘'),
       (Icons.restaurant, '점심 장소 찾기', 'Day $day 점심 먹을 곳을 추천해줘'),
       (Icons.add, '빈 시간 채우기', 'Day $day 빈 시간에 갈 만한 곳 추천해줘'),
     ];
@@ -252,50 +272,50 @@ class _Welcome extends StatelessWidget {
   }
 }
 
-class _TurnView extends StatelessWidget {
-  const _TurnView({required this.turn, required this.isLast, required this.onFollowUp});
+/// 한 턴: 사용자 말풍선 → 진행 영역(status + 단계, steps_done 이면 한 줄로 접힘) → 답변 → 기억 칩 → 오류 → 카드.
+class TurnView extends StatelessWidget {
+  const TurnView({super.key, required this.turn, required this.isLast, required this.onFollowUp});
   final ChatTurn turn;
   final bool isLast;
   final ValueChanged<String> onFollowUp;
 
   @override
   Widget build(BuildContext context) {
-    final p = turn.proposal;
+    final chat = context.read<ChatController>();
     final text = turn.text.toString().trim();
+    final lastPending = turn.proposals.where((e) => e.state == ProposalState.pending).lastOrNull;
     return Padding(
       padding: const EdgeInsets.only(bottom: 16),
       child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
         if (turn.user.isNotEmpty) _UserBubble(text: turn.user),
-        if (turn.steps.isNotEmpty) ...[
+        if (turn.hasProgress) ...[
           const SizedBox(height: 12),
-          (turn.done || text.isNotEmpty || p != null) ? _ActivitySummary(turn: turn) : _ActivityCard(turn: turn),
-        ],
-        if (!turn.done && turn.steps.isEmpty && text.isEmpty) ...[
+          turn.collapsed ? ActivitySummary(turn: turn) : ActivityCard(turn: turn),
+        ] else if (!turn.done && text.isEmpty) ...[
           const SizedBox(height: 12),
-          _Thinking(label: turn.thinking ? '생각하는 중…' : '요청을 확인하는 중…'),
+          const _Thinking(label: '생각 중…'),
         ],
         if (text.isNotEmpty) ...[
           const SizedBox(height: 12),
           Text(text, style: AppText.body),
         ],
+        if (turn.remembered.isNotEmpty) ...[
+          const SizedBox(height: 8),
+          Wrap(spacing: 6, runSpacing: 6, children: [for (final s in turn.remembered) _MemoryChip(text: s.detail)]),
+        ],
         if (turn.error != null) ...[
           const SizedBox(height: 10),
-          Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(color: AppColors.dangerSoft, borderRadius: BorderRadius.circular(12)),
-            child: Row(children: [
-              const Icon(Icons.error_outline, color: AppColors.danger, size: 18),
-              const SizedBox(width: 8),
-              Expanded(child: Text(turn.error!, style: AppText.meta.copyWith(color: AppColors.danger))),
-            ]),
-          ),
+          _ErrorBox(turn: turn, onRetry: turn.retryable && turn.user.isNotEmpty ? () => chat.retry(turn) : null),
         ],
         if (turn.stopped) Padding(padding: const EdgeInsets.only(top: 8), child: Text('응답을 중단했어요', style: AppText.caption)),
-        if (p != null) ...[
+        for (final c in turn.cards) ...[
           const SizedBox(height: 12),
-          if (p.isRecommendation && p.after != null) RecommendationCards(turn: turn) else ProposalCard(turn: turn),
-          if (isLast && turn.proposalState == ProposalState.pending && !p.isRecommendation) _FollowUps(turn: turn, onPick: onFollowUp),
+          switch (c) {
+            ProposalEntry() => ProposalCard(entry: c),
+            RecommendationEntry() => RecommendationCard(entry: c),
+          },
         ],
+        if (isLast && lastPending != null && turn.done) _FollowUps(entry: lastPending, onPick: onFollowUp),
       ]),
     );
   }
@@ -339,44 +359,103 @@ class _Thinking extends StatelessWidget {
       ]);
 }
 
-/// 진행 중: "✨ 일정을 조정하고 있어요" + 단계 목록.
-class _ActivityCard extends StatelessWidget {
-  const _ActivityCard({required this.turn});
+class _MemoryChip extends StatelessWidget {
+  const _MemoryChip({required this.text});
+  final String text;
+
+  @override
+  Widget build(BuildContext context) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+        decoration: BoxDecoration(color: AppColors.aiSoft, borderRadius: BorderRadius.circular(14)),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          const Icon(Icons.bookmark_border, size: 14, color: AppColors.ai),
+          const SizedBox(width: 4),
+          Flexible(child: Text('기억했어요 · $text', style: AppText.caption.copyWith(color: AppColors.ai, fontWeight: FontWeight.w700), overflow: TextOverflow.ellipsis)),
+        ]),
+      );
+}
+
+class _ErrorBox extends StatelessWidget {
+  const _ErrorBox({required this.turn, required this.onRetry});
+  final ChatTurn turn;
+  final VoidCallback? onRetry;
+
+  @override
+  Widget build(BuildContext context) => Container(
+        padding: const EdgeInsets.fromLTRB(12, 8, 4, 8),
+        decoration: BoxDecoration(color: AppColors.dangerSoft, borderRadius: BorderRadius.circular(12)),
+        child: Row(children: [
+          const Icon(Icons.error_outline, color: AppColors.danger, size: 18),
+          const SizedBox(width: 8),
+          Expanded(child: Text(turn.error!, style: AppText.meta.copyWith(color: AppColors.danger))),
+          if (onRetry != null)
+            TextButton.icon(
+              onPressed: onRetry,
+              icon: const Icon(Icons.refresh, size: 16, color: AppColors.danger),
+              label: Text('다시 시도', style: AppText.meta.copyWith(color: AppColors.danger, fontWeight: FontWeight.w700)),
+            ),
+        ]),
+      );
+}
+
+/// 단계 kind 별 아이콘 (Figma 05 Tool Activity 의 단계 줄 앞).
+IconData stepIcon(String kind) => switch (kind) {
+      'search' => Icons.search,
+      'place' => Icons.place_outlined,
+      'plan' => Icons.event_note_outlined,
+      'edit' => Icons.edit_calendar_outlined,
+      'rule' => Icons.rule,
+      'review' => Icons.fact_check_outlined,
+      'recommend' => Icons.recommend_outlined,
+      'proposal' => Icons.auto_awesome,
+      'route' => Icons.route,
+      'safety' => Icons.verified_user_outlined,
+      'memory' || 'forget' || 'recall' => Icons.bookmark_border,
+      'research' => Icons.menu_book_outlined,
+      'guide' => Icons.description_outlined,
+      _ => Icons.more_horiz,
+    };
+
+/// 진행 중: "✨ {status}" + 단계 목록 (running 스피너 Purple / done Green ✓ + detail / error Red + detail).
+class ActivityCard extends StatelessWidget {
+  const ActivityCard({super.key, required this.turn});
   final ChatTurn turn;
 
   @override
-  Widget build(BuildContext context) {
-    final allDone = turn.steps.every((s) => s.ok != null);
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(borderRadius: BorderRadius.circular(16), border: Border.all(color: AppColors.aiLine)),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Row(children: [
-          const Icon(Icons.auto_awesome, size: 16, color: AppColors.ai),
-          const SizedBox(width: 6),
-          Text('일정을 조정하고 있어요', style: AppText.section.copyWith(fontSize: 15)),
+  Widget build(BuildContext context) => Container(
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(borderRadius: BorderRadius.circular(16), border: Border.all(color: AppColors.aiLine)),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            const Icon(Icons.auto_awesome, size: 16, color: AppColors.ai),
+            const SizedBox(width: 6),
+            Expanded(child: Text((turn.status ?? '요청을 확인하고 있어요').replaceFirst(RegExp(r'\.$'), ''), style: AppText.section.copyWith(fontSize: 15))),
+          ]),
+          if (turn.steps.isNotEmpty) ...[const SizedBox(height: 8), StepList(steps: turn.steps)],
         ]),
-        const SizedBox(height: 8),
-        _Steps(steps: turn.steps, trailing: allDone ? '변경안 만드는 중' : null),
-      ]),
-    );
-  }
+      );
 }
 
-class _Steps extends StatelessWidget {
-  const _Steps({required this.steps, this.trailing});
-  final List<ToolStep> steps;
-  final String? trailing;
+class StepList extends StatelessWidget {
+  const StepList({super.key, required this.steps});
+  final List<AgentStep> steps;
 
   @override
   Widget build(BuildContext context) {
-    Widget row(Widget icon, String label, String sub, {Color? color, bool line = true}) => IntrinsicHeight(
+    const spinner = SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.ai));
+    return Column(children: [
+      for (final (i, s) in steps.indexed)
+        IntrinsicHeight(
+          key: ValueKey('step-${s.id}'),
           child: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
             SizedBox(
               width: 20,
               child: Column(children: [
-                Padding(padding: const EdgeInsets.only(top: 2), child: icon),
-                if (line) Expanded(child: Container(width: 2, color: AppColors.line, margin: const EdgeInsets.symmetric(vertical: 2))),
+                Padding(
+                  padding: const EdgeInsets.only(top: 2),
+                  child: s.running ? spinner : Icon(s.failed ? Icons.error : Icons.check_circle, size: 20, color: s.failed ? AppColors.danger : AppColors.success),
+                ),
+                if (i < steps.length - 1) Expanded(child: Container(width: 2, color: AppColors.line, margin: const EdgeInsets.symmetric(vertical: 2))),
               ]),
             ),
             const SizedBox(width: 10),
@@ -384,47 +463,43 @@ class _Steps extends StatelessWidget {
               child: Padding(
                 padding: const EdgeInsets.only(bottom: 8),
                 child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Text(label, style: AppText.label.copyWith(color: color)),
-                  if (sub.isNotEmpty) Text(sub, style: AppText.caption, maxLines: 2, overflow: TextOverflow.ellipsis),
+                  Row(children: [
+                    Icon(stepIcon(s.kind), size: 14, color: s.running ? AppColors.ai : AppColors.text3),
+                    const SizedBox(width: 4),
+                    Flexible(
+                      child: Text(s.title,
+                          style: AppText.label.copyWith(color: s.running ? AppColors.ai : (s.failed ? AppColors.danger : AppColors.text))),
+                    ),
+                  ]),
+                  if (s.running || s.detail.isNotEmpty)
+                    Text(s.running && s.detail.isEmpty ? '잠시만요…' : s.detail,
+                        style: AppText.caption.copyWith(color: s.failed ? AppColors.danger : AppColors.text3), maxLines: 2, overflow: TextOverflow.ellipsis),
                 ]),
               ),
             ),
           ]),
-        );
-    const spinner = SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.ai));
-    return Column(children: [
-      for (final (i, s) in steps.indexed)
-        row(
-          s.ok == null
-              ? spinner
-              : Icon(s.ok! ? Icons.check_circle : Icons.error, size: 20, color: s.ok! ? AppColors.success : AppColors.danger),
-          s.label,
-          s.ok == null ? '잠시만요…' : s.summary,
-          color: s.ok == null ? AppColors.ai : null,
-          line: i < steps.length - 1 || trailing != null,
         ),
-      if (trailing != null) row(spinner, trailing!, '잠시만요…', color: AppColors.ai, line: false),
     ]);
   }
 }
 
-/// 완료 후: 접힌 요약 "✓ N단계 완료 · …" (펼치면 단계 목록).
-class _ActivitySummary extends StatefulWidget {
-  const _ActivitySummary({required this.turn});
+/// steps_done 뒤: 접힌 요약 "✓ n단계 완료 · …" (펼치면 단계 목록).
+class ActivitySummary extends StatefulWidget {
+  const ActivitySummary({super.key, required this.turn});
   final ChatTurn turn;
 
   @override
-  State<_ActivitySummary> createState() => _ActivitySummaryState();
+  State<ActivitySummary> createState() => _ActivitySummaryState();
 }
 
-class _ActivitySummaryState extends State<_ActivitySummary> {
+class _ActivitySummaryState extends State<ActivitySummary> {
   bool _open = false;
 
   @override
   Widget build(BuildContext context) {
     final t = widget.turn;
-    final failed = t.steps.any((s) => s.ok == false);
-    final running = t.steps.any((s) => s.ok == null);
+    final failed = t.steps.any((s) => s.failed);
+    final summary = (t.stepsSummary ?? '').replaceFirst(' : ', ' · ');
     return Material(
       color: AppColors.background,
       borderRadius: BorderRadius.circular(12),
@@ -435,15 +510,12 @@ class _ActivitySummaryState extends State<_ActivitySummary> {
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
           child: Column(children: [
             Row(children: [
-              if (running)
-                const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.ai))
-              else
-                Icon(failed ? Icons.error : Icons.check_circle, size: 20, color: failed ? AppColors.warning : AppColors.success),
+              Icon(failed ? Icons.error : Icons.check_circle, size: 20, color: failed ? AppColors.warning : AppColors.success),
               const SizedBox(width: 8),
-              Expanded(child: Text(t.activitySummary, style: AppText.meta.copyWith(color: AppColors.text), overflow: TextOverflow.ellipsis)),
+              Expanded(child: Text(summary, style: AppText.meta.copyWith(color: AppColors.text), maxLines: _open ? 3 : 1, overflow: TextOverflow.ellipsis)),
               Icon(_open ? Icons.expand_less : Icons.expand_more, color: AppColors.text3),
             ]),
-            if (_open) ...[const SizedBox(height: 10), _Steps(steps: t.steps)],
+            if (_open) ...[const SizedBox(height: 10), StepList(steps: t.steps)],
           ]),
         ),
       ),
@@ -453,13 +525,13 @@ class _ActivitySummaryState extends State<_ActivitySummary> {
 
 /// 제안에 답하지 않고 이어서 요청하는 칩 (탭하면 새 요청으로 전송, 이전 제안은 대체).
 class _FollowUps extends StatelessWidget {
-  const _FollowUps({required this.turn, required this.onPick});
-  final ChatTurn turn;
+  const _FollowUps({required this.entry, required this.onPick});
+  final ProposalEntry entry;
   final ValueChanged<String> onPick;
 
   @override
   Widget build(BuildContext context) {
-    final rows = buildChangeRows(turn.proposal!);
+    final rows = entry.proposal.before == null ? const <ChangeRow>[] : buildChangeRows(entry.proposal);
     final changed = rows.where((r) => r.badge == '교체' || r.badge == '삭제').map((r) => r.fromText ?? r.title).firstOrNull;
     final chips = [
       if (changed != null) '$changed은 그대로 둬줘',

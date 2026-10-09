@@ -1,16 +1,42 @@
+import '../models/account.dart';
 import '../models/agent.dart';
 import '../models/place.dart';
 import '../models/plan.dart';
+import '../models/safety.dart';
 import 'api_client.dart';
 
 /// 백엔드 API 를 화면에서 쓰기 좋은 형태로 묶은 것.
-/// 경로·필드는 docs/places, docs/planner, docs/agent README 와 같다.
+/// 경로·필드는 docs/places, planner, agent, account, safety, routing, docent, trip README 와 같다.
 class GuryongApi {
   GuryongApi(this.client);
   final ApiClient client;
 
   Map<String, dynamic> _m(dynamic v) => v as Map<String, dynamic>;
   List<Map<String, dynamic>> _l(dynamic v) => (v as List).cast<Map<String, dynamic>>();
+
+  // ---------- account ----------
+
+  Future<TokenResponse> login(String loginId, String password) async =>
+      TokenResponse.fromJson(_m(await client.post('/auth/login', {'login_id': loginId.trim().toLowerCase(), 'password': password})));
+
+  Future<TokenResponse> signup(String loginId, String password, {String? displayName}) async => TokenResponse.fromJson(_m(await client.post('/auth/signup', {
+        'login_id': loginId.trim().toLowerCase(),
+        'password': password,
+        if (displayName != null && displayName.trim().isNotEmpty) 'display_name': displayName.trim(),
+      })));
+
+  Future<TokenResponse> googleLogin(String idToken) async => TokenResponse.fromJson(_m(await client.post('/auth/google', {'id_token': idToken})));
+
+  Future<TokenResponse> refresh(String refreshToken) async =>
+      TokenResponse.fromJson(_m(await client.post('/auth/refresh', {'refresh_token': refreshToken})));
+
+  Future<void> logout(String refreshToken) => client.post('/auth/logout', {'refresh_token': refreshToken});
+
+  Future<UserView> me() async => UserView.fromJson(_m(await client.get('/users/me')));
+
+  Future<void> deleteMe() => client.delete('/users/me');
+
+  Future<dynamic> health() => client.get('/health');
 
   // ---------- places ----------
 
@@ -62,7 +88,7 @@ class GuryongApi {
   Future<PlanDetail> addItem(int planId, Map<String, dynamic> body) async =>
       PlanDetail.fromJson(_m(await client.post('/planner/plans/$planId/items', body)));
 
-  /// 보낸 필드만 바뀐다. start_time 에 null 을 보내면 시각 고정을 푼다.
+  /// 보낸 필드만 바뀐다. start_time 에 null 을 보내면 시각 고정을 푼다. travel_mode 로 구간 수단을 바꾼다.
   Future<PlanDetail> updateItem(int planId, int itemId, Map<String, dynamic> body) async =>
       PlanDetail.fromJson(_m(await client.patch('/planner/plans/$planId/items/$itemId', body)));
 
@@ -79,11 +105,26 @@ class GuryongApi {
   Future<PlanDetail> applyOps(int planId, List<Map<String, dynamic>> ops) async =>
       PlanDetail.fromJson(_m(await client.post('/planner/plans/$planId/ops', {'ops': ops})));
 
+  /// 목록은 ProposalSummary (ops·before·after 없음).
   Future<List<ProposalDetail>> proposals(int planId, {String? status}) async =>
       _l(await client.get('/planner/plans/$planId/proposals', {'status': status})).map(ProposalDetail.fromJson).toList();
 
   Future<ProposalDetail> proposal(int planId, int proposalId) async =>
       ProposalDetail.fromJson(_m(await client.get('/planner/plans/$planId/proposals/$proposalId')));
+
+  Future<SafetyCheck> safety(int planId) async => SafetyCheck.fromJson(_m(await client.get('/planner/plans/$planId/safety')));
+
+  /// ops 를 적용했다고 치고 점검 (21 수정안 위험). 새 항목 item_id 는 음수.
+  Future<SafetyCheck> safetyPreview(int planId, List<Map<String, dynamic>> ops) async =>
+      SafetyCheck.fromJson(_m(await client.post('/planner/plans/$planId/safety/preview', {'ops': ops})));
+
+  Future<List<SafetyAlert>> safetyAlerts(int planId, {String status = 'new'}) async =>
+      _l(await client.get('/planner/plans/$planId/safety/alerts', {'status': status})).map(SafetyAlert.fromJson).toList();
+
+  Future<void> safetyAlertSeen(int planId, int alertId) => client.post('/planner/plans/$planId/safety/alerts/$alertId/seen');
+
+  /// 개발·시연용 (AUTH_REQUIRED=false 에서만). 운영이면 404 not_available.
+  Future<dynamic> safetyScan({bool force = true}) => client.post('/planner/safety/scan', null, {'force': force});
 
   // ---------- agent ----------
 
@@ -95,15 +136,79 @@ class GuryongApi {
 
   Future<AgentSessionDetail> session(String id) async => AgentSessionDetail.fromJson(_m(await client.get('/agent/sessions/$id')));
 
-  /// SSE: start · thinking · text · tool_call · tool_result · proposal · done · error
+  Future<Map<String, dynamic>> agentInfo() async => _m(await client.get('/agent/info'));
+
+  /// SSE: start · status · step · thinking · text · proposal · recommendation · steps_done · done · error (agent §3.1)
   Stream<SseEvent> chat(String sessionId, String message) => client.postSse('/agent/sessions/$sessionId/chat', {'message': message});
 
-  /// 승인 → {proposal, plan}. 응답 생성 중이면 409.
-  Future<PlanDetail> acceptProposal(String sessionId, int proposalId) async {
-    final res = _m(await client.post('/agent/sessions/$sessionId/proposals/$proposalId/accept'));
-    return PlanDetail.fromJson(_m(res['plan']));
+  /// 승인 → {proposal, plan}. 409 base_changed · progress_changed · proposal_not_pending · agent_busy 는 ApiException.code 로.
+  Future<(ProposalDetail, PlanDetail)> acceptProposal(String sessionId, int proposalId, {bool overwrite = false}) async {
+    final res = _m(await client.post('/agent/sessions/$sessionId/proposals/$proposalId/accept', {'mode': overwrite ? 'overwrite' : 'auto'}));
+    return (ProposalDetail.fromJson(_m(res['proposal'])), PlanDetail.fromJson(_m(res['plan'])));
   }
 
-  Future<void> rejectProposal(String sessionId, int proposalId) =>
-      client.post('/agent/sessions/$sessionId/proposals/$proposalId/reject');
+  Future<ProposalDetail> rejectProposal(String sessionId, int proposalId) async =>
+      ProposalDetail.fromJson(_m(await client.post('/agent/sessions/$sessionId/proposals/$proposalId/reject')));
+
+  /// 현재 일정에 맞춰 다시 제안 (SSE, 대화에 "이전 제안을 현재 일정에 맞춰 다시 만들어줘." 가 남는다).
+  Stream<SseEvent> repropose(String sessionId, int proposalId) => client.postSse('/agent/sessions/$sessionId/proposals/$proposalId/repropose');
+
+  Future<(Recommendation, PlanDetail)> candidate(String sessionId, int recId, int candidateId, {required bool add}) async {
+    final res = _m(await client.post('/agent/sessions/$sessionId/recommendations/$recId/candidates/$candidateId/${add ? 'add' : 'remove'}'));
+    return (Recommendation.fromJson(_m(res['recommendation'])), PlanDetail.fromJson(_m(res['plan'])));
+  }
+
+  Future<GuideJob> guidePrepare(int planId, {List<String>? placeIds, bool force = false}) async => GuideJob.fromJson(_m(await client.post(
+        '/agent/plans/$planId/guide/prepare',
+        {'place_ids': ?placeIds, if (force) 'force': true},
+      )));
+
+  Future<GuideJob> guideJob(int planId, String jobId) async => GuideJob.fromJson(_m(await client.get('/agent/plans/$planId/guide/jobs/$jobId')));
+
+  // ---------- docent ----------
+
+  Future<MemoryList> memory({int? planId}) async => MemoryList.fromJson(_m(await client.get('/docent/memory', {'plan_id': planId})));
+
+  Future<void> deleteMemory(int id) => client.delete('/docent/memory/$id');
+
+  Future<void> addMemory(Map<String, dynamic> body) => client.post('/docent/memory', body);
+
+  Future<void> updateMemory(int id, Map<String, dynamic> body) => client.patch('/docent/memory/$id', body);
+
+  /// 가이드 노트 본문 (short·long·highlights·sources …). 17 미리보기.
+  Future<Map<String, dynamic>> guideNote(int planId, String placeId) async => _m(await client.get('/docent/plans/$planId/notes/$placeId'));
+
+  Future<List<GuideNoteSummary>> guideNotes(int planId) async =>
+      _l(await client.get('/docent/plans/$planId/notes')).map(GuideNoteSummary.fromJson).toList();
+
+  // ---------- safety · routing · trip ----------
+
+  Future<Outlook> outlook(DateTime date) async => Outlook.fromJson(_m(await client.get('/safety/outlook', {
+        'date': '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}',
+      })));
+
+  Future<Situation> situation() async => Situation.fromJson(_m(await client.get('/safety/situation')));
+
+  Future<List<AvoidZone>> avoidZones({String minRisk = 'caution'}) async => (await avoid(minRisk: minRisk)).$1;
+
+  /// 지금 피할 구역과 safety 기준 시각(가상 시각이면 그 시각) — 28 범례 "지금 기준 HH:MM".
+  Future<(List<AvoidZone>, DateTime?)> avoid({String minRisk = 'caution'}) async {
+    final j = _m(await client.get('/safety/avoid', {'min_risk': minRisk}));
+    return (_l(j['zones']).map(AvoidZone.fromJson).toList(), j['now'] == null ? null : DateTime.parse(j['now'] as String));
+  }
+
+  Future<SimState> sim() async => SimState.fromJson(_m(await client.get('/safety/sim')));
+
+  Future<SimState> setSim(Map<String, dynamic> body) async => SimState.fromJson(_m(await client.put('/safety/sim', body)));
+
+  /// hazards: report(지나는 구역 알림) | avoid(우회). stops = [(lat, lng), …].
+  Future<RouteResult> route(String mode, List<(double, double)> stops, {String? hazards, bool steps = false}) async =>
+      RouteResult.fromJson(_m(await client.post('/routing/route', {
+        'mode': mode,
+        'stops': [for (final (lat, lng) in stops) {'lat': lat, 'lng': lng}],
+        'hazards': ?hazards,
+        if (steps) 'steps': true,
+      })));
+
+  Future<TripState> tripState(int planId) async => TripState.fromJson(_m(await client.get('/trip/plans/$planId/state')));
 }

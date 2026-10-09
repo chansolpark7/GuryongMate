@@ -3,21 +3,32 @@ import 'package:provider/provider.dart';
 
 import '../../core/app_session.dart';
 import '../../core/format.dart';
+import '../../core/models/account.dart';
 import '../../core/models/plan.dart';
+import '../../core/models/safety.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/common.dart';
+import '../../core/widgets/safety_widgets.dart';
 import '../planner/planner_shell.dart';
+import '../settings/settings_screen.dart';
 import 'create_plan_screen.dart';
 
 class _PlanRow {
-  _PlanRow(this.plan, this.pendingOps);
+  _PlanRow(this.plan, this.pendingProposals);
   final PlanSummary plan;
-  final int pendingOps; // 승인 대기 중인 AI 제안의 변경 수
+  final int pendingProposals; // 승인 대기 중인 AI 제안 수
+  SafetyCheck? safety; // 시작일이 오늘~3일 안일 때만
+  bool safetyFailed = false;
+  bool newAlert = false;
+  TripState? trip; // 시작일 ≤ 오늘 ≤ 종료일일 때만
 }
 
-/// 02_Plan_List
+/// 02_Plan_List → 29_Plan_List_Status (Figma 73:5305). 계정 버튼 · 지금 여행 중 · 안전 배지.
 class PlanListScreen extends StatefulWidget {
   const PlanListScreen({super.key});
+
+  /// 오늘 (테스트·데모에서 바꿀 수 있다).
+  static DateTime Function() today = () => dateOnly(DateTime.now());
 
   @override
   State<PlanListScreen> createState() => _PlanListScreenState();
@@ -35,19 +46,38 @@ class _PlanListScreenState extends State<PlanListScreen> {
 
   Future<void> _load() async {
     final api = context.read<AppSession>().api;
+    final today = PlanListScreen.today();
     try {
       final plans = await api.plans();
-      final pending = await Future.wait(plans.map((p) async {
+      final rows = await Future.wait(plans.map((p) async {
+        int pending = 0;
         try {
-          final list = await api.proposals(p.id, status: 'pending');
-          return list.fold<int>(0, (s, x) => s + x.ops.length);
-        } catch (_) {
-          return 0;
+          pending = (await api.proposals(p.id, status: 'pending')).length;
+        } catch (_) {}
+        final row = _PlanRow(p, pending);
+        final days = p.startDate.difference(today).inDays;
+        // 여행일: 동행 상태 (active 면 "지금 여행 중" 카드)
+        if (!today.isBefore(p.startDate) && !today.isAfter(p.endDate)) {
+          try {
+            row.trip = await api.tripState(p.id);
+          } catch (_) {}
         }
+        // 오늘~3일 안: 안전 점검 + 새 경고. 3일 넘게 남으면 부르지 않는다 (29).
+        if (days <= 3 && !p.endDate.isBefore(today)) {
+          try {
+            row.safety = await api.safety(p.id);
+          } catch (_) {
+            row.safetyFailed = true;
+          }
+          try {
+            row.newAlert = (await api.safetyAlerts(p.id)).isNotEmpty;
+          } catch (_) {}
+        }
+        return row;
       }));
       if (!mounted) return;
       setState(() {
-        _rows = [for (var i = 0; i < plans.length; i++) _PlanRow(plans[i], pending[i])];
+        _rows = rows;
         _error = null;
       });
     } catch (e) {
@@ -122,6 +152,7 @@ class _PlanListScreenState extends State<PlanListScreen> {
               'stay_minutes': i.stayMinutes,
               'memo': i.memo,
               'start_time': ?i.startTime,
+              'travel_mode': ?i.travelMode,
             },
           for (final c in src.constraints)
             {'op': 'add_constraint', 'type': c.type, 'params': c.params, 'hard': c.hard, 'source': c.source, 'note': c.note},
@@ -134,36 +165,15 @@ class _PlanListScreenState extends State<PlanListScreen> {
     }
   }
 
-  void _account() {
-    final session = context.read<AppSession>();
-    showModalBottomSheet<void>(
-      context: context,
-      showDragHandle: true,
-      builder: (ctx) => SafeArea(
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
-          ListTile(leading: const Icon(Icons.person_outline), title: Text(session.userId ?? ''), subtitle: const Text('로그인 계정')),
-          ListTile(leading: const Icon(Icons.dns_outlined), title: Text(session.baseUrl), subtitle: const Text('서버 주소')),
-          ListTile(
-            leading: const Icon(Icons.logout),
-            title: const Text('로그아웃'),
-            onTap: () {
-              Navigator.pop(ctx);
-              session.signOut();
-            },
-          ),
-        ]),
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     final rows = _rows;
-    final today = dateOnly(DateTime.now());
-    final upcoming = (rows ?? []).where((r) => !r.plan.endDate.isBefore(today)).toList()
-      ..sort((a, b) => a.plan.startDate.compareTo(b.plan.startDate));
-    final past = (rows ?? []).where((r) => r.plan.endDate.isBefore(today)).toList()
-      ..sort((a, b) => b.plan.startDate.compareTo(a.plan.startDate));
+    final today = PlanListScreen.today();
+    final traveling = (rows ?? []).where((r) => r.trip?.active == true).toList()
+      ..sort((a, b) => (b.trip!.startedAt ?? DateTime(0)).compareTo(a.trip!.startedAt ?? DateTime(0)));
+    final current = traveling.firstOrNull;
+    final upcoming = (rows ?? []).where((r) => r != current && !r.plan.endDate.isBefore(today)).toList()..sort((a, b) => a.plan.startDate.compareTo(b.plan.startDate));
+    final past = (rows ?? []).where((r) => r.plan.endDate.isBefore(today)).toList()..sort((a, b) => b.plan.startDate.compareTo(a.plan.startDate));
 
     return Scaffold(
       body: SafeArea(
@@ -180,7 +190,13 @@ class _PlanListScreenState extends State<PlanListScreen> {
                     Text('여행 계획 ${rows?.length ?? 0}개', style: AppText.meta.copyWith(color: AppColors.text3)),
                   ]),
                 ),
-                _CircleButton(icon: Icons.person_outline, onTap: _account, tooltip: '계정', bg: AppColors.surface, fg: AppColors.text2),
+                _CircleButton(
+                  icon: Icons.person_outline,
+                  onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const SettingsScreen())),
+                  tooltip: '설정',
+                  bg: AppColors.surface,
+                  fg: AppColors.text2,
+                ),
                 const SizedBox(width: 8),
                 _CircleButton(icon: Icons.add, onTap: _create, tooltip: '새 여행 만들기'),
               ]),
@@ -188,17 +204,21 @@ class _PlanListScreenState extends State<PlanListScreen> {
               if (rows == null && _error == null)
                 const Padding(padding: EdgeInsets.all(48), child: Center(child: CircularProgressIndicator()))
               else if (rows == null)
-                StateView(title: '여행 목록을 불러오지 못했어요', message: '$_error', actionLabel: '다시 시도', onAction: _load)
+                StateView(icon: Icons.dns_outlined, title: '서버에 연결하지 못했어요', message: userMessage(_error!), actionLabel: '다시 시도', onAction: _load)
               else ...[
+                if (current != null) ...[
+                  const _SectionTitle('지금 여행 중'),
+                  _TripCard(row: current, onOpen: () => _open(current.plan.id)),
+                  const SizedBox(height: 16),
+                ],
                 if (upcoming.isNotEmpty) ...[
-                  _SectionTitle('다가오는 여행'),
-                  for (final (i, r) in upcoming.indexed)
-                    _PlanCard(row: r, index: i, onTap: () => _open(r.plan.id), onLongPress: () => _actions(r.plan)),
+                  const _SectionTitle('다가오는 여행'),
+                  for (final (i, r) in upcoming.indexed) _PlanCard(row: r, index: i, today: today, onTap: () => _open(r.plan.id), onLongPress: () => _actions(r.plan)),
                   const SizedBox(height: 12),
                 ],
                 if (past.isNotEmpty) ...[
-                  _SectionTitle('지난 여행'),
-                  for (final r in past) _PlanCard(row: r, past: true, onTap: () => _open(r.plan.id), onLongPress: () => _actions(r.plan)),
+                  const _SectionTitle('지난 여행'),
+                  for (final r in past) _PlanCard(row: r, past: true, today: today, onTap: () => _open(r.plan.id), onLongPress: () => _actions(r.plan)),
                   const SizedBox(height: 12),
                 ],
                 if (rows.isEmpty)
@@ -231,7 +251,7 @@ class _CircleButton extends StatelessWidget {
         child: Material(
           color: bg,
           shape: const CircleBorder(),
-          child: InkWell(customBorder: const CircleBorder(), onTap: onTap, child: SizedBox(width: 40, height: 40, child: Icon(icon, color: fg))),
+          child: InkWell(customBorder: const CircleBorder(), onTap: onTap, child: SizedBox(width: 44, height: 44, child: Icon(icon, color: fg))),
         ),
       );
 }
@@ -245,9 +265,70 @@ class _SectionTitle extends StatelessWidget {
       Padding(padding: const EdgeInsets.only(bottom: 10), child: Text(text, style: AppText.label.copyWith(color: AppColors.text3, fontWeight: FontWeight.w700)));
 }
 
-class _PlanCard extends StatelessWidget {
-  const _PlanCard({required this.row, this.index = 0, this.past = false, required this.onTap, required this.onLongPress});
+/// 남은 일정 위험 배지 (overall_risk + 주의·위험 수). null 은 회색 "판단 불가".
+Widget _overallBadge(SafetyCheck s, {String suffix = ''}) {
+  final risk = s.overallRisk;
+  final n = (s.counts['caution'] ?? 0) + (s.counts['danger'] ?? 0);
+  final label = switch (risk) {
+    'safe' => '안전$suffix',
+    'caution' || 'danger' => '${riskWord(risk)} · $n곳',
+    _ => '판단 불가',
+  };
+  return RiskChip(risk: risk, label: label);
+}
+
+/// 여행 중 카드 (Green 테두리 #CDEFD9 r20). [동행 화면 열기] → 14 (동행 모드 화면은 다음 단계, 지금은 계획 화면을 연다).
+class _TripCard extends StatelessWidget {
+  const _TripCard({required this.row, required this.onOpen});
   final _PlanRow row;
+  final VoidCallback onOpen;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = row.trip!;
+    final s = row.safety;
+    final line = [if (t.currentState == 'visiting') '지금 방문 중', if (t.nextTitle != null) '다음 ${t.nextTitle}'].join(' · ');
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(20), border: Border.all(color: const Color(0xFFCDEFD9)), boxShadow: AppShadow.card),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Container(width: 72, height: 72, decoration: BoxDecoration(color: AppColors.successSoft, borderRadius: BorderRadius.circular(12)), child: const Icon(Icons.near_me_outlined, color: AppColors.success, size: 28)),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Row(children: [
+                Expanded(child: Text(row.plan.title, style: AppText.section, maxLines: 1, overflow: TextOverflow.ellipsis)),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                  decoration: BoxDecoration(color: AppColors.successSoft, borderRadius: BorderRadius.circular(10)),
+                  child: Row(mainAxisSize: MainAxisSize.min, children: [
+                    Container(width: 6, height: 6, decoration: const BoxDecoration(color: AppColors.success, shape: BoxShape.circle)),
+                    const SizedBox(width: 4),
+                    Text('여행 중', style: AppText.caption.copyWith(color: AppColors.success, fontWeight: FontWeight.w700)),
+                  ]),
+                ),
+              ]),
+              if (line.isNotEmpty) Text(line, style: AppText.meta),
+              const SizedBox(height: 8),
+              Wrap(spacing: 6, runSpacing: 6, children: [
+                if (s != null) _overallBadge(s, suffix: ' · 남은 일정'),
+                InfoChip(label: '${row.plan.dayEnd} 종료'),
+              ]),
+            ]),
+          ),
+        ]),
+        const SizedBox(height: 14),
+        AppButton(label: '동행 화면 열기', icon: Icons.near_me_outlined, onPressed: onOpen),
+      ]),
+    );
+  }
+}
+
+class _PlanCard extends StatelessWidget {
+  const _PlanCard({required this.row, required this.today, this.index = 0, this.past = false, required this.onTap, required this.onLongPress});
+  final _PlanRow row;
+  final DateTime today;
   final int index;
   final bool past;
   final VoidCallback onTap;
@@ -260,9 +341,8 @@ class _PlanCard extends StatelessWidget {
   ];
 
   String? _dday(PlanSummary p) {
-    final today = dateOnly(DateTime.now());
     if (past) return null;
-    if (!today.isBefore(p.startDate)) return '여행 중';
+    if (!today.isBefore(p.startDate)) return '오늘 여행';
     return 'D-${p.startDate.difference(today).inDays}';
   }
 
@@ -272,48 +352,52 @@ class _PlanCard extends StatelessWidget {
     final (icon, fg, bg) = past ? (Icons.image_outlined, AppColors.text3, AppColors.field) : _thumbs[index % _thumbs.length];
     final dday = _dday(p);
     final titleColor = past ? AppColors.text3 : AppColors.text;
+    final daysLeft = p.startDate.difference(today).inDays;
+    final checkFrom = p.startDate.subtract(const Duration(days: 3));
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),
       child: AppCard(
-        padding: const EdgeInsets.all(12),
+        radius: 20,
+        padding: const EdgeInsets.all(16),
         onTap: onTap,
         onLongPress: onLongPress,
-        child: Column(children: [
-          Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Container(width: 72, height: 72, decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(12)), child: Icon(icon, color: fg, size: 28)),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                const SizedBox(height: 2),
-                Row(children: [
-                  Expanded(child: Text(p.title, style: AppText.section.copyWith(color: titleColor), maxLines: 1, overflow: TextOverflow.ellipsis)),
-                  if (dday != null)
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                      decoration: BoxDecoration(color: AppColors.primarySoft, borderRadius: BorderRadius.circular(8)),
-                      child: Text(dday, style: AppText.caption.copyWith(color: AppColors.primary, fontWeight: FontWeight.w700)),
-                    ),
-                ]),
-                const SizedBox(height: 2),
-                Text(dateRange(p.startDate, p.endDate), style: AppText.meta.copyWith(color: past ? AppColors.text3 : AppColors.text2)),
-                const SizedBox(height: 10),
-                Row(children: [
-                  const Icon(Icons.place_outlined, size: 14, color: AppColors.text3),
-                  const SizedBox(width: 3),
-                  Text('${p.itemCount} places', style: AppText.caption.copyWith(color: past ? AppColors.text3 : AppColors.text2)),
-                  Flexible(child: Text(' · ${past ? md(p.updatedAt) : editedAgo(p.updatedAt)}', style: AppText.caption, overflow: TextOverflow.ellipsis)),
-                ]),
+        child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Container(width: 72, height: 72, decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(12)), child: Icon(icon, color: fg, size: 28)),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Row(children: [
+                Expanded(child: Text(p.title, style: AppText.section.copyWith(color: titleColor), maxLines: 1, overflow: TextOverflow.ellipsis)),
+                if (dday != null)
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                    decoration: BoxDecoration(color: AppColors.primarySoft, borderRadius: BorderRadius.circular(8)),
+                    child: Text(dday, style: AppText.caption.copyWith(color: AppColors.primary, fontWeight: FontWeight.w700)),
+                  ),
               ]),
-            ),
-          ]),
-          if (row.pendingOps > 0 && !past) ...[
-            const Divider(height: 20, color: AppColors.line),
-            Row(children: [
-              const Icon(Icons.auto_awesome, size: 14, color: AppColors.ai),
-              const SizedBox(width: 4),
-              Text('AI가 일정 ${row.pendingOps}개를 제안했어요', style: AppText.caption.copyWith(color: AppColors.ai, fontWeight: FontWeight.w700)),
+              const SizedBox(height: 2),
+              Text('${dateRange(p.startDate, p.endDate)} · ${p.itemCount}곳', style: AppText.meta.copyWith(color: past ? AppColors.text3 : AppColors.text2)),
+              if (!past) ...[
+                const SizedBox(height: 8),
+                Wrap(spacing: 6, runSpacing: 6, crossAxisAlignment: WrapCrossAlignment.center, children: [
+                  if (row.safety != null)
+                    Stack(clipBehavior: Clip.none, children: [
+                      _overallBadge(row.safety!),
+                      if (row.newAlert)
+                        Positioned(right: -2, top: -2, child: Container(width: 8, height: 8, decoration: const BoxDecoration(color: AppColors.danger, shape: BoxShape.circle))),
+                    ])
+                  else if (daysLeft > 3)
+                    InfoChip(label: '날씨는 ${checkFrom.month}/${two(checkFrom.day)}부터 확인', icon: Icons.shield_outlined)
+                  else if (row.safetyFailed)
+                    const InfoChip(label: '안전 정보 없음', icon: Icons.cloud_off_outlined),
+                  if (row.pendingProposals > 0) InfoChip(label: 'AI 제안 ${row.pendingProposals}개', icon: Icons.auto_awesome, fg: AppColors.ai, bg: AppColors.aiSoft),
+                ]),
+              ] else ...[
+                const SizedBox(height: 6),
+                Text(md(p.updatedAt), style: AppText.caption),
+              ],
             ]),
-          ],
+          ),
         ]),
       ),
     );
@@ -344,7 +428,7 @@ class _AiPromo extends StatelessWidget {
               Expanded(
                 child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                   Text('어디로 떠나고 싶으세요?', style: AppText.label.copyWith(fontWeight: FontWeight.w700)),
-                  Text('한 줄만 말하면 AI가 일정 초안을 만들어요', style: AppText.caption.copyWith(color: AppColors.text2)),
+                  Text('한 줄만 말하면 구룡메이트가 일정 초안을 만들어요', style: AppText.caption.copyWith(color: AppColors.text2)),
                 ]),
               ),
               const Icon(Icons.chevron_right, color: AppColors.ai),

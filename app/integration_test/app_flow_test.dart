@@ -1,20 +1,24 @@
-// 실제 앱을 실제 백엔드에 붙여 화면을 눌러 보는 시나리오.
-//   docker compose up -d   (저장소 루트, 게이트웨이 :8000)
-//   flutter test integration_test/app_flow_test.dart -d windows
-// 단계마다 화면을 build/screens/*.png 로 저장한다. 만든 여행은 끝에 지운다.
+// 실제 앱을 각본 LLM 스택(AGENT_PROVIDER=scripted, SAFETY_SOURCE=mock)에 붙여 F1·F2 를 눌러 보는 시나리오.
+//   docker compose up -d --build          (저장소 루트, .env 의 API_PORT)
+//   flutter test integration_test/app_flow_test.dart -d windows --dart-define=LIVE_API=http://127.0.0.1:8018 --dart-define=DEMO=true
+// 단계마다 화면을 build/screens/NN_이름.png (390×844) 로 저장한다. 만든 계정은 끝에 탈퇴로 지운다.
 import 'dart:io';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:guryong_mate/core/api/api_client.dart';
 import 'package:guryong_mate/core/app_session.dart';
-import 'package:guryong_mate/core/models/plan.dart';
+import 'package:guryong_mate/core/token_store.dart';
+import 'package:guryong_mate/features/chat/chat_controller.dart';
 import 'package:guryong_mate/features/planner/plan_controller.dart';
 import 'package:guryong_mate/main.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+const live = String.fromEnvironment('LIVE_API', defaultValue: 'http://127.0.0.1:8018');
 
 final _root = GlobalKey();
 var _shotNo = 0;
@@ -22,15 +26,21 @@ var _shotNo = 0;
 Future<void> shot(WidgetTester tester, String name) async {
   await tester.pump(const Duration(milliseconds: 300));
   final boundary = _root.currentContext!.findRenderObject()! as RenderRepaintBoundary;
-  final image = await boundary.toImage(pixelRatio: 1.5);
+  final image = await boundary.toImage(pixelRatio: 1);
   final png = await image.toByteData(format: ui.ImageByteFormat.png);
   final file = File('build/screens/${(++_shotNo).toString().padLeft(2, '0')}_$name.png');
   await file.parent.create(recursive: true);
   await file.writeAsBytes(png!.buffer.asUint8List());
 }
 
+Future<void> settle(WidgetTester tester, [int ms = 800]) async {
+  for (var t = 0; t < ms; t += 100) {
+    await tester.pump(const Duration(milliseconds: 100));
+  }
+}
+
 /// 네트워크 응답을 기다리며 [finder] 가 나타날 때까지 화면을 갱신한다.
-Future<void> waitFor(WidgetTester tester, Finder finder, {Duration timeout = const Duration(seconds: 20)}) async {
+Future<void> waitFor(WidgetTester tester, Finder finder, {Duration timeout = const Duration(seconds: 30)}) async {
   final end = DateTime.now().add(timeout);
   while (DateTime.now().isBefore(end)) {
     await tester.pump(const Duration(milliseconds: 100));
@@ -40,302 +50,250 @@ Future<void> waitFor(WidgetTester tester, Finder finder, {Duration timeout = con
   throw TestFailure('시간 안에 나타나지 않음: $finder');
 }
 
-Future<void> waitUntil(WidgetTester tester, bool Function() cond, String what, {Duration timeout = const Duration(seconds: 20)}) async {
+Future<void> waitUntil(WidgetTester tester, bool Function() cond, String what, {Duration timeout = const Duration(seconds: 60)}) async {
   final end = DateTime.now().add(timeout);
   while (DateTime.now().isBefore(end)) {
     await tester.pump(const Duration(milliseconds: 100));
     if (cond()) return;
   }
+  await shot(tester, 'FAIL');
   throw TestFailure('시간 안에 조건을 만족하지 않음: $what');
 }
 
-Future<void> waitGone(WidgetTester tester, Finder finder, {Duration timeout = const Duration(seconds: 20)}) async {
-  final end = DateTime.now().add(timeout);
-  while (DateTime.now().isBefore(end)) {
-    await tester.pump(const Duration(milliseconds: 100));
-    if (finder.evaluate().isEmpty) return;
-  }
-  throw TestFailure('시간 안에 사라지지 않음: $finder');
-}
-
-Future<void> settle(WidgetTester tester, [int ms = 800]) async {
-  for (var t = 0; t < ms; t += 100) {
-    await tester.pump(const Duration(milliseconds: 100));
+/// 시트 안 목록(DraggableScrollableSheet)은 ensureVisible 로 스크롤되지 않아 끌어서 화면 안으로 가져온다.
+bool _exists(Finder f) {
+  try {
+    return f.evaluate().isNotEmpty;
+  } catch (_) {
+    return false; // .last 같은 finder 는 비어 있으면 던진다
   }
 }
 
-Future<void> tap(WidgetTester tester, Finder f) async {
-  await tester.ensureVisible(f);
-  await tester.pump();
-  await tester.tap(f);
-  await settle(tester, 500);
-}
-
-/// 실제 시간으로 누르고 있는 길게 누르기 (live 바인딩에선 pump 시간이 실제로 흐르지 않을 수 있다).
-Future<void> longPress(WidgetTester tester, Finder f) async {
-  final g = await tester.startGesture(tester.getCenter(f.first));
-  for (var i = 0; i < 8; i++) {
-    await Future<void>.delayed(const Duration(milliseconds: 100));
+Future<void> reveal(WidgetTester tester, Finder f) async {
+  final sheet = find.descendant(of: find.byType(DraggableScrollableSheet), matching: find.byType(Scrollable));
+  if (sheet.evaluate().isEmpty) {
+    await tester.ensureVisible(f.first);
     await tester.pump();
+    return;
   }
-  await g.up();
-  await settle(tester, 500);
+  final view = tester.getRect(sheet.first);
+  for (var i = 0; i < 40; i++) {
+    if (_exists(f)) {
+      final r = tester.getRect(f.first);
+      if (r.top >= view.top + 8 && r.bottom <= view.bottom - 8) return;
+      await tester.drag(sheet.first, Offset(0, r.center.dy > view.center.dy ? -200 : 200));
+    } else {
+      await tester.drag(sheet.first, const Offset(0, -200));
+    }
+    await settle(tester, 200);
+  }
 }
 
-PlanController planOf(WidgetTester tester) =>
-    Provider.of<PlanController>(tester.element(find.text('Planner')), listen: false);
+Future<void> tap(WidgetTester tester, Finder f, {int ms = 600}) async {
+  await reveal(tester, f);
+  await tester.tap(f.first);
+  await settle(tester, ms);
+}
+
+/// 입력창에 쓰고 보낸다. 카드 버튼을 누른 뒤엔 입력창 포커스가 빠져 글이 안 들어갈 수 있어 확인하고 다시 넣는다.
+Future<void> say(WidgetTester tester, String text) async {
+  final field = find.byType(TextField).last;
+  for (var i = 0; i < 3; i++) {
+    await tester.tap(field);
+    await settle(tester, 300);
+    await tester.enterText(field, text);
+    await settle(tester, 300);
+    if (tester.widget<TextField>(field).controller?.text == text) break;
+  }
+  await tester.tap(find.byTooltip('보내기'));
+  await tester.pump();
+}
+
+PlanController planOf(WidgetTester tester) => Provider.of<PlanController>(tester.element(find.text('Planner')), listen: false);
+ChatController chatOf(WidgetTester tester) => Provider.of<ChatController>(tester.element(find.text('Planner')), listen: false);
+
+Future<void> waitTurn(WidgetTester tester) => waitUntil(tester, () => !chatOf(tester).busy, '응답 끝');
+
+Future<void> closeSheet(WidgetTester tester) async {
+  if (find.byTooltip('닫기').evaluate().isNotEmpty) await tap(tester, find.byTooltip('닫기').last);
+  await settle(tester, 600);
+}
 
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
 
-  testWidgets('실제 백엔드: 로그인 → 여행 만들기 → 일정 편집 → 지도', (tester) async {
+  testWidgets('각본 LLM 스택: 로그인 → F1 AI 로 계획 만들기 → 안전 화면 → F2 제안 승인·base_changed → 설정', (tester) async {
     await tester.binding.setSurfaceSize(const Size(390, 844));
+    AppConfig.demo = true;
     final prefs = await SharedPreferences.getInstance();
     await prefs.clear();
-    final session = await AppSession.load();
-    final user = 'app-ui-${DateTime.now().millisecondsSinceEpoch}@test.dev';
+    await prefs.setString('base_url', live);
+    final store = SecureTokenStore();
+    await store.clear();
 
-    await tester.pumpWidget(RepaintBoundary(
-      key: _root,
-      child: ChangeNotifierProvider.value(value: session, child: const GuryongApp()),
-    ));
+    // 계획 모드 흐름은 여행 전날 10:00, 평상시 (fixtures.md §1)
+    await ApiClient(baseUrl: live).put('/safety/sim', {'scenario': 'calm', 'now': '2026-10-09T10:00:00+09:00'});
+
+    final session = await AppSession.load(tokenStore: store);
+    final loginId = 'l1ui${DateTime.now().millisecondsSinceEpoch % 100000000}';
+    await tester.pumpWidget(RepaintBoundary(key: _root, child: ChangeNotifierProvider.value(value: session, child: const GuryongApp())));
     await settle(tester, 1500);
 
-    // ---------- 01 로그인 ----------
-    expect(find.text('Planit'), findsOneWidget);
-    await shot(tester, 'login');
-    await tap(tester, find.text('Google로 계속하기'));
-    expect(find.textContaining('Google 로그인은 계정 서비스가'), findsOneWidget);
-    await tap(tester, find.text('이메일로 계속하기'));
-    await tester.enterText(find.byType(TextField).first, user);
+    // ---------- 01 · 33(축약) · 35 ----------
+    expect(find.text('구룡메이트'), findsOneWidget);
+    await shot(tester, '01_login');
+    await tap(tester, find.text('서버 설정'));
+    await waitFor(tester, find.text('연결됨'));
+    await shot(tester, '33_server_only');
+    await tap(tester, find.byType(BackButton));
+    await tap(tester, find.text('아이디로 계속하기'));
+    await shot(tester, '34_login_id');
+    await tap(tester, find.text('가입하기'));
+    final fields = find.byType(TextField);
+    await tester.enterText(fields.at(0), loginId);
+    await tester.enterText(fields.at(1), 'guryong2026');
+    await tester.enterText(fields.at(2), '서윤');
     await settle(tester, 300);
-    await shot(tester, 'login_email');
-    await tap(tester, find.text('계속하기'));
+    await shot(tester, '35_signup');
+    await tap(tester, find.text('가입하고 시작하기'));
 
-    // ---------- 02 빈 목록 ----------
+    // ---------- 29 빈 목록 → 계획 만들기 (API, 데모 데이터 §6.1) ----------
     await waitFor(tester, find.text('My Plans'));
-    await settle(tester, 1000);
-    expect(find.text('아직 여행 계획이 없어요'), findsOneWidget);
-    await shot(tester, 'plan_list_empty');
-
-    // ---------- 03 여행 만들기 ----------
-    await tap(tester, find.byTooltip('새 여행 만들기'));
-    await tester.enterText(find.byType(TextField).first, '엄마랑 구룡포');
-    await tap(tester, find.text('날짜를 선택하세요'));
-    // 달력: 오늘이 있는 달의 날짜 두 개를 누른다 (첫 번째로 보이는 달)
-    final now = DateTime.now();
-    final startDay = now.day + 6 <= 26 ? now.day + 6 : 3;
-    await tester.tap(find.text('$startDay').first);
-    await settle(tester, 300);
-    await tester.tap(find.text('${startDay + 2}').first);
-    await settle(tester, 300);
-    await shot(tester, 'date_picker');
-    await tap(tester, find.text('저장'));
-    await tap(tester, find.text('맛집'));
-    await tap(tester, find.text('바다·자연'));
-    await tap(tester, find.text('도보'));
-    await shot(tester, 'create_plan');
-    await tap(tester, find.text('여행 만들기'));
-
-    // ---------- 04 빈 Planner ----------
-    await waitFor(tester, find.text('Day 1 일정이 비어 있어요'));
-    await settle(tester, 500);
-    expect(find.text('엄마랑 구룡포'), findsOneWidget);
-    expect(find.textContaining('2박 3일'), findsOneWidget);
-    await shot(tester, 'planner_empty');
-
-    // ---------- 장소 검색 → 3곳 추가 ----------
-    Future<void> addPlace(String query, {bool viaDetail = false}) async {
-      await tap(tester, find.text('일정 추가').last);
-      await waitFor(tester, find.text('Day 1에 일정 추가'));
-      await tester.enterText(find.byType(TextField).last, query);
-      await settle(tester, 600);
-      await waitFor(tester, find.byTooltip('바로 추가'));
-      await settle(tester, 1500);
-      if (viaDetail) {
-        await shot(tester, 'search_$query');
-        await tester.tap(find.descendant(of: find.byType(ListTile), matching: find.byType(Text)).first);
-        await waitFor(tester, find.text('Day 1에 추가'));
-        await settle(tester, 2500); // 사진 로딩
-        await shot(tester, 'place_detail');
-        await tap(tester, find.text('1시간 30분'));
-        await tap(tester, find.text('Day 1에 추가'));
-      } else {
-        await tap(tester, find.byTooltip('바로 추가').first);
-      }
-      await waitFor(tester, find.text('Day 1에 추가했어요'));
-      await settle(tester, 500);
-    }
-
-    await addPlace('구룡포 시장', viaDetail: true);
-    await addPlace('일본인 가옥');
-    await addPlace('구룡포 해수욕장');
-    final c = planOf(tester);
-    final items = c.currentDay!.items;
-    expect(items, hasLength(3));
-    expect(items.first.stayMinutes, 90);
-    await settle(tester, 4500); // 스낵바 사라질 때까지
-    await shot(tester, 'planner_3_items');
-
-    // ---------- 드래그로 순서 변경: 마지막 → 첫 번째 ----------
-    final lastTitle = items.last.title;
-    final handles = find.byIcon(Icons.drag_indicator);
-    final gesture = await tester.startGesture(tester.getCenter(handles.last));
-    await tester.pump(const Duration(milliseconds: 600));
-    for (var i = 0; i < 20; i++) {
-      await gesture.moveBy(const Offset(0, -25));
-      await tester.pump(const Duration(milliseconds: 30));
-    }
-    await gesture.up();
-    await waitUntil(tester, () => planOf(tester).currentDay!.items.first.title == lastTitle && !planOf(tester).busy, 'planOf(tester).currentDay!.items.first.title == lastTitle && !planOf(tester).busy');
     await settle(tester, 800);
-    expect(c.currentDay!.items.first.title, lastTitle);
-    await shot(tester, 'planner_reordered');
-
-    // ---------- ⋮ 메뉴: 시작 시간 고정 ----------
-    await tap(tester, find.byTooltip('일정 편집').at(1));
-    await shot(tester, 'item_menu');
-    await tap(tester, find.text('시작 시간 고정'));
-    await tap(tester, find.text('확인'));
-    await waitFor(tester, find.textContaining('고정').hitTestable());
-    await settle(tester, 800);
-    final fixed = c.currentDay!.items[1];
-    expect(fixed.startTime, isNotNull);
-
-    // ⋮ 메모
-    await tap(tester, find.byTooltip('일정 편집').at(0));
-    await tap(tester, find.text('메모'));
-    await tester.enterText(find.byType(TextField).last, '현금 준비');
-    await tap(tester, find.text('저장'));
-    await waitFor(tester, find.text('현금 준비'));
-
-    // ⋮ 꼭 유지하기
-    await tap(tester, find.byTooltip('일정 편집').at(2));
-    await tap(tester, find.text('꼭 유지하기'));
-    await waitUntil(tester, () => c.plan!.constraints.any((r) => r.type == 'must_include'), "c.plan!.constraints.any((r) => r.type == 'must_include')");
-
-    // ---------- ⋯ 여행 조건: 이동 시간 상한 → 경고 배너 ----------
-    await tap(tester, find.byTooltip('더보기'));
-    await tap(tester, find.text('여행 조건'));
-    await tap(tester, find.text('이동 시간 상한'));
-    await tap(tester, find.text('10분 이하'));
-    await waitFor(tester, find.textContaining('장소 간 이동 10분 이하'));
-    await settle(tester, 500);
-    await shot(tester, 'rules_sheet');
-    await tester.tapAt(const Offset(195, 60)); // 시트 밖을 눌러 닫기
-    await settle(tester, 800);
-    final travelViolations = c.plan!.violations.where((v) => v.code == 'max_travel_minutes').toList();
-    if (travelViolations.isNotEmpty) {
-      expect(find.text('AI로 조정'), findsOneWidget);
-    }
-    await shot(tester, 'planner_with_rules');
-
-    // ---------- Day 2 로 이동 ----------
-    await tap(tester, find.byTooltip('일정 편집').at(2));
-    await tap(tester, find.text('다른 날로 이동'));
-    await tap(tester, find.text('Day 2').last);
-    await waitUntil(tester, () => (c.plan!.dayOf(2)?.items.length ?? 0) == 1 && !c.busy, '(c.plan!.dayOf(2)?.items.length ?? 0) == 1 && !c.busy');
-    await tap(tester, find.text('Day 2').first);
-    await settle(tester, 800);
-    await shot(tester, 'planner_day2');
-    await tap(tester, find.text('Day 1').first);
-
-    // ---------- 카드 선택 → 지도에서 보기 ----------
-    await tap(tester, find.text(c.currentDay!.items.first.title));
-    await tap(tester, find.text('지도에서 보기'));
-    await waitFor(tester, find.text('일정에서 보기'));
-    await settle(tester, 4000); // 지도 타일
-    await shot(tester, 'map_selected');
-
-    // 레이어 → 관광지
-    await tap(tester, find.byTooltip('지도 레이어'));
-    await tap(tester, find.text('관광지'));
-    await settle(tester, 3000);
-    await shot(tester, 'map_layers');
-    await tap(tester, find.byTooltip('지도 레이어'));
-
-    // 지도 빈 곳 → 경로 요약
-    await tester.tapAt(const Offset(60, 300));
-    await settle(tester, 800);
-    await waitFor(tester, find.textContaining('Day 1 경로'));
-    await shot(tester, 'map_route_summary');
-
-    // 지도 Day 전환
-    await tap(tester, find.byTooltip('Day 선택'));
-    await tap(tester, find.textContaining('Day 2 ·'));
-    await settle(tester, 2500);
-    await shot(tester, 'map_day2');
-
-    // 핀 → 카드 → 일정에서 보기
-    await tap(tester, find.byTooltip('Day 선택'));
-    await tap(tester, find.textContaining('Day 1 ·'));
-    await settle(tester, 1500);
-    await tap(tester, find.text('2').hitTestable().first);
-    await waitFor(tester, find.text('일정에서 보기'));
-    await tap(tester, find.text('일정에서 보기'));
-    await waitFor(tester, find.text('Planner'));
-    expect(c.tab, 0);
-    await settle(tester, 800);
-    await shot(tester, 'back_to_planner');
-
-    // ---------- 삭제 ----------
-    final before = c.currentDay!.items.length;
-    await tap(tester, find.byTooltip('일정 편집').at(0));
-    await tap(tester, find.text('삭제').last);
-    await tap(tester, find.text('삭제').last); // 확인 대화상자
-    await waitUntil(tester, () => c.currentDay!.items.length == before - 1 && !c.busy, 'c.currentDay!.items.length == before - 1 && !c.busy');
-
-    // ---------- 목록으로 → 복제 → 삭제 ----------
-    final planId = c.planId;
-    await tap(tester, find.byTooltip('뒤로'));
-    await waitFor(tester, find.text('My Plans'));
-    await settle(tester, 1500);
-    expect(find.text('엄마랑 구룡포'), findsOneWidget);
-    await shot(tester, 'plan_list');
-    await longPress(tester, find.text('엄마랑 구룡포'));
-    await waitFor(tester, find.text('복제'));
-    await shot(tester, 'plan_actions');
-    await tap(tester, find.text('복제'));
-    await waitFor(tester, find.text('엄마랑 구룡포 (복사본)'));
-    await settle(tester, 800);
-    await shot(tester, 'plan_list_copied');
-
-    final api = session.api;
-    final copy = (await api.plans()).firstWhere((p) => p.title.endsWith('(복사본)'));
-    final copied = await api.plan(copy.id);
-    final original = await api.plan(planId);
-    expect(copied.allItems.map((i) => i.placeId).toList(), original.allItems.map((i) => i.placeId).toList());
-    expect(copied.constraints.length, original.constraints.length);
-
-    // 복사본을 열어 Planner 에서 확인한 뒤 ⋯ → 여행 삭제
-    await tap(tester, find.text('엄마랑 구룡포 (복사본)'));
-    await waitFor(tester, find.text('Planner'));
-    await settle(tester, 1500);
-    expect(find.text(copied.allItems.first.title), findsWidgets);
-    await shot(tester, 'copy_planner');
-    await tap(tester, find.byTooltip('더보기'));
-    await tap(tester, find.text('여행 삭제'));
-    await tap(tester, find.text('삭제').last);
-    await waitFor(tester, find.text('My Plans'));
-    await settle(tester, 1500);
-    expect(find.text('엄마랑 구룡포 (복사본)'), findsNothing);
-    expect(find.text('엄마랑 구룡포'), findsOneWidget);
-
-    // 원본은 API 로 정리하고 목록을 당겨서 새로고침
-    // (원본 카드는 이미 길게 눌렀다. live 테스트 바인딩의 합성 제스처에선 같은 카드를 다시 누르면 인식되지 않는다.
-    //  실제 마우스로는 정상 동작함을 확인했다.)
-    await api.deletePlan(planId);
+    final plan = await session.api.createPlan({
+      'title': '엄마랑 구룡포', 'start_date': '2026-10-10', 'end_date': '2026-10-10', 'day_start': '12:30', 'day_end': '18:00', 'travel_mode': 'walk',
+    });
     await tester.fling(find.text('My Plans'), const Offset(0, 300), 1000);
-    await waitGone(tester, find.text('엄마랑 구룡포'));
-    await settle(tester, 800);
-    expect(find.text('아직 여행 계획이 없어요'), findsOneWidget);
-    await shot(tester, 'plan_list_cleaned');
+    await waitFor(tester, find.text('엄마랑 구룡포'));
+    await settle(tester, 1500);
+    await shot(tester, '29_plan_list');
+    await tap(tester, find.text('엄마랑 구룡포'));
+    await waitFor(tester, find.text('아직 일정이 없어요'));
+    await settle(tester, 1500);
+    await shot(tester, '25_planner_empty');
 
-    // 로그아웃
-    await tap(tester, find.byTooltip('계정'));
-    await tap(tester, find.text('로그아웃'));
-    await waitFor(tester, find.text('Google로 계속하기'));
-    debugPrint('UI 시나리오 완료: 사용자 $user, 마지막 계획 ${original.title} (${original.allItems.length}곳) 정리됨');
-    expect(original, isA<PlanDetail>());
+    // ---------- F1: 05 스트리밍 → 06 카드 → 21 비교 → 승인 ----------
+    await tap(tester, find.byTooltip('구룡메이트 열기').first, ms: 1200);
+    await shot(tester, '05_ai_sheet_welcome');
+    await say(tester, '엄마랑 구룡포 일정 짜줘');
+    await waitFor(tester, find.text('일정 조정'));
+    await shot(tester, '05_ai_sheet_streaming');
+    await waitTurn(tester);
+    await settle(tester, 800);
+    await reveal(tester, find.text('일정 변경 제안'));
+    await shot(tester, '06_change_preview');
+    await reveal(tester, find.text('전체 적용'));
+    await shot(tester, '06_change_preview_actions');
+    await tap(tester, find.text('비교 보기 ›'), ms: 2500);
+    await waitFor(tester, find.text('기존안 · 수정안 비교'));
+    await settle(tester, 3000);
+    await shot(tester, '21_compare');
+    await tap(tester, find.byTooltip('닫기').first);
+    await tap(tester, find.text('전체 적용'), ms: 2500);
+    await waitFor(tester, find.textContaining('AI가 일정'));
+    await shot(tester, '08_after_apply');
+    final c = planOf(tester);
+    expect(c.plan!.allItems, hasLength(5));
+    await waitUntil(tester, () => c.safety != null && c.safety!.items.isNotEmpty, '안전 점검');
+    // 테스트 바인딩은 접근성 탐색을 켜 SnackBar 가 스스로 내려가지 않는다 → 직접 내린다
+    ScaffoldMessenger.of(tester.element(find.text('Planner'))).hideCurrentSnackBar();
+    await settle(tester, 800);
+    await shot(tester, '25_planner_safety');
+
+    // 26 근거 시트 · 27 전망
+    await tap(tester, find.text('안전').first, ms: 1200);
+    await shot(tester, '26_safety_detail');
+    await tester.tapAt(const Offset(195, 60));
+    await settle(tester, 800);
+    await tap(tester, find.textContaining('안전 점검'), ms: 2500);
+    await shot(tester, '27_outlook');
+    await tester.tapAt(const Offset(195, 60));
+    await settle(tester, 800);
+
+    // 07 지도 (routing geometry) · 28-S1 레이어
+    await tap(tester, find.text('Map'), ms: 6000);
+    await shot(tester, '07_map_route');
+    await tap(tester, find.byTooltip('지도 레이어'));
+    await shot(tester, '28s1_layers');
+    await tap(tester, find.byTooltip('지도 레이어'));
+    await tap(tester, find.text('Planner'));
+
+    // 06B 추천 → 추가 → 빼기
+    await tap(tester, find.byTooltip('구룡메이트 열기').first, ms: 1200);
+    await say(tester, '갈 만한 카페 추천해줘');
+    await waitTurn(tester);
+    await settle(tester, 800);
+    await reveal(tester, find.text('일정에 추가'));
+    await shot(tester, '06b_recommend');
+    await tap(tester, find.text('일정에 추가'), ms: 2000);
+    await waitUntil(tester, () => find.text('일정에 추가').evaluate().isEmpty, '추가됨');
+    await shot(tester, '06b_recommend_added');
+    await tap(tester, find.text('취소').last, ms: 2000);
+    await waitFor(tester, find.text('일정에 추가'));
+    await settle(tester, 2000); // 카드 동작 직후엔 세션 잠금이 잠깐 남아 있다 (409 agent_busy)
+
+    // ---------- F2: 제안 → 직접 편집 → 승인 409 base_changed → 36 → 다시 제안 → 거절 ----------
+    await say(tester, '구룡포항 점심은 1시간으로 늘려줘');
+    await waitTurn(tester);
+    await settle(tester, 600);
+    expect(chatOf(tester).turns.last.user, '구룡포항 점심은 1시간으로 늘려줘');
+    final house = c.plan!.allItems.firstWhere((i) => i.title.contains('가옥거리'));
+    await session.api.updateItem(plan.id, house.id, {'stay_minutes': 70}); // 다른 기기에서 고친 것처럼
+    await tap(tester, find.text('전체 적용').last, ms: 1500);
+    await waitFor(tester, find.text('이 제안 이후 일정이 바뀌었어요'));
+    await shot(tester, '36_base_changed');
+    await tap(tester, find.text('현재 일정에 맞춰 다시 제안'));
+    await waitTurn(tester);
+    await settle(tester, 800);
+    expect(chatOf(tester).turns.where((t) => t.proposals.any((e) => e.state == ProposalState.superseded)), isNotEmpty);
+    await reveal(tester, find.text('전체 적용').last);
+    await shot(tester, '20_reproposed');
+    await tap(tester, find.text('거절').last, ms: 1500);
+    await waitFor(tester, find.text('거절했어요. 일정은 그대로예요.'));
+
+    // 다시 요청 → 또 편집 → 409 → 카드 그대로 반영(overwrite)
+    await say(tester, '점심 1시간으로 늘려줘');
+    await waitTurn(tester);
+    await session.api.updateItem(plan.id, house.id, {'stay_minutes': 60});
+    await tap(tester, find.text('전체 적용').last, ms: 1500);
+    await waitFor(tester, find.text('카드에서 본 일정 그대로 반영'));
+    await tap(tester, find.text('카드에서 본 일정 그대로 반영'), ms: 2500);
+    await waitFor(tester, find.textContaining('AI가 일정'));
+    await shot(tester, '08_after_overwrite');
+    ScaffoldMessenger.of(tester.element(find.text('Planner'))).hideCurrentSnackBar();
+    await settle(tester, 800);
+
+    // ---------- 32 가이드 준비 ----------
+    await tap(tester, find.byTooltip('더보기'));
+    await tap(tester, find.text('현장 가이드 준비'), ms: 1500);
+    await shot(tester, '32_guide_prep');
+    await tap(tester, find.text('가이드 준비'), ms: 1500);
+    await shot(tester, '32_guide_prep_running');
+    await waitFor(tester, find.text('모두 준비됐어요'), timeout: const Duration(seconds: 120));
+    await settle(tester, 800);
+    await shot(tester, '32_guide_prep_done');
+    await tap(tester, find.byType(BackButton));
+
+    // ---------- 29 · 33 · 31 ----------
+    await tap(tester, find.byTooltip('뒤로'), ms: 2500);
+    await waitFor(tester, find.text('My Plans'));
+    await settle(tester, 2000);
+    await shot(tester, '29_plan_list_safety');
+    await tap(tester, find.byTooltip('설정'), ms: 2500);
+    await waitFor(tester, find.text('연결됨'));
+    await shot(tester, '33_settings');
+    await tap(tester, find.text('나에 대해'), ms: 1500);
+    await shot(tester, '31_memory');
+    await tap(tester, find.byType(BackButton));
+
+    // 정리: 탈퇴 (계획·대화·메모리 함께) → 01
+    final scroll = find.byType(Scrollable).first;
+    await tester.scrollUntilVisible(find.text('계정 삭제'), 200, scrollable: scroll);
+    await tap(tester, find.text('계정 삭제'));
+    await tap(tester, find.text('계속'));
+    await tap(tester, find.text('계정 삭제').last, ms: 2500);
+    await waitFor(tester, find.text('아이디로 계속하기'));
+    await ApiClient(baseUrl: live).put('/safety/sim', {'reset_clock': true});
+    debugPrint('UI 시나리오 완료: $loginId 탈퇴함, 캡처 $_shotNo장');
   });
 }

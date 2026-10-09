@@ -15,6 +15,7 @@ abstract final class AppColors {
   static const warningLine = Color(0xFFFBE1B5);
   static const danger = Color(0xFFE5484D);
   static const dangerSoft = Color(0xFFFDECEC);
+  static const dangerLine = Color(0xFFF8C9CB);
   static const text = Color(0xFF111827);
   static const text2 = Color(0xFF4B5563);
   static const text3 = Color(0xFF8B95A1);
@@ -68,6 +69,8 @@ ThemeData buildTheme() {
   return base.copyWith(
     textTheme: base.textTheme.apply(bodyColor: AppColors.text, displayColor: AppColors.text),
     appBarTheme: const AppBarTheme(backgroundColor: AppColors.background, surfaceTintColor: Colors.transparent, elevation: 0),
+    // Figma 의 뒤로 = iOS 꺾쇠 (Planner 앱바와 같게)
+    actionIconTheme: ActionIconThemeData(backButtonIconBuilder: (_) => const Icon(Icons.arrow_back_ios_new, size: 20)),
     bottomSheetTheme: const BottomSheetThemeData(backgroundColor: AppColors.surface, surfaceTintColor: Colors.transparent),
     dialogTheme: const DialogThemeData(backgroundColor: AppColors.surface, surfaceTintColor: Colors.transparent),
     popupMenuTheme: const PopupMenuThemeData(color: AppColors.surface, surfaceTintColor: Colors.transparent),
