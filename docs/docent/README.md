@@ -1,6 +1,7 @@
 # docent — 사용자 맞춤 여행 가이드 설계
 
-> 상태: **설계 (미구현)**. 2026-10-09 방향 합의. 구현하면서 바뀐 부분은 이 문서를 같이 고친다.
+> 상태: **docent 서비스 API 구현됨** (2026-10-09, §5: 메모리·검색·페이지 읽기·가이드 노트 저장). agent 쪽 도구(`remember`·`web_search`·가이드 준비 작업 등)는 아직 없다.
+> 구현하면서 바뀐 부분은 이 문서를 같이 고친다.
 
 우리 서비스의 두 번째 특징은 **사용자 맞춤형 여행 가이드**다. 같은 장소라도 "역사·사진을 좋아하고 어머니와 함께 오는 서윤"에게 맞는 이야기를 한다.
 지금 places 에 모은 관광 정보(소개문·오디오 가이드 대본)만으로는 깊이와 다양성이 부족하므로 **외부 검색**으로 자료를 보강한다.
@@ -66,8 +67,16 @@ LLM 이 대화에서 알게 된 사용자 정보를 **문서로 정리해 두고
 | **외부 웹 검색 (새로)** | `web_search` → `GET /docent/search?q=` | 지자체·박물관 공식 페이지, 언론, 블로그 후기 | 출처별 등급 |
 | **페이지 읽기 (새로)** | `read_page` → `GET /docent/page?url=` | 검색 결과 본문 (텍스트만, 길이 제한) | 출처별 등급 |
 
-### 2.1 외부 검색 공급자 (결정 필요)
+### 2.1 외부 검색 공급자 — 네이버 검색 API 로 시작 (구현됨)
 docent 가 공급자를 감싸서 같은 형식으로 돌려준다 (agent 는 공급자를 모른다). 공급자 키는 docent 서비스에만 둔다.
+
+- 인터페이스: `app/docent/search.py` 의 `SearchProvider` (`name`, `async search(q, limit) -> [RawResult]`). 공급자를 바꾸거나 늘리려면 이것을 구현하고 `get_search_provider` 에서 고른다.
+- **네이버**(`NaverSearch`): 키 `DOCENT_NAVER_CLIENT_ID` / `DOCENT_NAVER_CLIENT_SECRET` (`backend/.env`). 키가 없으면 `/docent/search` 는 `503 search_unavailable`, 나머지 API 는 그대로 동작.
+  - 웹문서(`webkr`)·뉴스(`news`)·블로그(`blog`) 세 가지를 동시에 부르고 **번갈아 섞는다** (웹문서 1위 → 뉴스 1위 → 블로그 1위 → 웹문서 2위 …). 같은 URL 은 한 번만.
+  - 제목·요약의 `<b>` 강조 태그와 HTML 엔티티를 지운다. 뉴스는 네이버 뉴스 주소 대신 언론사 원문 주소(`originallink`)와 발행일(`pubDate`), 블로그는 작성일(`postdate`)을 `published` 로.
+  - 호출 한도: 애플리케이션당 하루 25,000회. 검색 한 번에 3회를 부르지만 같은 질의는 하루 캐시라 해커톤 규모에서는 충분하다.
+
+처음 검토한 후보:
 
 | 후보 | 장점 | 고려할 점 |
 |---|---|---|
@@ -85,14 +94,28 @@ docent 가 공급자를 감싸서 같은 형식으로 돌려준다 (agent 는 �
               "tier": "official"}],     // official 공공·기관 | press 언론 | community 블로그·카페 | unknown
  "provider": "naver", "cached": false}
 ```
-- `tier` 는 도메인 규칙으로 정한다 (`go.kr`, `or.kr` 관광공사·박물관 = official, 언론사 목록 = press …).
+- `tier` 는 도메인 규칙으로 정한다 (`app/docent/tiers.py`, 모바일 주소의 `m.` 는 떼고 비교):
+  - official: `go.kr`·`or.kr`·`re.kr`·`ac.kr`·`mil.kr` 로 끝나는 도메인, `grandculture.net`(한국향토문화전자대전)
+  - press: 통신사·종합지·경제지·방송사, 대구·경북 지역지(매일신문·영남일보·경북일보·경북매일 등), 네이버·다음 뉴스
+  - community: 네이버 블로그·카페·포스트·지식iN, 티스토리, 브런치, 다음 블로그·카페, SNS·유튜브, 나무위키·위키백과, 트립어드바이저 등
+  - 그 밖은 unknown
+- `limit` 은 1~10 (기본 5). `published` 는 공급자가 알려 줄 때만 `YYYY-MM-DD`.
 - 사실(연도·인물·사건)은 official/press 로 확인된 것만 단정해서 말한다. community 정보는 "방문 후기로는 …"처럼 구분한다.
-- 검색·페이지 결과는 캐시한다 (같은 질의 하루).
+- 검색·페이지 결과는 캐시한다 (`docent_search_cache`. 같은 질의(공급자·검색어·limit)·같은 URL 은 하루, `DOCENT_CACHE_TTL_SEC`). 캐시에서 나오면 `"cached": true`. 실패한 결과는 캐시하지 않는다.
 
 ### 2.3 페이지 읽기 안전
-`GET /docent/page?url=` 는 서버가 외부 URL 을 가져오므로:
-- `http`/`https` 만, **사설·루프백·링크로컬 IP 는 막는다** (SSRF). 리다이렉트도 다시 검사한다.
-- 크기 제한(예: 2MB), 시간 제한(예: 8초), HTML 에서 본문 텍스트만 추출해 최대 N자(예: 8,000자)로 자른다.
+`GET /docent/page?url=` 는 서버가 외부 URL 을 가져오므로 (`app/docent/page.py`):
+- `http`/`https` 만, 사용자 정보가 든 주소(`user:pw@`) 금지 → `422 invalid_url`.
+- **사설·루프백·링크로컬 IP 는 막는다** (SSRF) → `403 url_blocked`. 호스트를 직접 DNS 조회해서 나온 주소가 **하나라도** 공인(global) 유니캐스트가 아니면 막는다.
+  사설(10/8·172.16/12·192.168/16)·루프백·링크로컬(169.254/16 클라우드 메타데이터 포함)·CGNAT(100.64/10)·0.0.0.0·멀티캐스트·예약, IPv6 루프백·ULA·링크로컬,
+  IPv4-mapped(`::ffff:127.0.0.1`)·NAT64·6to4 안에 든 내부 IPv4, `2130706433`·`0x7f.1` 같은 숫자 표기, compose 서비스 이름(`gateway`, `db` → 사설 IP)까지.
+- 검사한 IP 로 **직접 연결**한다 (Host 헤더·TLS SNI·인증서 확인은 원래 이름). 검사와 연결 사이에 DNS 가 바뀌어도(DNS rebinding) 내부로 가지 않는다. 환경변수 프록시도 쓰지 않는다.
+- 리다이렉트는 자동으로 따라가지 않고 **매번 위 검사를 다시** 한다 (최대 5번. 내부 주소·다른 scheme 으로 가면 `403 url_blocked`).
+- 크기 제한 2MB(넘으면 거기까지만 읽고 `truncated: true`, gzip 은 푼 뒤에도 2MB 까지), 시간 제한 8초(리다이렉트 포함 전체, 넘으면 `504 page_timeout`),
+  `text/html`·`application/xhtml+xml`·`text/plain` 만(`415 page_unsupported`). 상대 서버 오류·연결 실패는 `502 page_fetch_failed`.
+- HTML 에서 본문 텍스트만 추출한다: script·style·nav·header·footer·aside·form 등은 빼고, `<article>`/`<main>` 본문이 200자 이상이면 그것만. 최대 8,000자(`DOCENT_PAGE_MAX_CHARS`)로 자른다.
+  문자 인코딩은 헤더 → `<meta charset>` → UTF-8 → CP949(EUC-KR) 순서로 시도한다. 제목은 `og:title` → `<title>`.
+- 네이버 블로그(`blog.naver.com`)는 본문이 iframe 안에 있어 모바일 주소(`m.blog.naver.com`)로 바꿔 읽는다.
 - 가져온 내용은 **자료(데이터)이지 지시가 아니다.** 페이지 안의 문구가 LLM 에게 지시하는 것처럼 보여도 따르지 않도록 프롬프트에 명시한다.
 
 ---
@@ -122,7 +145,8 @@ docent 가 공급자를 감싸서 같은 형식으로 돌려준다 (agent 는 �
 ### 3.2 언제 만드나
 - 앱의 **[가이드 준비]** 버튼, 또는 제안 승인으로 일정에 장소가 생겼을 때 자동으로 `pending` 을 만든다.
 - 여행 시작(`docs/trip/README.md` §1) 때 아직 없는 노트가 있으면 그것부터 준비한다.
-- **다시 만들기**: 메모리의 `interest`·`style`·`companion` 이 바뀌면 그 계획의 노트를 `stale` 로 표시한다. 현장에서는 `stale` 이어도 그대로 쓰고(빠름), 여유가 있을 때 다시 만든다. 장소가 일정에서 빠지면 노트는 남겨 둔다 (다시 넣을 수 있음).
+- **다시 만들기**: 메모리의 `interest`·`style`·`companion` 이 바뀌면(추가·수정·삭제) docent 가 **자동으로** `ready` 노트를 `stale` 로 표시한다
+  (user 범위 항목이면 그 사용자의 모든 계획, plan 범위 항목이면 그 계획). `POST …/stale` 로 직접 표시할 수도 있다. 현장에서는 `stale` 이어도 그대로 쓰고(빠름), 여유가 있을 때 다시 만든다. 장소가 일정에서 빠지면 노트는 남겨 둔다 (다시 넣을 수 있음).
 
 ### 3.3 누가 어떻게 만드나 (agent 의 준비 작업)
 
@@ -158,26 +182,64 @@ Agent 동행 모드 도구 추가: `get_guide_note(place_id)`, `search_passages`
 
 ## 5. API (docent 서비스, `/docent`)
 
-docent 는 **저장·검색·외부 요청 대행**만 한다 (LLM 없음, 결정론적).
+docent 는 **저장·검색·외부 요청 대행**만 한다 (LLM 없음, 결정론적). 코드: `backend/app/docent/`, 테스트: `backend/tests/docent/`, 문서: `/docent/docs`.
 
 | 메서드 | 경로 | 설명 |
 |---|---|---|
-| GET | `/docent/memory?plan_id=` | 메모리 전체 (user 범위 + 그 plan 범위) + `memory_version` |
-| POST | `/docent/memory` | `{scope, plan_id?, category, text, source}` 추가 (같은 분류에 같은 뜻 항목 갱신은 agent 가 id 로 PATCH) |
-| PATCH·DELETE | `/docent/memory/{id}` | 수정·삭제 (앱 편집, agent `forget`) |
-| GET | `/docent/memory/summary?plan_id=` | 프롬프트용 요약 텍스트 |
-| GET | `/docent/search?q=&limit=` | 외부 검색 (§2.2) |
-| GET | `/docent/page?url=` | 페이지 본문 (§2.3) |
-| GET | `/docent/plans/{plan_id}/notes` | 노트 목록 (상태 포함) |
-| GET·PUT | `/docent/plans/{plan_id}/notes/{place_id}` | 노트 조회·저장 |
-| POST | `/docent/plans/{plan_id}/notes/{place_id}/stale` | 다시 만들기 표시 |
-| DELETE | `/docent/me` | 탈퇴 |
+| GET | `/docent/memory?plan_id=` | 메모리 전체 `{items, memory_version}`. user 범위 + (plan_id 가 있으면) 그 plan 범위, 최신순 |
+| POST | `/docent/memory` | `{scope, plan_id?, category, text, source}` 추가 → 201. 같은 범위·분류에 **글자가 같은** 항목이 있으면 새로 만들지 않고 source·시각만 갱신 → 200. 같은 뜻의 다른 문장은 agent 가 id 로 PATCH |
+| PATCH·DELETE | `/docent/memory/{id}` | 수정(`category`·`text`·`source` 중 일부)·삭제 → 204 (앱 편집, agent `forget`) |
+| GET | `/docent/memory/summary?plan_id=` | 프롬프트용 요약 `{text, count, memory_version}` |
+| GET | `/docent/search?q=&limit=` | 외부 검색 (§2.1~2.2) |
+| GET | `/docent/page?url=` | 페이지 본문 `{url, title, text, truncated, tier, fetched_at, cached}` (§2.3) |
+| GET | `/docent/plans/{plan_id}/notes` | 노트 목록 `[{plan_id, place_id, status, memory_version, prepared_at, updated_at}]` |
+| GET·PUT | `/docent/plans/{plan_id}/notes/{place_id}` | 노트 조회·저장 (PUT 은 전체 교체, 없으면 만든다 201) |
+| POST | `/docent/plans/{plan_id}/notes/{place_id}/stale` | 다시 만들기 표시 (`ready` 만 `stale` 로, 나머지 상태는 그대로) |
+| DELETE | `/docent/me` | 탈퇴: 이 사용자의 메모리·노트 삭제 → 204 (검색 캐시는 사용자와 무관) |
 
-테이블(`docent_*`): `docent_memory`, `docent_guide_note`, `docent_search_cache`.
+테이블(`docent_*`): `docent_memory`, `docent_memory_version`(사용자별 메모리 번호), `docent_guide_note`, `docent_search_cache`.
 
-인증·호출 규칙은 다른 서비스와 같다 (`app.core.auth`, 게이트웨이 경유). 계획 소유 확인은 planner `GET /planner/plans/{id}` 로 한다 (다른 사용자 계획이면 404).
+### 5.1 메모리 규칙
+- `scope=plan` 이면 `plan_id` 필수, `scope=user` 면 `plan_id` 를 넣지 않는다 (아니면 422). `text` 1~500자, `source` 1~100자 필수.
+- `memory_version`: 사용자 메모리 내용이 바뀔 때(추가·수정·삭제)마다 1 오른다 (user·plan 범위 공통 번호). source 만 바뀐 수정은 올리지 않는다.
+  가이드 노트를 만들 때 본 번호를 노트의 `memory_version` 에 넣는다.
+- 요약 형식: 분류마다 한 줄, 최신 5개, 최신이 앞. 순서는 해설 스타일 → 관심사 → 동행자·제약 → 피하고 싶은 것 → 음식 → 이미 아는 것·본 것 → 반응. 메모리가 없으면 빈 문자열.
+  ```
+  - 해설 스타일: 해설은 핵심만 짧게
+  - 관심사: 사진; 역사·근대 건축
+  - 동행자·제약: 계단은 피하고 싶음; (이번 여행) 어머니(60대) 동행
+  ```
 
----
+### 5.2 가이드 노트 저장 규칙 (PUT)
+- 본문: §3.1 GuideNote 의 `short`·`long`·`for_you`·`highlights`·`companion_tips`·`cautions`·`qa`·`sources` + `status`·`memory_version`·`model`·`error`(failed 이유).
+- `status=ready` 는 `short`·`long` 과 **출처 하나 이상**이 있어야 한다 (없으면 422. 출처가 없으면 `failed` 로 저장한다).
+- 본문을 비워 보낸 `pending`·`preparing`·`failed` 는 **이전 본문을 남긴다** (다시 만드는 중이거나 실패해도 현장에서 이전 노트를 쓸 수 있게).
+- `prepared_at` 은 서버가 `ready` 로 저장한 시각.
+
+### 5.3 인증·계획 소유·오류
+- 인증·호출 규칙은 다른 서비스와 같다 (`app.core.auth`, 게이트웨이 경유).
+- 계획 소유 확인은 planner `GET /planner/plans/{id}` 를 사용자 인증 그대로 HTTP 로 부른다 (`DOCENT_API_BASE_URL`, compose 는 `http://gateway`).
+  다른 사용자의 계획이면 `404 plan_not_found`, planner 에 접근할 수 없으면 `503 planner_unavailable`. 메모리 PATCH·DELETE 는 docent 에 저장된 사용자 id 로 확인한다.
+- 오류 형식은 planner 와 같다: `{"detail": {"code", "message", ...}}`. 요청 형식 오류는 `422 invalid_request`.
+
+| 코드 | 상태 | 뜻 |
+|---|---|---|
+| `memory_not_found` / `note_not_found` / `plan_not_found` | 404 | 없거나 다른 사용자의 것 |
+| `search_unavailable` | 503 | 검색 키 없음 또는 공급자 오류 (`reason`) |
+| `planner_unavailable` | 503 | 계획 소유를 확인할 수 없음 |
+| `invalid_url` | 422 | http/https 가 아님, 형식 오류, 사용자 정보 포함 |
+| `url_blocked` | 403 | 내부·사설 주소 (리다이렉트 포함) |
+| `page_unsupported` | 415 | HTML·텍스트가 아님 |
+| `page_fetch_failed` | 502 | 연결 실패, 상대 오류(`upstream_status`), 리다이렉트 초과 |
+| `page_timeout` | 504 | 8초 초과 |
+
+### 5.4 설정 (`backend/.env`, 접두사 `DOCENT_`)
+| 변수 | 기본 | |
+|---|---|---|
+| `DOCENT_NAVER_CLIENT_ID` / `_SECRET` | (비어 있음) | 네이버 검색 API 키 |
+| `DOCENT_CACHE_TTL_SEC` | 86400 | 검색·페이지 캐시 |
+| `DOCENT_PAGE_TIMEOUT_SEC` / `_MAX_BYTES` / `_MAX_CHARS` / `_MAX_REDIRECTS` | 8 / 2MB / 8000 / 5 | 페이지 읽기 제한 |
+| `DOCENT_API_BASE_URL` | compose 가 `http://gateway` | planner 호출 |
 
 ## 6. 이번 일정에서의 범위 (D-4 기준 권장)
 
@@ -190,6 +252,6 @@ docent 는 **저장·검색·외부 요청 대행**만 한다 (LLM 없음, 결�
 데모 장면 ②("일본인가옥거리 도착 → 관심사 반영 해설 → '핵심만 짧게' 선호 기억")가 이 범위로 그대로 시연된다.
 
 ## 7. 결정 필요
-- [ ] 외부 검색 공급자 (§2.1)
-- [ ] 메모리를 docent 에 둘지 agent(`agent_*` 테이블)에 둘지 — 이 문서는 docent 를 권장 (계획·동행 모두 쓰고, 앱 편집 API 가 필요해서)
+- [x] 외부 검색 공급자 (§2.1): 네이버 검색 API 로 시작 (인터페이스는 공급자 중립)
+- [x] 메모리를 docent 에 둘지 agent(`agent_*` 테이블)에 둘지: docent 에 둔다 (계획·동행 모두 쓰고, 앱 편집 API 가 필요해서)
 - [ ] 가이드 준비 자동 시작 시점 (제안 승인 직후 vs [가이드 준비] 버튼만)

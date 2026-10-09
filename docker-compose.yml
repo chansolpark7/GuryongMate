@@ -33,6 +33,7 @@ x-backend-env: &backend-env
   TRIP_PLANNER_BASE_URL: http://gateway
   TRIP_SAFETY_BASE_URL: http://gateway
   TRIP_AGENT_BASE_URL: http://gateway
+  DOCENT_API_BASE_URL: http://gateway
 
 services:
   gateway:
@@ -49,6 +50,7 @@ services:
       - account
       - routing
       - trip
+      - docent
 
   db:
     image: pgvector/pgvector:pg16
@@ -169,6 +171,16 @@ services:
       SERVICE: trip
       # 백그라운드 틱(초): 지연 재판정·안전 경고 수집·선제 턴 큐 전송·자동 종료. 0 이면 끔
       TRIP_TICK_SEC: ${TRIP_TICK_SEC:-30}
+    depends_on:
+      db:
+        condition: service_healthy
+
+  # 사용자 메모리·가이드 노트 저장, 외부 검색·페이지 읽기 대행 (LLM 없음). docs/docent/README.md
+  docent:
+    <<: *backend
+    environment:
+      <<: *backend-env
+      SERVICE: docent
     depends_on:
       db:
         condition: service_healthy
