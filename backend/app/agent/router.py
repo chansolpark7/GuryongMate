@@ -22,7 +22,7 @@ from starlette.background import BackgroundTask
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
-from app.agent import guide
+from app.agent import guide, limits
 from app.agent.api import ApiError, ServiceApi, get_http
 from app.agent.errors import AgentError, AgentRoute
 from app.agent.harness import STEP_TITLE, add_note, run_turn
@@ -115,6 +115,12 @@ def _summary(steps: list[dict] | None) -> str | None:
 @router.get("/info", response_model=AgentInfo)
 def info(llm: Llm) -> AgentInfo:
     return AgentInfo(provider=llm.name)
+
+
+@router.get("/limits")
+def get_limits(db: DbSession, user_id: UserId) -> dict:
+    """내 LLM 호출 수와 한도 (종류별 1시간·하루, 한도 없음은 null). docs/deploy/README.md §3.3"""
+    return limits.usage(db, user_id)
 
 
 @router.post("/sessions", response_model=SessionView, status_code=201)
@@ -246,6 +252,8 @@ StreamFlag = Annotated[bool, Query(description="true: SSE 실시간 스트림, f
 async def chat(session_id: str, body: ChatRequest, db: DbSession, user_id: UserId, auth: Auth, http: Http, llm: Llm,
                stream: StreamFlag = True):
     s = _get_session(db, user_id, session_id)  # 존재 확인은 스트림 시작 전에 (404 를 바로 돌려주기 위해)
+    _check_idle(session_id)
+    limits.consume(db, user_id, "chat")  # 넘으면 429 rate_limited (공개 서버, AGENT_LIMIT_CHAT_*)
     return await _turn_response(session_id, s.plan_id, body.message, auth, http, llm, stream)
 
 
@@ -263,6 +271,8 @@ async def proactive_turn(session_id: str, body: EventRequest, db: DbSession, use
     if event_id is not None and (done := db.get(AgentEventTurn, (session_id, event_id))) is not None:
         log.info("session=%s 선제 턴 event=%s id=%s 이미 처리함 -> 이전 결과", session_id[:8], event["type"], event_id)
         return ChatResult.model_validate(done.result)
+    _check_idle(session_id)
+    limits.consume(db, user_id, "event")  # 넘으면 429 -> trip 이 실패로 세고 다시 보낸다 (AGENT_LIMIT_EVENT_*)
     log.info("session=%s 선제 턴 event=%s id=%s", session_id[:8], event["type"], event_id)
     result = await _turn_response(session_id, s.plan_id, event_message(event), auth, http, llm, False,
                                   trip=body.trip, fetch_trip=False, hidden=True)
@@ -343,6 +353,7 @@ async def repropose(session_id: str, proposal_id: int, db: DbSession, user_id: U
     if prop["status"] != "pending":
         raise AgentError(409, "proposal_not_pending", f"제안 {proposal_id} 은 이미 {prop['status']} 상태입니다.",
                          status=prop["status"])
+    limits.consume(db, user_id, "chat")
     return await _turn_response(session_id, s.plan_id, REPROPOSE_TEXT, auth, http, llm, stream, repropose=prop)
 
 
@@ -379,7 +390,7 @@ GUIDE_TOKEN_TTL = timedelta(hours=2)  # 작업이 길어도 받은 토큰 만료
 
 
 @router.post("/plans/{plan_id}/guide/prepare", response_model=GuideJobView, status_code=202)
-async def prepare_guide(plan_id: int, user_id: UserId, auth: Auth, http: Http, llm: Llm,
+async def prepare_guide(plan_id: int, db: DbSession, user_id: UserId, auth: Auth, http: Http, llm: Llm,
                         body: Annotated[GuidePrepareRequest | None, Body()] = None) -> dict:
     """계획의 장소마다 맞춤 가이드 노트를 백그라운드로 만든다. 계획당 작업 하나: 진행 중이면 그 작업을 돌려준다.
     대상: place_ids(일정에 있어야 함) 또는 일정의 모든 장소. force 가 아니면 이미 ready 인 노트는 건너뛴다."""
@@ -399,6 +410,8 @@ async def prepare_guide(plan_id: int, user_id: UserId, auth: Auth, http: Http, l
     if not body.force:
         ready = {n["place_id"] for n in await api.list_notes(plan_id) if n["status"] == "ready"}
         places = [p for p in places if p["place_id"] not in ready]
+    if places:
+        limits.consume(db, user_id, "guide")  # 새 작업만 센다 (AGENT_LIMIT_GUIDE_*)
     for p in places:  # 앱이 바로 '대기'로 보이게 먼저 표시 (이전 본문은 docent 가 남긴다)
         await api.put_note(plan_id, p["place_id"], {"status": "pending"})
     job_auth = {"Authorization": f"Bearer {issue_token(user_id, GUIDE_TOKEN_TTL)}"} if "Authorization" in auth else auth

@@ -48,3 +48,14 @@ class AgentEventTurn(Base):
     event_id: Mapped[int] = mapped_column(Integer, primary_key=True)  # trip 이벤트 id
     result: Mapped[dict] = mapped_column(JSONB)  # ChatResult 그대로
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class AgentUsage(Base):
+    """사용자별 LLM 호출 기록 (호출 수 제한용, app/agent/limits.py). 하루 넘게 지난 기록은 지운다."""
+
+    __tablename__ = "agent_usage"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(64), index=True)
+    kind: Mapped[str] = mapped_column(String(10))  # chat (대화·다시 제안) | event (선제 턴) | guide (가이드 준비)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)

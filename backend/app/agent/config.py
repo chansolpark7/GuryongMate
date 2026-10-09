@@ -64,6 +64,14 @@ class AgentSettings(BaseSettings):
     web_search_per_turn: int = Field(2, description="동행 모드 대화 한 턴의 웹 검색 상한. 0 이면 웹 검색 안 함")
     web_search_context: str = Field("low", description="OpenAI 내장 검색의 search_context_size (low | medium | high)")
 
+    # 사용자당 호출 수 제한 (공개 서버의 LLM 비용 보호, app/agent/limits.py, docs/deploy/README.md §3.3). 0 이면 제한 없음
+    limit_chat_hour: int = Field(0, description="대화 턴(다시 제안 포함) 1시간 상한")
+    limit_chat_day: int = Field(0, description="대화 턴 하루(24시간) 상한")
+    limit_event_hour: int = Field(0, description="선제 턴 1시간 상한")
+    limit_event_day: int = Field(0, description="선제 턴 하루 상한")
+    limit_guide_hour: int = Field(0, description="가이드 준비 작업 1시간 상한 (작업 하나 = 계획의 장소 여러 곳)")
+    limit_guide_day: int = Field(0, description="가이드 준비 작업 하루 상한")
+
     # 가이드 준비 작업 (docs/docent/README.md §3.3)
     guide_max_steps: int = Field(6, description="장소 하나의 LLM 호출 최대 횟수 (마지막 호출은 도구 없이 노트 JSON 강제)")
     guide_passages: int = Field(6, description="장소마다 미리 찾아 주는 근거 조각 수")
