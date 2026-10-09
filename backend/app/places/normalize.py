@@ -212,6 +212,56 @@ def compact(text: str) -> str:
     return re.sub(r"\s+", "", text).lower()
 
 
+MANUAL_TYPE_IDS = {v: k for k, v in CONTENT_TYPES.items()}
+
+
+def build_manual_place(raw: dict[str, Any]) -> dict[str, Any]:
+    """직접 정의한 장소(data/places/manual/*.json 한 건) -> DB 레코드. 관광공사 데이터에 없는 곳(방파제 등)을 넣는다.
+    필수: id(kto- 가 아닌 접두사, 예: poi-gr-…), title, lat, lng, content_type. 나머지는 비우면 빈 값. note 는 기록용(적재 안 함)."""
+    for key in ("id", "title", "lat", "lng", "content_type"):
+        if raw.get(key) in (None, ""):
+            raise ValueError(f"수동 장소에 {key} 가 없습니다: {raw.get('id') or raw.get('title')}")
+    if raw["id"].startswith("kto-"):
+        raise ValueError(f"수동 장소 id 는 kto- 로 시작할 수 없습니다 (관광공사 데이터와 겹침): {raw['id']}")
+    if raw["content_type"] not in MANUAL_TYPE_IDS:
+        raise ValueError(f"content_type 은 {sorted(MANUAL_TYPE_IDS)} 중 하나: {raw['id']}")
+    names = list(raw.get("category_names") or [])
+    addr = raw.get("addr", "")
+    area = raw.get("area") or extract_area(addr)
+    place = {
+        "id": raw["id"],
+        "source": "manual",
+        "content_id": "",  # 관광공사 contentid 없음
+        "content_type_id": MANUAL_TYPE_IDS[raw["content_type"]],
+        "content_type": raw["content_type"],
+        "title": raw["title"],
+        "lat": float(raw["lat"]),
+        "lng": float(raw["lng"]),
+        "addr": addr,
+        "area": area,
+        "tel": raw.get("tel", ""),
+        "homepage": raw.get("homepage", ""),
+        "overview": raw.get("overview", ""),
+        "open_hours": raw.get("open_hours", ""),
+        "rest_date": raw.get("rest_date", ""),
+        "parking": raw.get("parking", ""),
+        "fee": raw.get("fee", ""),
+        "menu": raw.get("menu", ""),
+        "category_codes": [],
+        "category_names": names,
+        "tags": list(dict.fromkeys(t for t in [raw["content_type"], *names, area, *(raw.get("tags") or [])] if t)),
+        "image_url": raw.get("image_url", ""),
+        "thumbnail_url": raw.get("thumbnail_url", ""),
+        "images": [],
+        "copyright_type": "",
+        "intro": {},
+        "extra_info": [],
+        "source_modified_at": "",
+    }
+    place["search_compact"] = build_search_compact(place)
+    return place
+
+
 def build_search_compact(p: dict[str, Any]) -> str:
     g = p.get
     parts = [g("title", ""), g("content_type", ""), *g("category_names", []), *g("tags", []), g("area", ""), g("addr", ""),

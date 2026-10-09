@@ -156,3 +156,19 @@ def test_passages(client):
     r = client.get("/places/passages", params={"q": "역사", "kind": "story", "lat": 35.9881, "lng": 129.5571,
                                                 "radius_m": 30})
     assert [p["story_id"] for p in r.json()] == ["test-story"]
+
+
+def test_passages_source_manual(client):
+    """직접 정의한 장소(source=manual)의 소개 조각은 source 가 manual (agent 가 관광공사 출처로 적지 않게)."""
+    from sqlalchemy import update
+    with SessionLocal.begin() as s:
+        s.execute(update(Place).where(Place.id == "test-homi").values(source="manual"))
+    try:
+        def sources(place_id):
+            return {p["kind"]: p["source"] for p in client.get("/places/passages", params={"q": "바다", "place_id": place_id}).json()}
+
+        assert sources("test-homi") == {"place": "manual"}
+        assert sources("test-house") == {"place": "kto", "story": "kto"}  # 이야기는 관광공사 오디오 가이드
+    finally:
+        with SessionLocal.begin() as s:
+            s.execute(update(Place).where(Place.id == "test-homi").values(source="test"))
