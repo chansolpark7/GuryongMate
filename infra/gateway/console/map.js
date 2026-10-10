@@ -1,6 +1,6 @@
 // 지도 (Leaflet, 전역 L): 일정·구간 경로선·사용자(끌어서 순간이동)·주의/위험 구역·피할 구역. 안전한 것은 기본으로 그리지 않는다.
 import { api } from "./api.js";
-import { S, dayItems, on, prefs, simNow, tripActive } from "./store.js";
+import { S, dayItems, on, prefs, setPref, simNow, tripActive } from "./store.js";
 import { stay, teleport, travel } from "./actions.js";
 import { ITEM_STATUS_KO, eventMeta, onEventBubbles } from "./ui.js";
 import { h, riskKo } from "./util.js";
@@ -111,25 +111,29 @@ function inactiveNote() {
   return null;
 }
 
-/** 지도 빈 곳: [여기로 이동] [걸어가기] 두 개만 (차로 가기·머물기는 ⋯ 안). */
-function openSpotPopup(lat, lng, title = null) {
-  const note = inactiveNote();
+/** 이동 버튼: [🚶 걸어가기] [🚗 차로 가기] 같은 크기로 나란히 (마지막으로 고른 수단을 강조, 이 브라우저에 기억)
+ * + 작은 줄 [⚡ 여기로 이동] [여기서 머물기] [3/10/30분]. arrive: 일정 장소 (걷기·차 끝에 자동 머물기). */
+function moveActions(lat, lng, title, { arrive = false } = {}) {
+  const go = (mode) => () => { close(); setPref("moveMode", mode); travel(lat, lng, mode, title, { arrive }); };
+  const modeBtn = (mode, text) => h(`button.btn${prefs.moveMode === mode ? ".primary" : ""}`, { onclick: go(mode) }, text);
   const sel = stayPicker();
-  const more = h("div.mpop-more", { hidden: true },
-    h("button.btn.sm", { onclick: () => { close(); travel(lat, lng, "car", title); } }, "🚗 차로 가기"),
-    h("button.btn.sm", { onclick: () => { close(); stay(Number(sel.value) || 3, lat, lng, title); } }, "여기서 머물기"), sel);
-  const content = h("div.mpop",
-    title ? h("b.mpop-title", title) : null,
-    note || h("div",
-      h("div.mpop-actions.three",
-        h("button.btn", { onclick: () => { close(); teleport(lat, lng, title); } }, "여기로 이동"),
-        h("button.btn.primary", { onclick: () => { close(); travel(lat, lng, "walk", title); } }, "걸어가기"),
-        h("button.btn.icon", { title: "더 보기 (차로 가기·머물기)", "aria-label": "더 보기", onclick: () => { more.hidden = !more.hidden; } }, "⋯")),
-      more));
-  L.popup({ minWidth: 200, className: "gm-popup" }).setLatLng([lat, lng]).setContent(content).openOn(map);
+  return h("div",
+    h("div.mpop-actions.two", modeBtn("walk", "🚶 걸어가기"), modeBtn("car", "🚗 차로 가기")),
+    h("div.mpop-small",
+      h("button.btn.sm", { title: "점 하나로 바로 옮긴다 (도착 판정은 안 남)", onclick: () => { close(); teleport(lat, lng, title); } }, "⚡ 여기로 이동"),
+      h("button.btn.sm", { onclick: () => { close(); stay(Number(sel.value) || 3, lat, lng, title); } }, "여기서 머물기"),
+      sel));
 }
 
-/** 일정 마커: 이름 · 예정 시각 · 상태 + [여기로 걸어가기] [여기서 머물기 N분] + ⋯(차로 가기·순간이동). */
+/** 지도 빈 곳·구역: 이동 버튼 (일정 장소가 아니라 자동 머물기 없음). */
+function openSpotPopup(lat, lng, title = null) {
+  const content = h("div.mpop",
+    title ? h("b.mpop-title", title) : null,
+    inactiveNote() || moveActions(lat, lng, title));
+  L.popup({ minWidth: 230, className: "gm-popup" }).setLatLng([lat, lng]).setContent(content).openOn(map);
+}
+
+/** 일정 마커: 이름 · 예정 시각 · 상태 + 이동 버튼 (걷기·차가 닿으면 자동 머물기). */
 function itemPopup(it, n) {
   const p = it.place;
   const title = p.title;
@@ -137,25 +141,10 @@ function itemPopup(it, n) {
   const visiting = S.trip?.current?.state === "visiting" && S.trip.current.item_id === it.id;
   const real = [it.arrived_at && `도착 ${it.arrived_at.slice(0, 5)}`, it.done_at && `떠남 ${it.done_at.slice(0, 5)}`].filter(Boolean).join(" · ");
   const status = (visiting ? "지금 머무는 중" : ITEM_STATUS_KO[it.status] || it.status) + (real ? ` · ${real}` : "");
-  const note = inactiveNote();
-  const sel = stayPicker();
-  const more = h("div.mpop-more", { hidden: true },
-    h("button.btn.sm", { onclick: () => { close(); travel(p.lat, p.lng, "car", title); } }, "🚗 차로 가기"),
-    h("button.btn.sm", { onclick: () => { close(); teleport(p.lat, p.lng, title); } }, "⚡ 순간이동"));
   return h("div.mpop",
     h("div.mpop-head", h(`span.num.st-${visiting ? "here" : it.status}`, String(n)), h("b.mpop-title", title)),
     h("div.mpop-sub", `${time} · ${status}`),
-    note || h("div",
-      h("div.mpop-actions",
-        h("button.btn.primary", { onclick: () => { close(); travel(p.lat, p.lng, "walk", title); } }, "여기로 걸어가기"),
-        h("div.stay-row",
-          h("button.btn", { onclick: () => { close(); stay(Number(sel.value) || 3, p.lat, p.lng, title); } }, "여기서 머물기"),
-          sel,
-          h("button.btn.icon", {
-            title: "더 보기 (차로 가기·순간이동)", "aria-label": "더 보기",
-            onclick: () => { more.hidden = !more.hidden; },
-          }, "⋯"))),
-      more));
+    inactiveNote() || moveActions(p.lat, p.lng, title, { arrive: true }));
 }
 
 // ---------- 일정 ----------
