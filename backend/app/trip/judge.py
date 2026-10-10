@@ -156,7 +156,10 @@ def ignore_reason(track: Track, point: Point, cfg: TrackConfig) -> str | None:
 def step(track: Track, spots: list[Spot], point: Point, cfg: TrackConfig) -> tuple[Track, list[Detection]]:
     """점 하나를 받아 새 상태와 도착·출발 감지를 돌려준다 (ignore_reason 을 통과한 점만 넣는다).
 
-    - 머무는 중: 반경 밖이 depart_dwell_sec 이상 이어지면 출발 (시각 = 처음 나간 시각). 한 점만 밖이면 다시 들어올 때 초기화.
+    - 머무는 중(A): 반경 밖이 depart_dwell_sec 이상 이어지면 출발 (시각 = 처음 나간 시각). 한 점만 밖이면 다시 들어올 때 초기화.
+      가까운 장소로 옮겨 갈 때(반경이 겹쳐 A 반경 밖 시간이 짧다): 남은 항목 B 의 반경 안이고 A 보다 B 에 더 가까운 점이
+      arrive_dwell_sec 이어지면 A 출발 → B 도착 (암묵 전환). 출발 시각 = A 반경을 이미 벗어났으면 처음 나간 시각, 아니면 B 후보 시작
+      (도착보다 늦지 않게), 도착 시각 = B 후보 시작. 그 전에 정상 출발(반경 밖 depart_dwell_sec)이 나면 B 후보 시작을 이어받는다.
     - 그 밖: 오늘 남은(planned) 항목 중 가장 가까운 것의 반경 안에 arrive_dwell_sec 이상 머물면 도착 (시각 = 처음 들어온 시각).
       예정 순서가 아니어도 도착으로 본다 (out_of_order).
     """
@@ -169,45 +172,69 @@ def step(track: Track, spots: list[Spot], point: Point, cfg: TrackConfig) -> tup
         spot = by_id.get(track.item_id)
         if spot is None or spot.status in ("done", "skipped"):
             track = Track(last_at=track.last_at)  # 일정에서 빠졌거나 다른 곳에서 완료 처리됨 -> 조용히 끝
-        elif spot.lat is not None and distance_m(point.lat, point.lng, spot.lat, spot.lng) <= r:
-            track = replace(track, outside_since=None)
         else:
-            out = track.outside_since or t
-            if (t - out).total_seconds() >= cfg.depart_dwell_sec:
-                stayed = int((out - track.since).total_seconds() // 60) if track.since else None
-                dets.append(Detection("departed", out, [spot.item_id], cause_key=f"departed:{spot.item_id}",
-                                      payload={"item_id": spot.item_id, "title": spot.title, "stayed_minutes": stayed}))
-                track = Track(state="moving", item_id=spot.item_id, since=out)
+            here = distance_m(point.lat, point.lng, spot.lat, spot.lng) if spot.lat is not None else None
+            out = None if here is not None and here <= r else (track.outside_since or t)
+            # 머무는 중에도 다른 남은 항목 B 를 본다: B 반경 안이고 A 보다 B 에 더 가까울 때만 후보 (깨지면 초기화)
+            cand = _nearest(spots, point, r, skip=spot.item_id, closer_than=here)
+            c_since = None
+            if cand is not None:
+                c_since = track.cand_since if track.cand_item_id == cand.item_id and track.cand_since else t
+            if cand is not None and (t - c_since).total_seconds() >= cfg.arrive_dwell_sec:
+                dep = min(out, c_since) if out is not None else c_since
+                dets += [_departed(spot, dep, track.since), _arrived(cand, c_since, spots)]
+                return Track(state="visiting", item_id=cand.item_id, since=c_since, last_at=t), dets
+            if out is not None and (t - out).total_seconds() >= cfg.depart_dwell_sec:
+                dets.append(_departed(spot, out, track.since))
+                # 머무는 중에 이미 B 에 들어와 있었으면 그 시각부터 이어서 센다 (도착 시각 = 실제 진입 시각)
+                track = Track(state="moving", item_id=spot.item_id, since=out,
+                              cand_item_id=cand.item_id if cand else None, cand_since=c_since)
                 left = spot.item_id
             else:
-                track = replace(track, outside_since=out)
+                track = replace(track, outside_since=out, cand_item_id=cand.item_id if cand else None,
+                                cand_since=c_since)
 
     if track.state != "visiting":
-        near = None
-        for s in spots:
-            if s.status != "planned" or s.lat is None or s.item_id == left:
-                continue
-            d = distance_m(point.lat, point.lng, s.lat, s.lng)
-            if d <= r and (near is None or d < near[0]):
-                near = (d, s)
-        if near is None:
+        s = _nearest(spots, point, r, skip=left)
+        if s is None:
             track = replace(track, cand_item_id=None, cand_since=None)
         else:
-            s = near[1]
             since = track.cand_since if track.cand_item_id == s.item_id and track.cand_since else t
             if (t - since).total_seconds() >= cfg.arrive_dwell_sec:
-                first = next((x for x in sorted(spots, key=lambda x: x.order) if x.status == "planned"), None)
-                out_of_order = first is not None and first.item_id != s.item_id
-                dets.append(Detection(
-                    "arrived", since, [s.item_id], message=f"{s.title}에 도착했어요. 이야기 들어볼까요?",
-                    cause_key=f"arrived:{s.item_id}",
-                    payload={"item_id": s.item_id, "place_id": s.place_id, "title": s.title, "out_of_order": out_of_order},
-                    card={"kind": "docent", "place_id": s.place_id, "item_id": s.item_id}))
+                dets.append(_arrived(s, since, spots))
                 track = Track(state="visiting", item_id=s.item_id, since=since)
             else:
                 track = replace(track, cand_item_id=s.item_id, cand_since=since)
 
     return replace(track, last_at=t), dets
+
+
+def _nearest(spots: list[Spot], point: Point, r: float, skip: int | None = None,
+             closer_than: float | None = None) -> Spot | None:
+    """반경 r 안의 남은(planned) 항목 중 가장 가까운 것. closer_than: 그 거리보다 가까울 때만 (머무는 곳보다 더 가까움)."""
+    near = None
+    for s in spots:
+        if s.status != "planned" or s.lat is None or s.item_id == skip:
+            continue
+        d = distance_m(point.lat, point.lng, s.lat, s.lng)
+        if d <= r and (closer_than is None or d < closer_than) and (near is None or d < near[0]):
+            near = (d, s)
+    return near[1] if near else None
+
+
+def _departed(spot: Spot, at: datetime, since: datetime | None) -> Detection:
+    stayed = int((at - since).total_seconds() // 60) if since else None
+    return Detection("departed", at, [spot.item_id], cause_key=f"departed:{spot.item_id}",
+                     payload={"item_id": spot.item_id, "title": spot.title, "stayed_minutes": stayed})
+
+
+def _arrived(s: Spot, since: datetime, spots: list[Spot]) -> Detection:
+    first = next((x for x in sorted(spots, key=lambda x: x.order) if x.status == "planned"), None)
+    out_of_order = first is not None and first.item_id != s.item_id
+    return Detection("arrived", since, [s.item_id], message=f"{s.title}에 도착했어요. 이야기 들어볼까요?",
+                     cause_key=f"arrived:{s.item_id}",
+                     payload={"item_id": s.item_id, "place_id": s.place_id, "title": s.title, "out_of_order": out_of_order},
+                     card={"kind": "docent", "place_id": s.place_id, "item_id": s.item_id})
 
 
 def departed_message(title: str, nxt: dict | None, next_title: str | None, mode: str | None, at: datetime) -> str:

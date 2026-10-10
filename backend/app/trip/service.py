@@ -457,9 +457,10 @@ def record_location(db: Session, user_id: str, plan_id: int, points: list[Locati
             if d:
                 dets.append(d)
         by_id = {s.item_id: s for s in spots}
-        for d in dets:
+        for i, d in enumerate(dets):
             if d.type == "departed":
-                nxt = td.next
+                # 같은 요청에서 다음 장소 도착까지 났으면(가까운 장소 전환 등) 다음 일정·예상 도착은 이미 지난 이야기라 빼고 떠남만
+                nxt = None if any(x.type == "arrived" for x in dets[i + 1:]) else td.next
                 target = by_id.get(nxt["item_id"]) if nxt else None
                 d.message = judge.departed_message(d.payload["title"], nxt, target.title if target else None,
                                                    target.leg_mode if target else None, d.at)
