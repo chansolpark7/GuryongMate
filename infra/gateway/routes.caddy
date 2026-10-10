@@ -48,6 +48,16 @@ handle /account* {
 	reverse_proxy account:8000
 }
 
+# 데모 관제 대시보드 (정적 페이지, docs/console/README.md). 페이지에는 비밀이 없고 조작은 로그인·관리 토큰으로만 된다
+handle /console {
+	redir * /console/ 308
+}
+handle_path /console/* {
+	root * /srv/console
+	header Cache-Control no-cache
+	file_server
+}
+
 handle {
 	header Content-Type application/json
 	respond `{"detail":"Not Found"}` 404

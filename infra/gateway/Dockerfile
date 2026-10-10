@@ -2,3 +2,4 @@
 FROM caddy:2.8-alpine
 COPY routes.caddy /etc/caddy/routes.caddy
 COPY Caddyfile.prod /etc/caddy/Caddyfile
+COPY console /srv/console
