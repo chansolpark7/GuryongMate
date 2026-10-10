@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 from app.main import app
 from app.safety.places import PlacePoint, get_place_lookup
 from app.safety.router import get_sources
-from app.safety.sources import KST, MockSources, SimSegment, SimSources
+from app.safety.sources import KST, MockSources, SimSegment, SimSources, normalize_timeline
 
 NOW = datetime(2026, 10, 10, 15, 20, tzinfo=KST)
 H = timedelta(hours=1)
@@ -249,3 +249,111 @@ def test_live_mode_ignores_timeline_but_remembers_it(use):
     st = ok(client.put("/safety/sim", json={"source": "mock"}))  # 가상 상황으로 바꾸면 기억한 시간표를 쓴다
     assert st["mode"] == "sim" and len(st["timeline"]) == 1
     assert ok(client.get("/safety/status"))["scenario"] == "storm" and breakwater_risk(client, 16) == "danger"
+
+
+# ---------- 시간표 정리 (저장 전 normalize_timeline) ----------
+
+def spans(timeline) -> list[tuple[str, str, str]]:
+    """(종류, 시작 HH:MM, 끝 HH:MM) 목록. SimSegment 또는 응답 dict 둘 다."""
+    def f(x, k):
+        v = x[k] if isinstance(x, dict) else getattr(x, k)
+        return v if isinstance(v, str) else v.isoformat()
+    return [(f(x, "kind"), f(x, "start")[11:16], f(x, "end")[11:16]) for x in timeline]
+
+
+def S(kind, a, b):
+    return SimSegment(kind, at(*a) if isinstance(a, tuple) else at(a), at(*b) if isinstance(b, tuple) else at(b))
+
+
+def test_partial_overlap_stronger_kind_takes_the_overlap():
+    assert spans(normalize_timeline([S("rain", 13, 16), S("wind", 15, 18)])) == [
+        ("rain", "13:00", "15:00"), ("wind", "15:00", "18:00")]
+    # 약한 쪽이 뒤에 와도 센 쪽이 차지한다
+    assert spans(normalize_timeline([S("storm", 13, 16), S("flood", 15, 18)])) == [
+        ("storm", "13:00", "16:00"), ("flood", "16:00", "18:00")]
+
+
+def test_full_containment_splits_the_weaker_segment_in_two():
+    assert spans(normalize_timeline([S("rain", 13, 17), S("storm", 14, 15)])) == [
+        ("rain", "13:00", "14:00"), ("storm", "14:00", "15:00"), ("rain", "15:00", "17:00")]
+    # 약한 구간이 센 구간 안에 다 들어가면 없어진다
+    assert spans(normalize_timeline([S("storm", 13, 17), S("rain", 14, 15)])) == [("storm", "13:00", "17:00")]
+
+
+def test_same_kind_overlapping_or_touching_are_merged():
+    assert spans(normalize_timeline([S("rain", 13, 15), S("rain", 14, 17)])) == [("rain", "13:00", "17:00")]
+    assert spans(normalize_timeline([S("rain", 15, 17), S("rain", 13, 15)])) == [("rain", "13:00", "17:00")]
+    # 다른 종류가 맞닿은 것은 그대로 둘
+    assert spans(normalize_timeline([S("rain", 13, 15), S("wind", 15, 17)])) == [
+        ("rain", "13:00", "15:00"), ("wind", "15:00", "17:00")]
+
+
+def test_chain_of_many_segments():
+    tl = [S("rain", 10, 20), S("wind", 12, 14), S("flood", 11, 15), S("storm", 13, 14), S("rain", 20, 21),
+          S("wind", (16, 30), 17), S("wind", 17, 18)]
+    assert spans(normalize_timeline(tl)) == [
+        ("rain", "10:00", "11:00"), ("flood", "11:00", "13:00"), ("storm", "13:00", "14:00"),
+        ("flood", "14:00", "15:00"), ("rain", "15:00", "16:30"), ("wind", "16:30", "18:00"), ("rain", "18:00", "21:00")]
+
+
+def test_normalize_is_idempotent_and_drops_zero_length():
+    out = normalize_timeline([S("rain", 13, 17), S("storm", 14, 15), S("storm", 15, 16)])
+    assert spans(out) == [("rain", "13:00", "14:00"), ("storm", "14:00", "16:00"), ("rain", "16:00", "17:00")]
+    assert normalize_timeline(list(out)) == out
+    assert all(x.start < x.end for x in out)
+    assert normalize_timeline([]) == ()
+
+
+@pytest.mark.parametrize("tl", [
+    [S("rain", 13, 17), S("storm", 14, 15)],
+    [S("rain", 10, 20), S("wind", 12, 14), S("flood", 11, 15), S("storm", 13, 14)],
+    [S("wind", (9, 5), (11, 40)), S("rain", (10, 15), (13, 20)), S("flood", (11, 35), (12, 10)), S("rain", (13, 20), 14),
+     S("wind", (13, 55), (15, 5)), S("flood", (14, 50), (14, 55))],
+])
+def test_weather_by_time_is_unchanged_by_normalize(tl):
+    """정리 전후로 5분마다의 날씨 종류·지금 관측값(특보·센서)·시간별 예보가 같다 (이미 센 것 우선이므로)."""
+    clock = Clock(at(8))
+    raw, norm = MockSources(clock=clock), MockSources(clock=clock)
+    raw.timeline, norm.timeline = tuple(tl), normalize_timeline(tl)
+    t = at(8)
+    while t < at(22):
+        clock.t = t
+        assert raw.scenario == norm.scenario, t
+        assert [r.level for r in raw.sensors().value] == [r.level for r in norm.sensors().value]
+        t += timedelta(minutes=5)
+    rh, nh = raw.forecast(at(8)).value.hours, norm.forecast(at(8)).value.hours
+    assert all((rh[k].wsd, rh[k].pcp_mm, rh[k].wav) == (nh[k].wsd, nh[k].pcp_mm, nh[k].wav) for k in rh)
+
+
+def test_put_timeline_is_saved_normalized_and_get_returns_it(use):
+    src = MockSources(clock=Clock(at(12)))
+    client = use(src)
+    # 대시보드 확인 장면: 비 13~17 위에 폭풍 14~15 -> 세 칸
+    st = ok(client.put("/safety/sim", json={"timeline": [seg("rain", at(13), at(17)), seg("storm", at(14), at(15))]}))
+    assert spans(st["timeline"]) == [("rain", "13:00", "14:00"), ("storm", "14:00", "15:00"), ("rain", "15:00", "17:00")]
+    assert spans(ok(client.get("/safety/sim"))["timeline"]) == spans(st["timeline"])
+    # 폭풍을 지우면 덮였던 비 14~15 는 돌아오지 않는다
+    rest = [x for x in st["timeline"] if x["kind"] != "storm"]
+    st = ok(client.put("/safety/sim", json={"timeline": rest}))
+    assert spans(st["timeline"]) == [("rain", "13:00", "14:00"), ("rain", "15:00", "17:00")]
+    # 15~17 을 왼쪽으로 늘려 13~14 와 맞닿게 하면 하나로
+    st = ok(client.put("/safety/sim", json={"timeline": [seg("rain", at(13), at(14)), seg("rain", at(14), at(17))]}))
+    assert spans(st["timeline"]) == [("rain", "13:00", "17:00")]
+
+
+def test_limit_is_checked_after_normalize(use):
+    client = use(MockSources(clock=Clock()))
+    # 30개지만 서로 맞닿은 같은 종류라 정리하면 1개 -> 받아들인다
+    touching = [seg("rain", at(10) + i * timedelta(minutes=10), at(10) + (i + 1) * timedelta(minutes=10))
+                for i in range(30)]
+    st = ok(client.put("/safety/sim", json={"timeline": touching}))
+    assert spans(st["timeline"]) == [("rain", "10:00", "15:00")]
+    # 정리해도 21개면 거절
+    apart = [seg("rain", at(h), at(h, 30)) for h in range(21)]
+    r = client.put("/safety/sim", json={"timeline": apart})
+    assert r.status_code == 422 and r.json()["detail"]["code"] == "invalid_timeline"
+
+
+def test_preset_with_until_is_normalized_too(use):
+    st = ok(use(MockSources(clock=Clock())).put("/safety/sim", json={"scenario": "storm", "until": "2026-10-10T17:00:00+09:00"}))
+    assert spans(st["timeline"]) == [("storm", "15:20", "17:00")]

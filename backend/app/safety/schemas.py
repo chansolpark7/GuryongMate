@@ -299,7 +299,8 @@ class SimUpdate(BaseModel):
                           "생략하면 그대로, scenario 를 주면 mock")
     scenario: str | None = Field(None, description="시간표를 이 프리셋으로 바꾼다 (설정한 가상 시각 기준 절대 구간, 생략하면 그대로)")
     until: datetime | None = Field(None, description="scenario 와 함께: 프리셋 구간이 끝나는 시각")
-    timeline: list[SimSegmentView] | None = Field(None, description="시간표 전체 교체 (최대 20개, start < end). "
+    timeline: list[SimSegmentView] | None = Field(None, description="시간표 전체 교체 (start < end). 저장 전에 정리한다: 겹침은 센 종류가 차지 "
+                                                                       "(storm > flood > wind > rain), 같은 종류는 합침. 정리 후 최대 20개. "
                                                                        "scenario 와 함께 쓰지 않는다. 데이터 모드는 바꾸지 않는다")
     now: datetime | None = Field(None, description="가상 시각. 이후 실제 시간만큼 흘러간다. 생략하면 그대로")
     reset_clock: bool = Field(False, description="true 면 실제 시각으로 되돌린다")

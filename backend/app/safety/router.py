@@ -27,7 +27,7 @@ from app.safety.schemas import (
 from app.safety.service import SafetyService
 from app.safety.sources import (
     KST, MOCK_SCENARIOS, SIM_KINDS, MockSources, SimSegment, SimSources, Sources, build_sources, check_timeline,
-    preset_timeline,
+    normalize_timeline, preset_timeline,
 )
 
 router = APIRouter(prefix="/safety", tags=["safety"])
@@ -139,6 +139,7 @@ def _bad(code: str, message: str, **extra) -> HTTPException:
 def put_sim(body: SimUpdate, sources: Annotated[Sources, Depends(get_sources)]) -> SimState:
     """가상 시각·날씨 시간표·데이터 모드를 바꾼다 (서비스를 다시 띄우면 초기화).
     - 가상 시각은 설정한 뒤 실제 시간만큼 흘러가고 live·sim 모두에 쓴다.
+    - 저장하기 전에 시간표를 정리한다 (normalize_timeline: 겹침은 센 종류가 차지, 같은 종류는 합침). GET 은 정리된 시간표.
     - timeline: 시간표 전체 교체. scenario: 시간표를 프리셋으로 교체 (설정한 가상 시각 기준 절대 구간, until 이면 그 시각에 끝).
     - scenario 를 주면 가상 상황(mock)으로 바뀐다 (source 를 같이 주면 source 를 따른다). timeline 은 모드를 바꾸지 않는다."""
     src = _sim(sources)
@@ -169,7 +170,7 @@ def put_sim(body: SimUpdate, sources: Annotated[Sources, Depends(get_sources)]) 
             raise _bad("invalid_timeline", str(e)) from None
     elif body.scenario is not None:
         try:
-            timeline = preset_timeline(body.scenario, now, body.until and _kst(body.until))
+            timeline = normalize_timeline(preset_timeline(body.scenario, now, body.until and _kst(body.until)))
         except ValueError as e:
             raise _bad("invalid_until", str(e)) from None
 
