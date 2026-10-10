@@ -4,6 +4,7 @@
 - 중복 억제: 같은 원인 키로는 다시 알리지 않는다. 원인이 여럿('|')이면 하나라도 새것일 때만 알린다
   -> 제안을 거절해도 같은 상황이면 조용하고, 더 나빠지면(새 위반·새 경고) 다시 알린다.
 - 단계 3은 한 번에 하나 (큐). 같은 원인 묶음의 오래된 것은 suppressed. 쿨다운 안에는 보내지 않는다 (safety_raised 는 무시).
+- 앱 활동이 없으면 단계 3 은 보류(queued). 활동이 돌아오면 지금도 유효한 것 중 하나만 보낸다 (pick_resume).
 """
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -73,3 +74,11 @@ def pick_next(queued: list[Queued], last_delivered_at: datetime | None, now: dat
     if cooling and first.type not in COOLDOWN_EXEMPT:
         return None, suppress
     return first, suppress
+
+
+def pick_resume(queued: list[Queued], valid: set[int]) -> tuple[int | None, list[int]]:
+    """앱 활동이 돌아왔을 때(§4.1 보류): 보류된 단계 3 중 지금도 유효한 것에서 우선순위(안전 > 지연)가 가장 높고 가장 새것 하나만 남긴다.
+    (남길 id 또는 None, suppressed 로 바꿀 id) — 더는 유효하지 않은 것과 밀린 옛것은 모두 suppressed."""
+    cands = [q for q in queued if q.id in valid]
+    keep = min(cands, key=lambda q: (PRIORITY[q.type], -q.id)) if cands else None
+    return (keep.id if keep else None), [q.id for q in queued if keep is None or q.id != keep.id]

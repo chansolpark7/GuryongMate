@@ -3,6 +3,8 @@
 > 상태: **구현됨** (§10). agent 쪽 선제 턴 `POST /agent/sessions/{sid}/events` 와 동행 모드 프롬프트(§4.2, §4.4)도 연결됐다.
 > 선제 턴 전송이 실패하면 간격을 늘려 다시 보내고, `TRIP_PROACTIVE_MAX_ATTEMPTS`(3)번 실패하면 이벤트를 `failed` 로 남긴다 (§4.1).
 > planner 쪽 기반(§6.1 진행 상태, §6.2 현재 기준 재계산, §5 planner 시계)은 `docs/planner/README.md` §8.
+> 후속 수정 (2026-10-11, `feat/trip-followup`): 앱이 꺼져 있으면 선제 턴 보류(§4.1 앱 활동), 늦게 다니는 중에는 자동 종료를 미룸(§1.2), 상황 해제 알림(§3.2),
+> 여행이 끝나면 머무는 중 항목을 done 으로 정리(§1.2).
 
 여행 당일의 **실행 상태**(지금 몇 일차를 여행 중인지, 어디에 있는지, 어떤 일정을 하고 있는지)를 관리하고,
 위치·시각·안전 정보를 바탕으로 **이벤트**를 판정해 앱과 Agent에 전달한다.
@@ -43,11 +45,16 @@
 | 오늘(`now` 기준, §5)이 계획 기간 안의 날 | 시작 가능. `day` = 오늘의 n일차 |
 | 오늘이 계획 기간 밖 | 409 `not_trip_day` (추가 필드 `start_date`, `end_date`). 앱은 "일정은 10/10이에요. 오늘로 옮길까요?"를 묻고, 옮기기를 고르면 Agent 제안(일정 날짜 변경)으로 처리한다 |
 | 이미 진행 중인 여행일이 있음 | 같은 날이면 그대로 돌려준다(멱등, `session_id` 를 주면 그것만 바꾼다). 다른 날이면 이전 것을 종료(`auto`)하고 새로 시작 |
-| 같은 날 종료했던 여행일이 있음 | 그 여행일을 다시 연다. 이미 알린 원인(§4.1 중복 억제)도 그대로 기억한다 |
+| 같은 날 종료했던 여행일이 있음 | 그 여행일을 다시 연다. 이미 알린 원인(§4.1 중복 억제)도 그대로 기억한다. 끝날 때 머무는 곳을 done 으로 정리했으므로(아래 '종료될 때'): 끝낸 지 `TRIP_ACTIVE_MIN`(15분) 안이고 그 항목이 정리한 그대로(완료 시각 = 종료 시각)면 **실수로 끝낸 것으로 보고 다시 머무는 중**(planner `visiting`, 처음 도착 시각)으로 되돌린다. 그보다 늦으면 머무는 곳 없이(`idle`) 시작한다 — 그 장소에 다시 머물러도 이미 다녀온(done) 항목이라 도착이 나지 않는데, 이미 들른 곳이라 괜찮다 |
 | planner 에 이미 머무는 항목(`visiting`)이 있음 | 그 항목에 머무는 상태(`arrived_at` 부터)로 시작한다 |
 | 실수로 시작 | `POST …/end` 로 종료. 진행 기록 외에는 바뀐 것이 없다 |
-| 종료하지 않음 | 그날 마지막 일정 종료 + `TRIP_AUTO_END_MIN`(기본 120분) 또는 자정이 지나면 자동 종료 (`ended_reason: auto`). 마지막 일정 종료는 **기준 일정의 종료와 실제 완료 시각(`done_at`) 중 늦은 것**이다 — 재계산 종료는 아무 데도 가지 않으면 지금을 따라 계속 밀려서 쓰지 않는다 |
-| 종료될 때 | 아직 보내지 못한 단계 3(`queued`)은 `suppressed`. `day_ended` 이벤트(`payload.reason`)를 남긴다 |
+| 종료하지 않음 | 그날 마지막 일정 종료 + `TRIP_AUTO_END_MIN`(기본 120분)이 지나고 **최근 위치(`TRIP_ACTIVE_MIN` 15분 안)가 없으면**, 또는 자정이 지나면 자동 종료 (`ended_reason: auto`). 마지막 일정 종료는 **기준 일정의 종료와 실제 완료 시각(`done_at`) 중 늦은 것**이다 — 재계산 종료는 아무 데도 가지 않으면 지금을 따라 계속 밀려서 쓰지 않는다 |
+| 종료될 때 | 그날 머무는 중(`visiting`)인 planner 항목을 진행 상태 `done` 으로 정리한다 (`POST …/progress`, `at` = 종료 시각, 자정이 지나 끝났거나 다른 날 시작으로 끝나면 `23:59`, `version` 은 그대로). 사용자 종료·자동 종료·다른 날 시작 세 경로 모두. 그대로 두면 앱 플랜 탭에 '지금 여기'가 계속 보인다. planner 에 접근할 수 없으면 종료는 그대로 하고 로그만 남긴다. 아직 보내지 못한 단계 3(`queued`)은 `suppressed`. `day_ended` 이벤트(`payload.reason`, 자동 종료면 세부 사유 `payload.detail`: `plan_end` · `midnight` · `new_day`)를 남긴다 |
+
+- **자동 종료를 미룸 (결정 2026-10-11)**: 많이 늦은 채 아직 다니는 중이면 '계획 종료 + 120분'에 끝나 버렸다 (위치 판정·선제 턴이 끊김).
+  계획 종료 + 120분이 지나도 위치가 계속 들어오면(마지막 위치 전송이 `TRIP_ACTIVE_MIN` 안) 미루고, 위치가 끊긴 뒤 `TRIP_ACTIVE_MIN` 이 지나면 끝낸다.
+  기준은 위치 전송만이다 (이벤트 조회는 아님 — 숙소에서 앱만 켜 둔 채 자정까지 이어지지 않게). 자정 종료는 그대로.
+  위치 시각(`trip_day.located_at`)은 받은 때의 trip 의 지금과 점의 `recorded_at` 중 늦은 것 (§4.1 앱 활동과 같은 시계).
 
 앱 권장 동작: 오늘이 여행일이고 (첫 일정 시작 1시간 전 이후 또는 구룡포 반경 3km 안) 이면 "오늘 여행 시작할까요?"를 띄운다. **자동으로 시작하지는 않는다** (여행일에 집에서 계획만 고치는 경우).
 
@@ -137,7 +144,7 @@
 | `delay` (`reason: behind_schedule`) | 새 위반은 없지만 **다음 일정이 계획보다 `TRIP_BEHIND_MIN`(30)분 이상 늦음** (`delay_minutes` ≥ 30). 마지막으로 알린 지연보다 30분 더 밀릴 때만 다시 | 3 | Agent 선제 턴: "남은 일정을 미룰까요?" — 늦어진 정도·영향 + 추천안 1개(남은 일정 미루기) + "다른 방법" 한 줄 | |
 | (가벼운 지연) | 늦어졌지만 새 위반 없고 30분 미만 | 0 | `delay_minutes`·`eta` 만 갱신. 알리지 않음 | |
 | `safety_raised` | planner 안전 경고 중 `needs_action=true`, 오늘 남은 항목에 해당 (`GET /planner/plans/{id}/safety/alerts?status=new`) | 3 | Agent 선제 턴: 위험 근거 + 추천 대체안 1개(시간 이동·실내 대체, 제안 카드) + "다른 방법" 한 줄 → 승인 | ④ |
-| `safety_eased` | planner 경고의 `lowered`/`cleared` | 1 | "방파제 풍랑 주의가 해제됐어요" | |
+| `safety_eased` | planner 경고의 `lowered`/`cleared`, 또는 **상황 해제**: 이 여행일에 주의·위험이던 safety 상황(구역 단계·특보)이 모두 평상시로 (`payload.reason: situation_cleared`) | 1 | "방파제 풍랑 주의가 해제됐어요" / "악천후가 그쳤어요. 지금 구룡포는 특이사항이 없어요." | ④ 끝 |
 | `near_hazard` | **지금 위치**가 safety `/safety/avoid` 구역 안이거나 `TRIP_HAZARD_NEAR_M`(50m) 안 | 1 | **LLM 없이 즉시** 고정 경고: "침수 감시 구역(구룡포수협 주변) 근처예요. 물이 고인 길은 피하세요." | ④ 보조 |
 | `day_started` / `day_ended` | 시작·종료 | 0 | 기록만 | |
 
@@ -167,6 +174,7 @@
   위반이 없어도 30분 이상 밀리면 위의 일정 밀림으로 묻는다.
   `new_violations` 중 위 코드와 hard 규칙(`constraint_id` 가 있고 `error`)만 본다. 이동 근사(`travel_estimated`)·긴 도보 같은 경고는 지연이 아니다.
 - `delay` 판정은 위치가 들어올 때와 백그라운드 틱(§4.3)마다 한다. 위치가 안 들어와도 시간이 흐르면 지연이 생기기 때문이다.
+  다만 앱이 꺼져 위치가 안 들어오면 '마지막 장소에 계속 머무는 중'으로 보고 판정하므로 틀릴 수 있다 — 그래서 활동이 없으면 단계 3 전송을 보류한다 (§4.1 앱 활동).
 - 재계산의 위치: 머무는 중이면 `visiting`(+ 도착 시각), 떠난 뒤면 `moving`(마지막 위치), 아직 아무 데도 도착하지 않았으면 위치 없이 보낸다.
   위치 없이 보내면 planner 는 첫 항목부터 지금 출발로 본다 — 첫 일정 시각이 한참 지나 여행을 시작하면 그것만으로 `delay` 가 나올 수 있다 (실제로 늦은 것이다).
 - `arrived`·`departed` 시각은 **반경에 처음 들어온 시각 / 처음 나간 시각**이고, planner 진행 상태의 `at` 도 이 시각이다.
@@ -175,7 +183,16 @@
 - `near_hazard`: 걸린 구역을 하나로 묶고, 가까운 구역(같은 거리면 더 위험한 구역)으로 문구를 만든다. 원인 키는 구역 + 단계라 같은 구역이 `caution` → `danger` 로 오르면 다시 알린다.
   구역은 safety 상황(`fingerprint`)이 바뀔 때만 다시 받고, `TRIP_HAZARD_CACHE_SEC`(5초) 동안은 상황도 다시 묻지 않는다. 틱마다 새로 본다.
 - `safety_raised`·`safety_eased`: 경고의 `changes` 중 **오늘 날짜, 오늘 남은 항목(planned·visiting)** 의 것만 본다. 여러 항목이면 첫 항목으로 문구를 만들고 "(그 밖에 n건)".
-  - 한계: 위험했던 항목이 이미 지난 뒤 상황이 풀리면 내려갈 항목이 없어 `safety_eased` 가 나오지 않는다 ("상황이 끝났다"는 신호 없음). 열린 문제: [docs/console/README.md §7.6](../console/README.md).
+- **상황 해제 (결정 2026-10-11, docs/console §7.6 선택지 1)** — 위험했던 항목이 이미 지난 뒤 상황이 풀리면 planner 경고에는 내려갈 항목이 없어 `safety_eased` 가 나오지 않았다
+  (데모: 폭풍 17:00 에 그침, 위험했던 '차로 카페 가는 길'은 16:25 에 지남) → 앱 지도 빗금·배지가 남는다. trip 이 이미 보는 `GET /safety/situation` 으로 '상황이 끝났다'를 알린다.
+  - 판정 (틱마다, `judge.judge_situation`): 구역 단계(`zones`)에 `caution`·`danger` 가 있거나 발효 특보(`warnings`)가 있으면 **주의·위험 상황**. 이 여행일에 그런 상황이 있었다가
+    지금은 주의·위험 구역도 특보도 없고 **그때 주의·위험이던 구역이 지금 모두 `safe`** 면 해제다 (값이 없으면 — 자료 장애 — 모르는 것이라 기다린다).
+  - 이벤트는 새 타입이 아니라 `safety_eased` (단계 1, `payload.reason: situation_cleared`, `alert_id: null`, `changes: []`, `zones`·`warnings`: 그 상황에서 주의·위험이던 것, `since`).
+    앱은 `safety_eased` 를 받으면 구역·배지를 다시 불러오고 토스트를 띄우므로 바뀌지 않아도 된다 (`app/lib/features/trip/trip_controller.dart` `_handleNew`, payload 는 읽지 않음).
+  - 원인 키 `safety_eased:situation:{day}:{n}` (`n` = 이 여행일의 몇 번째 주의·위험 상황). 같은 해제는 한 번만, 다시 폭풍이 왔다 그치면 `n` 이 올라 한 번 더.
+    상황 기록은 `trip_day.situation` 에 둔다 (같은 날 여행일을 다시 열어도 기억).
+  - 같은 틱에 planner 경고 완화(`safety_eased`)도 나오면 **하나만**: planner 쪽(항목이 구체적)을 남기고 원인 키에 상황 해제 키를 합쳐 다시 알리지 않는다 (`payload.situation_cleared: true`).
+  - 여행일 시작 전부터 폭풍이던 경우도 첫 틱에 주의·위험으로 기록되어 그치면 알린다. 상황을 받지 못한 틱(safety 장애)은 건너뛴다. 위치 요청에서는 판정하지 않는다 (틱만).
 
 ### 3.3 Event 형식
 
@@ -196,11 +213,12 @@
   `failed` 에 `seen` 을 불러도 `failed` 그대로다 (`seen_at` 만 남는다).
 - `payload`: `arrived` {item_id, place_id, title, out_of_order} / `departed` {item_id, title, stayed_minutes} /
   `delay` {reason, new_violations, delay_minutes, next, (밀림이면) end, plan_version, suggest} / `near_hazard` {zones: [{id, name, kind, risk, reason, distance_m}]} /
-  `safety_raised` {alert_id, situation, changes} / `safety_eased` {alert_id, changes} / `day_ended` {reason}
+  `safety_raised` {alert_id, situation, changes} / `safety_eased` {alert_id, changes} (상황 해제면 {reason: situation_cleared, alert_id: null, changes: [], zones, warnings, since}) /
+  `day_ended` {reason, (자동 종료면) detail}
 
 | 메서드 | 경로 | 설명 |
 |---|---|---|
-| GET | `/trip/plans/{plan_id}/events?after={id}&limit=50` | `after` 이후 이벤트 (오래된 순). 앱은 5~10초마다 폴링 |
+| GET | `/trip/plans/{plan_id}/events?after={id}&limit=50` | `after` 이후 이벤트 (오래된 순). 앱은 5~10초마다 폴링. **앱 활동으로 기록한다** (§4.1) |
 | POST | `/trip/plans/{plan_id}/events/{event_id}/seen` | 확인 표시 (`seen_at`, `delivered` → `handled`). 없거나 남의 것이면 404 `event_not_found` |
 
 ---
@@ -228,6 +246,24 @@
   | `safety_raised` / `safety_eased` | planner 경고 id (planner 가 단계가 바뀔 때만 경고를 만든다) |
   | `arrived` / `departed` | 항목 id |
 - **쿨다운**: 단계 3은 `TRIP_PROACTIVE_COOLDOWN_MIN`(기본 10분, trip 의 지금 기준) 안에 하나만. 안전(`safety_raised`)은 쿨다운을 무시한다.
+- **앱 활동 — 앱이 꺼져 있으면 단계 3 보류 (결정 2026-10-11)**
+  - 문제: 틱은 앱과 무관하게 돌아, 앱이 꺼져 위치가 안 들어와도 '마지막 장소에 계속 머무는 중'으로 보고 지연을 판정했다 →
+    30분마다 밀림 선제 턴(LLM 비용)이 쌓이고, 실제로는 이동했을 수도 있어 틀린 판단일 수 있다. 푸시가 없어 사용자는 보지도 못한다.
+  - **활동** = 이 여행일에 위치 전송(`POST location`)·이벤트 조회(`GET events`)·여행일 시작. 그 시각을 `trip_day.active_at` 에 둔다.
+    agent 가 매 턴 부르는 `GET state` 는 활동이 아니다 (앱이 꺼져도 Agent 는 부른다). 틱(`POST tick`)도 아니다.
+    관제 대시보드(`/console/`)·`run_demo.py`·CLI `trip events` 의 이벤트 조회도 활동으로 친다 — 시연 중에는 그 화면이 앱 역할을 한다.
+  - 마지막 활동이 `TRIP_ACTIVE_MIN`(15분, trip 의 지금 기준)보다 오래면 **단계 3(`delay`·`safety_raised` 모두) 전송을 보류**한다:
+    이벤트는 만들어 `queued` 로 두고 Agent 에 보내지 않는다 (`attempts` 를 세지 않고 `last_error` = "보류: 앱 활동 없음"). 단계 0~2 는 지금처럼 `delivered`.
+    안전도 보류한다 — 보지 못할 사용자에게 LLM 으로 만든 제안은 쓸모가 없고, 돌아오면 가장 먼저(안전 > 지연) 보낸다.
+  - **활동이 돌아오면** (그 요청 직전 활동이 `TRIP_ACTIVE_MIN` 보다 오래됐거나 보류된 단계 3 이 있음) 응답 뒤 백그라운드에서
+    틱과 같은 지연·안전 재판정을 한 번 하고(`service.resume`), 큐의 단계 3 중 **지금도 유효한 것에서 최신 한 건만** 보낸다 (우선순위 안전 > 지연, `policy.pick_resume`).
+    더는 유효하지 않은 것과 밀린 옛것은 `suppressed`. 유효: `delay` = 지금 재계산으로도 위반이나 밀림이 있음 (큐에 있는 delay 를 뺀 기준으로 `judge_delay`),
+    `safety_raised` = 그 뒤에 상황 해제나 그 항목들이 모두 `safe` 로 내려간 경고 완화가 없음. 위치 요청이면 모아 보낸 점을 먼저 반영한 뒤라
+    '사실은 제때 움직였다'면 지연이 풀려 보내지 않는다. 응답은 기다리지 않는다 (재판정·전송 모두 응답 뒤 백그라운드).
+  - **같은 시계**: 활동 시각도 trip 의 지금(§5, 가상 시각) 기준으로 기록하고 비교한다 (위치는 `recorded_at` 과 큰 쪽. 시계 캐시가 몇 초 늦어도 줄지 않게 늦은 쪽을 남긴다).
+    가상 시각을 앞으로 크게 옮겼는데 활동은 실제로 계속되는 경우(대시보드가 2초마다 이벤트 조회): 다음 조회가 활동 시각을 새 '지금'으로 기록하므로 곧 활동 중이 된다.
+    옮긴 직후 틱이 먼저 돌면 잠깐(다음 조회까지, 보통 몇 초) 보류됐다가 다음 조회에서 재판정·전송된다 (한 번만). 틱 API 의 `now` 는 보류 판단에도 쓴다 (trip 시계 캐시가 늦어도 맞게).
+    가상 시각을 크게(6시간 넘게) 되돌리면 활동 시각도 새 값으로 바꾼다. `TRIP_ACTIVE_MIN=0` 이면 끈다 (늘 활동 중, 이전 동작). 이 기능 전에 시작한 여행일(기록 없음)은 활동 중으로 본다.
 - **여행 중일 때만**: 단계 1~3은 진행 중인 여행일에만 낸다. 여행 전의 안전 경고는 planner 경고로 남아 앱이 계획 화면에 배지로 보여준다 (trip 관여 없음).
 
 ### 4.2 Agent 선제 턴 (agent 쪽에 새로 필요)
@@ -250,8 +286,9 @@ POST /agent/sessions/{session_id}/events          (내부 호출, 앱은 부르�
 1. 진행 중인 여행일마다 지연 재판정 (§6.2)
 2. planner 안전 경고 수집 (`status=new`) → `safety_raised` / `safety_eased`, 가져간 경고는 `seen` 처리.
    오늘 남은 항목의 변화가 없는 경고(다른 날·완료 항목)는 가져가지 않는다 — `new` 로 남아 계획 화면 배지로 보인다
-3. 자동 종료 판정
-4. 큐에 있는 단계 3 이벤트 전송 시도 (여행일마다 차례로)
+3. safety 상황(`GET /safety/situation`)으로 상황 해제 판정 (§3.2)
+4. 자동 종료 판정 (§1.2)
+5. 큐에 있는 단계 3 이벤트 전송 시도 (여행일마다 차례로). 앱 활동이 없으면 보류 (§4.1)
 
 틱은 위험 구역 캐시도 비운다. 사용자 요청 없이 다른 서비스를 부르므로 그 사용자의 5분짜리 토큰을 만들어 쓴다.
 
@@ -352,11 +389,12 @@ POST /planner/plans/{id}/projection        (저장 안 함, 본문·필드 모�
 
 | 테이블 | 내용 |
 |---|---|
-| `trip_day` | plan_id, user_id, day, date, session_id, started_at, ended_at, ended_reason, 마지막 위치(lat, lng, accuracy, recorded_at, source), current_item_id, current_state, current_since, 머무름 판정(cand_item_id, cand_since, outside_since), delay_minutes, next(JSON) |
+| `trip_day` | plan_id, user_id, day, date, session_id, started_at, ended_at, ended_reason, 마지막 위치(lat, lng, accuracy, recorded_at, source), current_item_id, current_state, current_since, 머무름 판정(cand_item_id, cand_since, outside_since), delay_minutes, next(JSON), 앱 활동(active_at: 위치·이벤트 조회, located_at: 위치), situation(JSON, 상황 해제 판정) |
 | `trip_event` | 3.3 Event 필드 + 원인 키(`cause_key`, 중복 억제용), delivered_at(쿨다운 기준) |
 
 판정용 최근 위치(머무름 계산)는 `trip_day` 에 "반경 안에 처음 들어온 항목·시각(`cand_*`) / 반경 밖으로 처음 나간 시각(`outside_since`)"만 둔다. 전체 궤적은 저장하지 않는다.
 planner 테이블을 참조하지 않는다 (`plan_id` 는 숫자일 뿐). 시각은 trip 의 지금(§5) 기준이다.
+이미 만든 DB 에는 시작할 때 `ALTER TABLE … ADD COLUMN IF NOT EXISTS` 로 새 컬럼을 더한다 (`models.py` `_UPGRADES`, planner 와 같은 방식).
 
 ---
 
@@ -461,8 +499,13 @@ python scripts/planner/cli.py trip end 7      # 재생이 끝나도 여행일은
 - 일정 밀림: 30분 미만 무반응 / 30분 → 1번 / 같은 단계 반복·다음 항목이 바뀌어도 무반응 / 60분 → 다시 / 승인(일정이 미뤄짐) 후 새 기준 / 위반과 동시 → 1개 / 큐·쿨다운.
 - 장면 ②·③·④ 재생 파일이 기대 이벤트를 낸다.
 - 선제 턴 전송이 실패하면 간격을 늘려 다시 보내고, 상한에 닿으면 `failed` (agent_busy 는 세지 않음).
+- 앱 활동 없음 → 단계 3 `queued`·전송 안 함(시도 수 0) / 활동 복귀 → 최신 한 건만 전송, 무효한 것 suppressed / 단계 0~2 영향 없음.
+- 늦게 다니는 중이면 계획 종료 + 120분이 지나도 종료 안 됨 / 위치가 끊기고 15분 뒤 종료 / 자정 종료.
+- 폭풍 → 평상시 전환 시 `safety_eased`(`situation_cleared`) 한 번 / 중복 없음 / planner 완화와 같은 틱이면 하나.
+- 여행일 종료 세 경로(사용자·자동·다른 날 시작) 모두 visiting → done, 다른 항목은 그대로 / planner 장애여도 종료됨 / 곧 다시 열면 visiting 복원, 늦게 열면 idle.
 
-모두 `backend/tests/trip/` 에 있다: `test_judge.py`·`test_policy.py` (순수 함수, DB 없음), `test_api.py` (API + 실제 DB + 가짜 서비스), `test_scenes.py` (재생 파일).
+모두 `backend/tests/trip/` 에 있다: `test_judge.py`·`test_policy.py` (순수 함수, DB 없음), `test_api.py` (API + 실제 DB + 가짜 서비스), `test_scenes.py` (재생 파일),
+`test_followup.py` (앱 활동·자동 종료·상황 해제·종료 때 정리). 테스트 헬퍼 `env.tick()` 은 앱이 켜져 있는 것으로 보고 활동 시각을 그때로 둔다 (`app=False` 면 앱이 꺼짐).
 ```bash
 docker compose run --rm trip pytest tests/trip
 ```
@@ -488,7 +531,8 @@ docker compose run --rm trip pytest tests/trip
 | `TRIP_PROACTIVE_COOLDOWN_MIN` | 10 | 단계 3 쿨다운 (안전 제외) |
 | `TRIP_PROACTIVE_MAX_ATTEMPTS` | 3 | 선제 턴 전송이 이만큼 실패하면 `failed` (agent_busy 는 세지 않음, §4.1) |
 | `TRIP_PROACTIVE_RETRY_SEC` | 30 | 실패 뒤 다시 보내기까지 기다림. 실패마다 두 배 |
-| `TRIP_AUTO_END_MIN` | 120 | 마지막 일정 후 자동 종료 |
+| `TRIP_AUTO_END_MIN` | 120 | 마지막 일정 후 자동 종료 (최근 위치가 있으면 미룸, §1.2) |
+| `TRIP_ACTIVE_MIN` | 15 | 앱 활동(위치 전송·이벤트 조회)이 이보다(분, trip 의 지금 기준) 오래면 단계 3 전송 보류 (§4.1). 자동 종료를 미루는 '최근 위치'의 기준. 0 이면 끔 |
 | `TRIP_PLANNER_BASE_URL`·`TRIP_SAFETY_BASE_URL`·`TRIP_AGENT_BASE_URL` | `http://127.0.0.1:8000` (compose `http://gateway`) | 다른 서비스 주소 |
 | `TRIP_TIMEOUT_SEC` / `TRIP_AGENT_TIMEOUT_SEC` | 15 / 300 | 다른 서비스 호출 제한 시간 (선제 턴은 LLM 응답을 기다린다) |
 
@@ -510,9 +554,9 @@ docker compose run --rm trip pytest tests/trip
 | 파일 | 내용 |
 |---|---|
 | `router.py` | API (§1.3, §2.1, §3.3). 단계 3 이 생기면 응답 뒤에 큐 전송 |
-| `service.py` | 흐름: 시작·종료, 위치 → 판정 → 이벤트, 틱(`tick_trip`·`tick_all`), 큐 전송(`dispatch`), 위험 구역 캐시 |
-| `judge.py` | **판정 순수 함수**: 도착·출발(`step`), 지연(`judge_delay`), 위험 구역(`judge_hazard`), 안전 경고(`judge_alert`), 자동 종료 |
-| `policy.py` | **Event Policy 순수 함수**: 중복 억제(`fresh`), 큐에서 보낼 것·억제할 것(`pick_next`) |
+| `service.py` | 흐름: 시작·종료, 위치 → 판정 → 이벤트, 틱(`tick_trip`·`tick_all`), 큐 전송(`dispatch`), 앱 활동(`touch`·`resume`), 위험 구역·상황 캐시 |
+| `judge.py` | **판정 순수 함수**: 도착·출발(`step`), 지연(`judge_delay`), 위험 구역(`judge_hazard`), 안전 경고(`judge_alert`), 상황 해제(`judge_situation`), 앱 활동(`is_active`), 자동 종료(`auto_end_reason`) |
+| `policy.py` | **Event Policy 순수 함수**: 중복 억제(`fresh`), 큐에서 보낼 것·억제할 것(`pick_next`), 활동 복귀 때 남길 것(`pick_resume`) |
 | `clients.py` | planner·safety·agent HTTP 클라이언트 (`get_clients`, 테스트는 가짜로 바꾼다) |
 | `clock.py` | 지금 시각 (§5) |
 | `geo.py` | 거리, 점 ↔ 다각형 거리 |

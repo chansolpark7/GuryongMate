@@ -5,6 +5,9 @@ DB·HTTP 를 쓰지 않는다. 같은 입력이면 같은 결과라 pytest 와 �
 - 지연:      judge_delay() planner projection 의 new_violations 중 일정에 영향이 있는 것, 또는 다음 일정이 30분 이상 밀림
 - 위험 구역: judge_hazard() safety /avoid 구역 안이거나 50m 안
 - 안전 경고: judge_alert() planner 경고의 오늘 남은 항목 변화
+- 상황 해제: judge_situation() 이 여행일에 주의·위험이던 safety 상황(구역 단계·특보)이 모두 평상시로
+- 앱 활동:   is_active()   마지막 위치 전송·이벤트 조회가 TRIP_ACTIVE_MIN 안 (아니면 단계 3 전송 보류)
+- 자동 종료: auto_end_reason() 자정, 또는 계획 종료 + 120분이 지나고 최근 위치도 없음
 감지 결과의 중복 억제·전송 순서는 policy.py 가 정한다.
 """
 from dataclasses import dataclass, field, replace
@@ -408,6 +411,55 @@ def judge_alert(alert: dict, trip_date: date, remaining: set[int], at: datetime)
     return out
 
 
+# ---------- 상황 해제 (safety /situation) ----------
+
+SITUATION_CLEARED_MSG = "악천후가 그쳤어요. 지금 구룡포는 특이사항이 없어요."
+
+
+def judge_situation(sit: dict, state: dict | None, at: datetime, day: int) -> tuple[dict, Detection | None]:
+    """safety 상황(GET /safety/situation)을 보고 이 여행일의 상황 기록을 갱신한다 -> (새 기록, 상황 해제 감지 또는 None).
+    - 주의·위험: 구역 단계가 caution·danger 이거나 발효 특보가 있음. 처음이면 상황 번호 n 을 하나 올린다 (그 뒤는 구역·특보를 모은다).
+    - 해제: 주의·위험이던 상황에서 지금은 주의·위험 구역도 특보도 없고, 그때 주의·위험이던 구역이 지금 모두 safe (값이 없으면 모르는 것 -> 기다림).
+      safety_eased (단계 1, payload.reason=situation_cleared). 원인 키 safety_eased:situation:{day}:{n} -> 같은 해제는 한 번만.
+    planner 경고 완화는 남은 일정 항목 단계가 내려갈 때만 나와, 위험했던 일정이 이미 지난 뒤 상황이 풀리면 신호가 없다 (docs/console §7.6)."""
+    st = dict(state or {"abnormal": False, "n": 0, "zones": [], "warnings": []})
+    zones = sit.get("zones") or {}
+    bad = sorted(z for z, v in zones.items() if v in ("caution", "danger"))
+    warns = sorted(sit.get("warnings") or [])
+    if bad or warns:
+        if not st.get("abnormal"):
+            return {"abnormal": True, "n": st.get("n", 0) + 1, "zones": bad, "warnings": warns,
+                    "since": at.isoformat()}, None
+        return st | {"zones": sorted(set(st.get("zones") or []) | set(bad)),
+                     "warnings": sorted(set(st.get("warnings") or []) | set(warns))}, None
+    if not st.get("abnormal") or any(zones.get(z) != "safe" for z in st.get("zones") or []):
+        return st, None
+    n = st.get("n", 1)
+    det = Detection("safety_eased", at, [], SITUATION_CLEARED_MSG, cause_key=f"safety_eased:situation:{day}:{n}",
+                    payload={"reason": "situation_cleared", "alert_id": None, "changes": [],
+                             "zones": st.get("zones") or [], "warnings": st.get("warnings") or [],
+                             "since": st.get("since")})
+    return st | {"abnormal": False}, det
+
+
+# ---------- 앱 활동 ----------
+
+def is_active(active_at: datetime | None, now: datetime, active_min: float) -> bool:
+    """마지막 활동(위치 전송·이벤트 조회)이 active_min 분 안이면 활동 중. 기록이 없거나(이 기능 전 여행일) 0 이면 활동 중으로 본다.
+    활동 시각이 지금보다 늦어도(가상 시각을 되돌림, 시계 캐시) 활동 중이다."""
+    if not active_min or active_at is None:
+        return True
+    return now - active_at <= timedelta(minutes=active_min)
+
+
+def bump_active(old: datetime | None, new: datetime) -> datetime:
+    """활동 시각 갱신: 늦은 쪽을 남긴다 (trip 시계 캐시가 위치 recorded_at 보다 몇 초 늦어도 줄지 않게).
+    다만 가상 시각을 크게(6시간 넘게) 되돌린 것이면 새 값으로."""
+    if old is None or new >= old or old - new > timedelta(hours=6):
+        return new
+    return old
+
+
 # ---------- 자동 종료 ----------
 
 def day_end_at(plan: dict, day: int) -> str | None:
@@ -421,11 +473,24 @@ def day_end_at(plan: dict, day: int) -> str | None:
     return max(ends) if ends else None
 
 
-def should_auto_end(now: datetime, trip_date: date, end_at: str | None, auto_end_min: float) -> bool:
-    """자정이 지났거나, 그날 마지막 일정 종료 + auto_end_min 이 지나면 자동 종료."""
+def auto_end_reason(now: datetime, trip_date: date, end_at: str | None, auto_end_min: float,
+                    located_at: datetime | None = None, active_min: float = 0) -> str | None:
+    """자동 종료할 이유, 아니면 None.
+    - midnight: 자정이 지남 (언제나)
+    - plan_end: 그날 마지막 일정 종료 + auto_end_min 이 지났고, 최근 위치(active_min 분 안)가 없음.
+      많이 늦은 채 아직 다니는 중이면(위치가 들어옴) 미루고, 위치가 끊긴 뒤 active_min 분이 지나면 끝낸다."""
     if now.date() > trip_date:
-        return True
+        return "midnight"
     if not end_at:
-        return False
+        return None
     end = datetime.combine(trip_date, time.fromisoformat(end_at), tzinfo=now.tzinfo)
-    return now >= end + timedelta(minutes=auto_end_min)
+    if now < end + timedelta(minutes=auto_end_min):
+        return None
+    if active_min and located_at is not None and now - located_at <= timedelta(minutes=active_min):
+        return None
+    return "plan_end"
+
+
+def should_auto_end(now: datetime, trip_date: date, end_at: str | None, auto_end_min: float,
+                    located_at: datetime | None = None, active_min: float = 0) -> bool:
+    return auto_end_reason(now, trip_date, end_at, auto_end_min, located_at, active_min) is not None

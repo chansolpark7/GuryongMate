@@ -3,6 +3,7 @@
 - 여행일: start / end / state (진행 중인 여행일이 있으면 동행 모드)
 - 위치: location -> 도착·출발·지연·위험 구역 판정 -> 이벤트 (판정은 서버에서만)
 - 이벤트: events?after= (앱 폴링), seen
+- 앱 활동: 위치 전송·이벤트 조회. 오래 없으면 단계 3 전송을 보류하고, 돌아오면 재판정 후 최신 한 건만 보낸다 (service.resume)
 - 틱: tick (백그라운드 틱을 이 계획에 지금 한 번. CLI·재생기·시연용)
 오류는 {"detail": {"code", "message", ...}} 형식이다 (errors.py).
 """
@@ -36,12 +37,12 @@ def _send_queued(background: BackgroundTasks, state: TripState, events: list[Eve
         background.add_task(_dispatch_plan, user_id, state.plan_id, clients, clock)
 
 
-def _dispatch_plan(user_id: str, plan_id: int, clients: Clients, clock: Clock) -> None:
+def _dispatch_plan(user_id: str, plan_id: int, clients: Clients, clock: Clock, now: datetime | None = None) -> None:
     with SessionLocal() as db:
         td = service.latest_trip(db, user_id, plan_id)
         trip_id = td.id if td is not None else None
     if trip_id is not None:
-        service.dispatch(trip_id, clients, clock)
+        service.dispatch(trip_id, clients, clock, now)
 
 
 @router.post("/plans/{plan_id}/start", response_model=TripState)
@@ -70,15 +71,23 @@ def post_location(plan_id: int, body: Annotated[LocationIn | LocationBatch, Body
                   background: BackgroundTasks) -> LocationResult:
     """위치 한 점 또는 {"points": [...]} (최대 100, 오래된 순). 진행 중인 여행일이 없으면 409 trip_not_active."""
     points = body.points if isinstance(body, LocationBatch) else [body]
-    result = service.record_location(db, user_id, plan_id, points, auth, clients, clock)
-    _send_queued(background, result.state, result.events, user_id, clients, clock)
+    result, back = service.record_location(db, user_id, plan_id, points, auth, clients, clock)
+    if back:  # 앱 활동이 돌아옴 -> 재판정 후 보류된 것 중 최신 한 건만 (응답 뒤)
+        background.add_task(service.resume, service.latest_trip(db, user_id, plan_id).id, clients, clock)
+    else:
+        _send_queued(background, result.state, result.events, user_id, clients, clock)
     return result
 
 
 @router.get("/plans/{plan_id}/events", response_model=list[EventView])
-def list_events(plan_id: int, db: DbSession, user_id: CurrentUser,
+def list_events(plan_id: int, db: DbSession, user_id: CurrentUser, clients: Deps, clock: Now,
+                background: BackgroundTasks,
                 after: Annotated[int, Query(ge=0, description="이 id 이후 이벤트 (오래된 순)")] = 0,
                 limit: Annotated[int, Query(ge=1, le=200)] = 50) -> list[EventView]:
+    """이벤트 조회는 앱 활동이다 (위치 전송과 함께). 활동이 오래 없다가 돌아오면 응답 뒤 재판정·전송 (docs/trip/README.md §4.1)."""
+    trip_id = service.touch(db, user_id, plan_id, clock)
+    if trip_id is not None:
+        background.add_task(service.resume, trip_id, clients, clock)
     return service.list_events(db, user_id, plan_id, after, limit)
 
 
@@ -95,7 +104,7 @@ def tick(plan_id: int, db: DbSession, user_id: CurrentUser, clients: Deps, clock
     틱 주기를 기다리지 않고 확인할 때 쓴다 (CLI·재생기). 진행 중인 여행일이 없으면 409 trip_not_active."""
     events = service.tick_plan(db, user_id, plan_id, clients, clock, now)
     state = service.get_state(db, user_id, plan_id, {}, clients, clock)
-    background.add_task(_dispatch_plan, user_id, plan_id, clients, clock)
+    background.add_task(_dispatch_plan, user_id, plan_id, clients, clock, now)
     return TickResult(state=state, events=events)
 
 

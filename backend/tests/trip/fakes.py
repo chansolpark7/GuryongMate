@@ -293,7 +293,12 @@ class FakeSafety:
     def situation(self):
         if self.down:
             raise UpstreamError("safety", None, "down")
-        return {"fingerprint": self.scenario}
+        # 구역 단계·발효 특보 (상황 해제 판정). storm: 침수 구역 + 방파제 위험 + 풍랑주의보 / flood: 침수 구역만 / calm: 모두 안전
+        bad = self.scenario in ("storm", "flood")
+        zones = {zid: ("danger" if zid == "flood_4" else "caution") if bad else "safe" for zid in SENSORS}
+        zones["breakwater_north"] = "danger" if self.scenario == "storm" else "safe"
+        return {"fingerprint": self.scenario, "zones": zones,
+                "warnings": ["풍랑주의보"] if self.scenario == "storm" else []}
 
     def avoid(self):
         zones = []
