@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:latlong2/latlong.dart';
 
@@ -47,7 +49,11 @@ class RouteCache {
 
 /// 한 계획의 상태. Planner 탭과 Map 탭이 같은 인스턴스를 공유한다 (선택 항목·Day·AI 변경 표시·안전 점검).
 class PlanController extends ChangeNotifier {
-  PlanController(this.api, this.planId) : routes = RouteCache(api);
+  PlanController(this.api, this.planId, {this.aiMarkTtl = const Duration(minutes: 10)}) : routes = RouteCache(api);
+
+  /// AI 변경 표시(항목 배지 · 초록 "반영됐어요" 배너 · 지도 [변경 내역])는 마지막 AI 변경에서 이만큼 지나면 사라진다.
+  final Duration aiMarkTtl;
+  Timer? _aiMarkTimer;
 
   final GuryongApi api;
   final int planId;
@@ -76,7 +82,7 @@ class PlanController extends ChangeNotifier {
   int? _safetyFor; // 점검한 (version, progress) 해시
   DateTime? _safetyAt;
 
-  /// 항목 id → AI 변경 표시. 사용자가 그 항목을 직접 고치면 사라진다.
+  /// 항목 id → AI 변경 표시. 사용자가 그 항목을 직접 고치거나 [aiMarkTtl] 이 지나면 사라진다.
   final aiUpdates = <int, AiUpdate>{};
 
   /// 셸이 등록한다. AI 시트를 열고(필요하면 문장을 넣어) 바로 보낼지 정한다.
@@ -89,6 +95,7 @@ class PlanController extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    _aiMarkTimer?.cancel();
     super.dispose();
   }
 
@@ -286,6 +293,7 @@ class PlanController extends ChangeNotifier {
         ..addAll(updates);
       final first = updates.keys.isEmpty ? null : after.item(updates.keys.first);
       if (first != null) day = first.day;
+      _restartAiMarkTimer();
     }
     _set(after);
     _notify();
@@ -331,7 +339,19 @@ class PlanController extends ChangeNotifier {
 
   void markAiAdded(int itemId, String reason) {
     aiUpdates[itemId] = AiUpdate(kind: 'added', toTime: plan?.item(itemId)?.startAt, reason: reason);
+    _restartAiMarkTimer();
     _notify();
+  }
+
+  void _restartAiMarkTimer() {
+    _aiMarkTimer?.cancel();
+    _aiMarkTimer = Timer(aiMarkTtl, () {
+      _aiMarkTimer = null;
+      if (lastApplied == null && aiUpdates.isEmpty) return;
+      lastApplied = null;
+      aiUpdates.clear();
+      _notify();
+    });
   }
 
   void clearApplied() {

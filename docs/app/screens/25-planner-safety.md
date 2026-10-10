@@ -31,9 +31,11 @@ Figma: 화면 `73:4137` · Spec `73:4366` · 기존 04 `29:4924` · 컴포넌트
 
 ## Context Banner 우선순위
 1. 안전 경고 new: `GET /planner/plans/{id}/safety/alerts?status=new` 중 `needs_action` — "{장소} {HH:MM} {단계} · {근거}"
-2. 오늘~예보 범위의 caution/danger 항목 중 가장 이른 것
-3. 검증 위반(error) — 기존 04 동작 ("바다뷰 카페가 18:00 이후에 끝나요")
-4. 없음 → 배너 숨김
+   - 해제 알림(Green Eased, 4초)도 여기 — AI 적용 배너보다 먼저
+2. AI 적용 직후 (08): Green "{제안 요약}" + [이력]. 마지막 AI 변경(승인·추천 추가)에서 10분 지나면 항목 "AI updated" 배지·지도 [변경 내역]과 함께 사라진다 (바뀐 항목을 모두 직접 고치거나 실행 취소해도)
+3. 오늘~예보 범위의 caution/danger 항목 중 가장 이른 것
+4. 검증 위반(error) — 기존 04 동작 ("바다뷰 카페가 18:00 이후에 끝나요")
+5. 없음 → 배너 숨김
 - 오른쪽 "✨ AI로 조정" → AI 시트 + 자동 전송 "{장소} 일정을 안전하게 조정해줘" (위반이면 기존 "일정에 있는 경고를 해결해줘")
 - 해제(`lowered`/`cleared` 경고)는 Green Eased 배너 4초 후 사라짐. 배너를 보이면 경고 `POST …/alerts/{id}/seen`.
 - 색: danger #FDECEC / caution·위반 #FFF4E0 / eased #E7F6EE.

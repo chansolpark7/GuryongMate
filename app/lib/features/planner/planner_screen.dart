@@ -239,7 +239,7 @@ String safetyBannerText(SafetyItem s) {
   return '$place ${s.startAt ?? ''} ${riskWord(s.risk)}$reason'.replaceAll('  ', ' ');
 }
 
-/// Context Banner 우선순위 (25): AI 적용 직후 > 새 안전 경고(needs_action) > 이날 주의·위험 항목 > 검증 위반 > 없음.
+/// Context Banner 우선순위 (25): 새 안전 경고(needs_action) > 해제 알림(4초) > AI 적용 직후 > 이날 주의·위험 항목 > 검증 위반 > 없음.
 /// 해제만 있는 경고(lowered/cleared)는 Green Eased 배너를 4초 보여 주고 사라진다.
 class _ContextBanner extends StatefulWidget {
   const _ContextBanner({required this.controller, required this.plan});
@@ -268,20 +268,6 @@ class _ContextBannerState extends State<_ContextBanner> {
   @override
   Widget build(BuildContext context) {
     final c = widget.controller;
-    final applied = c.lastApplied;
-    if (applied != null && c.aiUpdates.isNotEmpty) {
-      final text = applied.proposal.summary.trim().isEmpty ? '구룡메이트 변경안이 일정에 반영됐어요' : applied.proposal.summary.trim().split('\n').first;
-      return _Banner(
-        icon: Icons.check,
-        fg: AppColors.success,
-        bg: AppColors.successSoft,
-        text: text,
-        action: '이력',
-        actionColor: AppColors.success,
-        onAction: () => showProposalHistory(context, c),
-      );
-    }
-
     // 1. 새 안전 경고
     final alert = c.alerts.where((a) => a.status == 'new' && a.needsAction).firstOrNull;
     if (alert != null) {
@@ -308,6 +294,21 @@ class _ContextBannerState extends State<_ContextBanner> {
         fg: AppColors.success,
         bg: AppColors.successSoft,
         text: item == null ? '주의가 해제됐어요' : '${item.title} 주의가 해제됐어요',
+      );
+    }
+
+    // AI 적용 직후 (안전 경고·해제 알림보다 뒤, 마지막 AI 변경에서 aiMarkTtl 동안)
+    final applied = c.lastApplied;
+    if (applied != null && c.aiUpdates.isNotEmpty) {
+      final text = applied.proposal.summary.trim().isEmpty ? '구룡메이트 변경안이 일정에 반영됐어요' : applied.proposal.summary.trim().split('\n').first;
+      return _Banner(
+        icon: Icons.check,
+        fg: AppColors.success,
+        bg: AppColors.successSoft,
+        text: text,
+        action: '이력',
+        actionColor: AppColors.success,
+        onAction: () => showProposalHistory(context, c),
       );
     }
 

@@ -1,4 +1,5 @@
 // SSE 재생 (LLM 호출 없이 녹화 fixture): 진행 단계가 순서대로 갱신·접힘, 카드가 나타남, 오류 이벤트.
+import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:guryong_mate/core/api/api_client.dart';
 import 'package:guryong_mate/core/models/agent.dart';
@@ -146,5 +147,34 @@ void main() {
     final p = (last.cards.single as ProposalEntry).proposal;
     expect(p, isA<ProposalDetail>());
     expect((last.cards.single as ProposalEntry).state, ProposalState.pending);
+  });
+  test('AI 변경 표시(배지·초록 배너·지도 변경 내역)는 마지막 AI 변경에서 aiMarkTtl 이 지나면 사라진다', () async {
+    final gw = FixtureGateway(['f1_plan_with_ai.json']);
+    final s = await signedInSession(gw);
+    final accept = gw.response('accept') as Map<String, dynamic>;
+    final proposal = ProposalDetail.fromJson(accept['proposal'] as Map<String, dynamic>);
+    final after = PlanDetail.fromJson(accept['plan'] as Map<String, dynamic>);
+    fakeAsync((fa) {
+      final plan = PlanController(s.api, after.id, aiMarkTtl: const Duration(minutes: 10));
+      var notified = 0;
+      plan.addListener(() => notified++);
+      plan.plan = PlanDetail.fromJson(gw.response('create_plan') as Map<String, dynamic>);
+      plan.applyAccepted(proposal, after);
+      expect(plan.lastApplied, isNotNull);
+      expect(plan.aiUpdates, isNotEmpty);
+
+      fa.elapse(const Duration(minutes: 9));
+      expect(plan.aiUpdates, isNotEmpty);
+      // 추천 [추가]도 AI 변경 → 그때부터 다시 10분
+      plan.markAiAdded(after.allItems.first.id, '구룡메이트 추천');
+      fa.elapse(const Duration(minutes: 9));
+      expect(plan.lastApplied, isNotNull);
+      final before = notified;
+      fa.elapse(const Duration(minutes: 1, seconds: 1));
+      expect(plan.lastApplied, isNull);
+      expect(plan.aiUpdates, isEmpty);
+      expect(notified, greaterThan(before), reason: '화면이 다시 그려지도록 알린다');
+      plan.dispose();
+    });
   });
 }
