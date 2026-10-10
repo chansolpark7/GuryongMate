@@ -30,6 +30,28 @@ class TodayScreen extends StatefulWidget {
   State<TodayScreen> createState() => _TodayScreenState();
 }
 
+/// 경로 [line] 에서 [loc] 에 가장 가까운 점의 인덱스 (loc 이 없으면 0). 안내 카드의 현재 step 과 지나온 구간을 같은 k 로.
+int nearestIndex(List<LatLng> line, LatLng? loc) {
+  if (loc == null) return 0;
+  var k = 0;
+  var best = double.infinity;
+  for (final (i, p) in line.indexed) {
+    final d = distanceM(loc.latitude, loc.longitude, p.latitude, p.longitude);
+    if (d < best) {
+      best = d;
+      k = i;
+    }
+  }
+  return k;
+}
+
+/// 15 길 안내선을 k 에서 나눈다: 지나온 부분(회색, 다녀온 구간과 같은 색) · 남은 부분(Primary). 점이 2개 안 되는 쪽은 빈 목록.
+@visibleForTesting
+({List<LatLng> passed, List<LatLng> ahead}) splitGuide(List<LatLng> line, LatLng? loc) {
+  final k = nearestIndex(line, loc);
+  return (passed: k > 0 ? line.sublist(0, k + 1) : const <LatLng>[], ahead: k < line.length - 1 ? line.sublist(k) : const <LatLng>[]);
+}
+
 class _TodayScreenState extends State<TodayScreen> {
   final _map = MapController();
   bool _ready = false;
@@ -269,8 +291,11 @@ class _TodayScreenState extends State<TodayScreen> {
   Widget _buildMap(PlanController c, TripController t, List<PlanItem> items, List<PlanItem> done, PlanItem? current, PlanItem? next, bool showGuide) {
     final loc = _loc(t), acc = t.state?.location?.accuracy;
     final lines = <Polyline>[];
+    final guide = showGuide && _guide != null && _guide!.points.length > 1 ? _guide : null;
     for (var i = 1; i < items.length; i++) {
       final a = items[i - 1], b = items[i];
+      // 안내 중에는 다음 장소로 가는 구간선 대신 안내선만 (같은 길에 두 줄이 겹치지 않게)
+      if (guide != null && b.id == next?.id) continue;
       final mode = b.legMode ?? c.plan?.travelMode ?? 'walk';
       final leg = _legs['${a.id}>${b.id}:$mode'];
       final walked = b.status != 'planned';
@@ -285,8 +310,10 @@ class _TodayScreenState extends State<TodayScreen> {
         pattern: dotted && !walked ? StrokePattern.dotted(spacingFactor: 2) : const StrokePattern.solid(),
       ));
     }
-    if (showGuide && _guide != null && _guide!.points.length > 1) {
-      lines.add(Polyline(points: _guide!.points, strokeWidth: 5, color: AppColors.primary, borderColor: Colors.white, borderStrokeWidth: 2));
+    if (guide != null) {
+      final (:passed, :ahead) = splitGuide(guide.points, loc);
+      if (passed.length > 1) lines.add(Polyline(points: passed, strokeWidth: 4, color: const Color(0xFFAEB6C1)));
+      if (ahead.length > 1) lines.add(Polyline(points: ahead, strokeWidth: 5, color: AppColors.primary, borderColor: Colors.white, borderStrokeWidth: 2));
     }
     return FlutterMap(
       mapController: _map,
@@ -468,17 +495,7 @@ class _GuideCard extends StatelessWidget {
 
   static RouteStep? currentStep(RouteResult r, LatLng? loc) {
     if (r.steps.isEmpty) return null;
-    var k = 0;
-    if (loc != null) {
-      var best = double.infinity;
-      for (final (i, p) in r.points.indexed) {
-        final d = distanceM(loc.latitude, loc.longitude, p.latitude, p.longitude);
-        if (d < best) {
-          best = d;
-          k = i;
-        }
-      }
-    }
+    final k = nearestIndex(r.points, loc);
     final passed = r.steps.lastIndexWhere((s) => s.beginIndex <= k);
     final idx = (passed + 1).clamp(0, r.steps.length - 1);
     return r.steps[idx];

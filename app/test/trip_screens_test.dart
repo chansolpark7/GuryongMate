@@ -1,7 +1,10 @@
 // 동행 모드 화면 — 여행 재생 fixture(trip/scene2·3·4)와 흐름 fixture(f3~f6)로 그린다 (LLM 호출 없음).
 // 앱은 데모 위치 모드: 위치를 보내지 않고 서버 상태·이벤트(폴링)만 그린다 (trip §2.2, 33).
 import 'package:flutter/material.dart';
+import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:latlong2/latlong.dart';
+import 'package:guryong_mate/core/theme/app_theme.dart';
 import 'package:guryong_mate/features/chat/chat_controller.dart';
 import 'package:guryong_mate/features/planner/planner_shell.dart';
 import 'package:guryong_mate/features/trip/location.dart';
@@ -305,5 +308,42 @@ void main() {
     expect(find.text('지도'), findsWidgets);
     expect(find.text('제안 보기'), findsOneWidget, reason: '대기 중인 safety 제안');
     expect(find.textContaining('남은 일정에 위험 신호'), findsOneWidget);
+  });
+  testWidgets('15 길 안내선: 지나온 부분은 회색, 남은 부분만 Primary · 다음 장소로 가는 구간선은 겹쳐 그리지 않는다', (tester) async {
+    final r = TripReplay('scene4_safety', flows: ['f6_safety.json']);
+    r.advanceTo('13:35:24'); // 13:33:31 departed → 이동 중
+    // 안내 경로: 출발점(지금 위치보다 뒤) → 지금 위치 근처 → 중간 → 다음 장소. 지금 위치는 둘째 점.
+    r.gw.on('POST /routing/route', (q) {
+      final b = q.body as Map;
+      if (b['steps'] != true) return Res.error(503, 'routing_unavailable');
+      final st = (b['stops'] as List).cast<Map>();
+      final (lat0, lng0, lat1, lng1) = (st[0]['lat'] as num, st[0]['lng'] as num, st[1]['lat'] as num, st[1]['lng'] as num);
+      return Res.json(200, {
+        'mode': 'walk', 'source': 'road', 'minutes': 8, 'distance_m': 600,
+        'geometry': {'type': 'LineString', 'coordinates': [
+          [lng0 - 0.002, lat0 - 0.002], [lng0, lat0], [(lng0 + lng1) / 2, (lat0 + lat1) / 2], [lng1, lat1],
+        ]},
+        'legs': [{'steps': [
+          {'type': 'start', 'instruction': '출발', 'distance_m': 0, 'begin_index': 0},
+          {'type': 'left', 'instruction': '왼쪽으로', 'distance_m': 300, 'begin_index': 1},
+          {'type': 'arrive', 'instruction': '도착', 'distance_m': 0, 'begin_index': 3},
+        ]}],
+      });
+    });
+    await openShell(tester, r.gw, r.planId);
+    await poll(tester);
+    expect(find.byKey(const ValueKey('guide-card')), findsOneWidget, reason: '이동 중이면 안내 카드');
+
+    final t = tripOf(tester);
+    final next = t.item(t.state!.nextItemId)!;
+    final loc = (t.state!.location!.lat, t.state!.location!.lng);
+    final lines = tester.widget<PolylineLayer>(find.byType(PolylineLayer).first).polylines;
+    bool at(LatLng p, (num, num) q) => (p.latitude - q.$1).abs() < 1e-9 && (p.longitude - q.$2).abs() < 1e-9;
+    final passed = lines.where((l) => l.color == const Color(0xFFAEB6C1) && l.points.length == 2 && at(l.points.last, loc));
+    expect(passed, hasLength(1), reason: '출발점 → 지금 위치는 회색');
+    final toNext = lines.where((l) => at(l.points.last, (next.place!.lat, next.place!.lng)) && l.color == AppColors.primary).toList();
+    expect(toNext, hasLength(1), reason: '다음 장소로 가는 Primary 선은 안내선 하나만 (구간선 숨김)');
+    expect(toNext.single.points, hasLength(3), reason: '지금 위치부터 남은 부분');
+    expect(at(toNext.single.points.first, loc), isTrue);
   });
 }
