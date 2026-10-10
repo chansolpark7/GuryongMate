@@ -1,6 +1,6 @@
 // 지도 (Leaflet, 전역 L): 일정·구간 경로선·사용자(끌어서 순간이동)·주의/위험 구역·피할 구역. 안전한 것은 기본으로 그리지 않는다.
 import { api } from "./api.js";
-import { S, dayItems, on, tripActive } from "./store.js";
+import { S, dayItems, on, prefs, simNow, tripActive } from "./store.js";
 import { stay, teleport, travel } from "./actions.js";
 import { ITEM_STATUS_KO, eventMeta, onEventBubbles } from "./ui.js";
 import { h, riskKo } from "./util.js";
@@ -64,6 +64,7 @@ export function initMap() {
   on("motion", drawWalk);
   on("safety", () => { drawZones(); drawSensors(); drawAvoid(); drawCctv(); });
   onEventBubbles(showBubbles);
+  requestAnimationFrame(animateMe);
   return map;
 }
 
@@ -275,9 +276,41 @@ function drawMe() {
     layers.me.addLayer(meCircle);
     layers.me.addLayer(meMarker);
   }
-  if (!dragging) meMarker.setLatLng(ll);
-  meCircle.setLatLng(ll).setRadius(loc.accuracy || 30);
+  if (!animating()) {
+    if (!dragging) meMarker.setLatLng(ll);
+    meCircle.setLatLng(ll);
+  }
+  meCircle.setRadius(loc.accuracy || 30);
   if (meMarker.dragging) canDrag ? meMarker.dragging.enable() : meMarker.dragging.disable();
+}
+
+/** 걷기·차로 가기 중이면 마커를 매 프레임 움직인다 (서버 전송은 25m·60m 점마다 그대로). */
+const animating = () => !!(S.motion?.path && S.motion.clock);
+
+let pathIdx = 0;
+/** path [{ll, t}] 위에서 가상 시각 t 의 위치 (선형 보간). */
+function posAt(path, t) {
+  if (t <= path[0].t) return path[0].ll;
+  if (t >= path[path.length - 1].t) return path[path.length - 1].ll;
+  if (pathIdx >= path.length - 1 || path[pathIdx].t > t) pathIdx = 0;
+  while (pathIdx < path.length - 2 && path[pathIdx + 1].t <= t) pathIdx += 1;
+  const a = path[pathIdx];
+  const b = path[pathIdx + 1];
+  const f = b.t > a.t ? (t - a.t) / (b.t - a.t) : 1;
+  return [a.ll[0] + (b.ll[0] - a.ll[0]) * f, a.ll[1] + (b.ll[1] - a.ll[1]) * f];
+}
+
+function animateMe() {
+  requestAnimationFrame(animateMe);
+  if (!animating() || !meMarker || dragging) return;
+  // 화면 시각(simNow)은 다음 전송 점 시각에서 멈추므로 마커가 서버보다 앞서 가지 않는다
+  const ll = posAt(S.motion.path, simNow());
+  meMarker.setLatLng(ll);
+  meCircle.setLatLng(ll);
+  // 따라가기: 가운데에서 1px 넘게 벗어나면 그 프레임에 옮긴다 (애니메이션 없이 — 마커와 지도가 함께 부드럽게)
+  if (prefs.follow && map.latLngToContainerPoint(ll).distanceTo(map.getSize().divideBy(2)) > 1) {
+    map.panTo(ll, { animate: false });
+  }
 }
 
 // ---------- 안전 ----------

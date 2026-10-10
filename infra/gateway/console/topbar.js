@@ -18,15 +18,23 @@ export function initTopbar(h_) {
   on("conn sim", () => { renderWeatherChip(); renderAlertbar(); });
   on("safety", renderWeatherChip);
   on("plans plan trip motion", renderTripChip);
-  setInterval(renderClock, 250);
+  // 매 프레임 (재생·걷기 중에도 초가 부드럽게). 바뀐 글자만 쓴다
+  const loop = () => { renderClock(); requestAnimationFrame(loop); };
+  requestAnimationFrame(loop);
 }
+
+let clockSig = "";
 
 // ---------- 시각 ----------
 
 function renderClock() {
   const now = simNow();
-  $("clock-text").textContent = fmtKst(now);
+  const text = fmtKst(now);
   const diff = Math.round((now - Date.now()) / 60e3);
+  const sig = `${text}|${diff}|${S.play?.speed ?? ""}|${!!S.sim}|${S.simDisabled}`;
+  if (sig === clockSig) return;
+  clockSig = sig;
+  $("clock-text").textContent = text;
   const tag = $("clock-tag");
   const virtual = !!S.sim && Math.abs(diff) >= 1;
   tag.hidden = !virtual && !S.play;

@@ -1,5 +1,5 @@
 // 지도 위: 여행 전 큰 [여행 시작] 버튼 · 걸어가는 중 진행 카드 (redesign.md §2.2)
-import { S, canSim, dayItems, on } from "./store.js";
+import { S, canSim, dayItems, on, prefs, setPref } from "./store.js";
 import { isTripDay, moveAndStart, onBusy, planStartMs, startTrip, stopMotion } from "./actions.js";
 import { fmtKst, fmtMinutes, h, josa } from "./util.js";
 
@@ -8,7 +8,7 @@ let tripBusy = null;
 
 export function initOverlays() {
   on("plans plan trip motion sim", renderCta);
-  on("motion", renderMotion);
+  on("motion prefs", renderMotion);
   onBusy((kind, text) => {
     if (kind === "trip") { tripBusy = text; renderCta(); }
   });
@@ -50,6 +50,10 @@ function renderMotion() {
     h("div.mc-row",
       h("span.ic", m.kind === "stay" ? "⏸" : m.kind === "car" ? "🚗" : "🚶"),
       h("span.mc-text", h("b", what), h("span.muted", ` · ${m.stop ? "멈추는 중…" : `${fmtMinutes(left)} 남음`}`)),
+      m.path ? h(`button.btn.sm.follow${prefs.follow ? ".on" : ""}`, {
+        title: "걷는 동안 지도가 사용자를 가운데에 두고 따라가요", "aria-pressed": String(!!prefs.follow),
+        onclick: () => setPref("follow", !prefs.follow),
+      }, prefs.follow ? "📍 따라가는 중" : "📍 따라가기") : null,
       h("button.btn.sm", { onclick: stopMotion, disabled: m.stop }, "멈춤")),
     h("div.mc-bar", h("i", { style: { width: `${pct}%` } })));
 }

@@ -387,7 +387,8 @@ SIM_KINDS = {
     "rain": "약한 비 (시간당 5mm). 주의·위험은 없고 참고(info) 신호만",
 }
 KIND_PRIORITY = ("storm", "flood", "wind", "rain")
-MAX_SEGMENTS = 20
+MAX_SEGMENTS = 20  # 정리(normalize_timeline)한 뒤 기준
+MAX_INPUT_SEGMENTS = 200  # 정리 전 요청 하나에 담을 수 있는 구간 수 (터무니없이 큰 요청만 막는다)
 
 # 시나리오 = 시간표 프리셋. 설정한 순간(가상 시각) 기준 절대 구간이 된다 (시각을 옮겨도 밀리지 않음)
 MOCK_SCENARIOS = {
@@ -444,16 +445,40 @@ def preset_timeline(scenario: str, now: datetime, until: datetime | None = None)
     return (seg,)
 
 
+def normalize_timeline(segments) -> tuple[SimSegment, ...]:
+    """시간표 정리 (저장하기 전에 한 번). 시각별 날씨(segment_at 의 종류)는 정리 전후로 같다.
+    - 겹치는 부분은 더 심한 종류가 차지한다 (storm > flood > wind > rain). 약한 구간은 잘리거나 둘로 나뉜다.
+    - 같은 종류가 겹치거나 맞닿으면 하나로 합친다. 길이 0 구간은 없앤다. 시작 순으로 정렬한다.
+    덮여 사라진 약한 구간은 기억하지 않는다 (센 구간을 지워도 돌아오지 않는다)."""
+    edges = sorted({t for s in segments for t in (s.start, s.end)})
+    out: list[SimSegment] = []
+    for a, b in zip(edges, edges[1:]):
+        # 경계 사이에서는 덮는 구간이 바뀌지 않으므로 a 시각의 가장 심한 종류가 [a, b) 전체의 종류다
+        kinds = [s.kind for s in segments if s.covers(a)]
+        if not kinds:
+            continue
+        kind = min(kinds, key=KIND_PRIORITY.index)
+        if out and out[-1].kind == kind and out[-1].end == a:
+            out[-1] = replace(out[-1], end=b)
+        else:
+            out.append(SimSegment(kind, a, b))
+    return tuple(out)
+
+
 def check_timeline(segments: list[SimSegment]) -> tuple[SimSegment, ...]:
-    """구간 목록 검증 (개수, 모르는 kind, start >= end). 문제가 있으면 ValueError. 시작 순으로 정렬해 돌려준다."""
-    if len(segments) > MAX_SEGMENTS:
-        raise ValueError(f"구간은 최대 {MAX_SEGMENTS}개입니다")
+    """구간 목록 검증 (모르는 kind, start >= end) 후 정리(normalize_timeline)하고, 정리한 결과로 개수를 본다.
+    문제가 있으면 ValueError."""
+    if len(segments) > MAX_INPUT_SEGMENTS:
+        raise ValueError(f"한 번에 보낼 수 있는 구간은 최대 {MAX_INPUT_SEGMENTS}개입니다")
     for i, seg in enumerate(segments, 1):
         if seg.kind not in SIM_KINDS:
             raise ValueError(f"{i}번째 구간: 알 수 없는 종류 {seg.kind}")
         if not seg.start < seg.end:
             raise ValueError(f"{i}번째 구간: start 는 end 보다 앞이어야 합니다")
-    return tuple(sorted(segments, key=lambda x: (x.start, x.end)))
+    out = normalize_timeline(segments)
+    if len(out) > MAX_SEGMENTS:
+        raise ValueError(f"구간은 (겹침·맞닿음을 정리한 뒤) 최대 {MAX_SEGMENTS}개입니다 — 지금 {len(out)}개")
+    return out
 
 
 _SIM_LOCK = threading.Lock()
