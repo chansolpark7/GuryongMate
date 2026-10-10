@@ -47,6 +47,8 @@ DEMO_PLAN = json.loads((ROOT / "scripts" / "trip" / "scenes" / "scene4_safety.js
 HOUSE, PORT, MUSEUM = "kto-1909659", "kto-2610501", "kto-2660046"
 BREAKWATER, CAFE, HISTORY = "poi-gr-breakwater-north", "kto-2834344", "kto-2603493"
 HAZARD_VIA = [35.9912, 129.5572]  # 카페 가는 길에 지나는 구룡포수협 앞 (침수 감시 구역)
+# 장면 ④ 폭풍이 그치는 시각 (가상 날씨 시간표 15:20~17:00). 수협 앞 near_hazard(약 16:33) 뒤, 카페 도착 무렵
+STORM_UNTIL = "17:00"
 PLAN_NOW = "2026-10-09T10:00:00+09:00"  # 장면 ①: 여행 전날
 # 장면 ① 에서 Agent 가 조건을 되물을 때의 답 (페르소나: 역사·사진 / 음식·바다, 오래 걷기 부담. PROJECT.md §3)
 ANSWER = ("엄마가 오래 걷는 건 힘들어하셔. 역사랑 사진, 바다랑 과메기 같은 음식을 좋아해. 일본인 가옥거리 보고 구룡포항에서 점심 먹고, "
@@ -192,11 +194,12 @@ class Demo:
                 return events
             time.sleep(2)
 
-    def wait_event(self, kind: str, limit: float = 150) -> None:
+    def wait_event(self, kind: str, limit: float = 150, since: datetime | None = None) -> None:
         """그 이벤트가 나올 때까지 trip 틱을 몇 초마다 부른다. AUTH_REQUIRED=true 인 서버는 planner 안전 점검을
-        바로 돌릴 수 없어(POST /planner/safety/scan 404) 점검 주기(PLANNER_SAFETY_WATCH_SEC)를 기다려야 한다."""
+        바로 돌릴 수 없어(POST /planner/safety/scan 404) 점검 주기(PLANNER_SAFETY_WATCH_SEC)를 기다려야 한다.
+        since: 그 (가상) 시각 이후에 나온 이벤트만 본다."""
         end, said = time.monotonic() + limit, False
-        while not any(e["type"] == kind for e in self.c.trip_events(self.plan, 0, 200)):
+        while not self.events_since(kind, since):
             if time.monotonic() > end:
                 print(f"{RED}  {kind} 이벤트가 {limit:.0f}초 안에 나오지 않았습니다.{RESET}")
                 return
@@ -206,6 +209,10 @@ class Demo:
             time.sleep(5)
             for e in self.c.trip_tick(self.plan).get("events", []):
                 self.on_event(e)
+
+    def events_since(self, kind: str, since: datetime | None = None) -> list[dict]:
+        return [e for e in self.c.trip_events(self.plan, 0, 200)
+                if e["type"] == kind and (since is None or datetime.fromisoformat(e["now"]) >= since)]
 
     def show_proactive(self, kind: str) -> dict | None:
         """가장 최근 kind 이벤트의 Agent 선제 메시지와 제안 카드를 보여준다."""
@@ -394,8 +401,9 @@ class Demo:
                 "안전 화면: 실제 E-UM 데이터 — 침수 센서·방파제 CCTV·특보 (지금 구룡포의 실제 값)",
                 "(가상 시각 10/10 15:20 에 맞춰 보여줌. 실제가 평온하면 모두 안전)",
             ], self.s4_live),
-            Step("s4_storm", "장면 ④", "가상 악천후로 전환 → 위험 감지 → Agent 가 먼저 제안", [
+            Step("s4_storm", "장면 ④", f"가상 악천후(15:20~{STORM_UNTIL})로 전환 → 위험 감지 → Agent 가 먼저 제안", [
                 "안전 화면: 호우·강풍·풍랑주의보, 침수 센서 상승, 방파제 위험",
+                f"(폭풍은 날씨 시간표의 구간 — {STORM_UNTIL} 에 그친다. 17:30 이후 일정은 예보상 안전)",
                 "Agent 메시지: 북방파제 위험 근거(풍속 16m/s·파고 3.5m, 특보, CCTV 실족 감지) + 근대문화역사관(실내)으로 바꾸기 + 다른 방법",
                 "비교 카드: 위험 방문 1곳 → 0곳 (북방파제 → 근대문화역사관), 종료 시각 약 8분 당겨짐",
             ], self.s4_storm),
@@ -406,6 +414,10 @@ class Demo:
                 "지도: 역사관 도착 → 차로 이동 중 '침수 감시 구역(구룡포수협 주변) 근처예요' 즉시 경고 (LLM 없음)",
                 "카페파도 도착",
             ], self.s4_move),
+            Step("s4_clear", "장면 ④", f"카페에서 쉬는 동안 {STORM_UNTIL} 폭풍이 그침 → 평상시", [
+                "안전 화면: 특보 없음, 침수 센서 정상, 지도 구역 초록",
+                "남은 일정(카페)은 그대로 — 새 경고·제안 없음",
+            ], self.s4_clear),
             Step("end", "마무리", "여행 종료·결과", [
                 "앱: 여행 종료 (계획 모드로). 필요하면 대화·플래너로 Q&A",
             ], self.finish),
@@ -623,7 +635,8 @@ class Demo:
 
     def s4_storm(self) -> None:
         t = at("15:20")
-        self.sim(source="mock", scenario="storm", now=t.isoformat())
+        # 폭풍은 끝 시각이 있는 구간: 시각을 옮겨도 밀리지 않고 STORM_UNTIL 에 그친다 (docs/console/README.md §7.5)
+        self.sim(source="mock", scenario="storm", until=at(STORM_UNTIL).isoformat(), now=t.isoformat())
         self.p.t = t.isoformat()
         self.show_safety()
         trip_cli._tick(self.c, self.plan, t, wait=True, on_event=self.on_event)  # planner 안전 점검 + trip 틱
@@ -651,6 +664,21 @@ class Demo:
         self.expect({"type": "near_hazard", "level": 1})
         self.play([{"drive_to": CAFE, "stay": 5}])
         self.expect({"type": "arrived", "place_id": CAFE})
+
+    def s4_clear(self) -> None:
+        end = at(STORM_UNTIL)
+        t = end + timedelta(minutes=5)
+        self.stay_until(f"{t:%H:%M}")  # 카페에 머무는 동안 폭풍이 그친다
+        s = self.show_safety()
+        calm = (s.get("scenario") == "calm" and not s["warnings"] and all(z["risk"] == "safe" for z in s["zones"])
+                and all(x["level"] == 1 for x in s["sensors"]))
+        self.check(calm, f"{STORM_UNTIL} 뒤 특보·센서 평상시, 구역 모두 안전")
+        trip_cli._tick(self.c, self.plan, t, wait=True, on_event=self.on_event)  # planner 안전 점검 + trip 틱
+        self.check(not self.events_since("safety_raised", end), "폭풍이 그친 뒤 새 경고 없음 (남은 일정 그대로)")
+        if not self.events_since("safety_eased", end):
+            # planner 는 남은 일정 중 단계가 내려간 것이 있을 때만 경고 완화를 낸다. 이 계획에서 폭풍 중 위험했던 남은 일정은
+            # 차로 카페 가는 길(계획 시각 16:14~16:25)뿐이라 17시에는 이미 지났고, 카페(실내)는 폭풍 중에도 안전이었다.
+            print(f"{DIM}  safety_eased 없음: 폭풍 중 위험했던 남은 일정이 없다 (카페 가는 길은 지남, 카페는 실내라 안전).{RESET}")
 
     def finish(self) -> None:
         trip_cli.print_state(self.c.trip_state(self.plan))

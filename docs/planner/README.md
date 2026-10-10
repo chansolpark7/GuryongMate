@@ -506,7 +506,7 @@ planner 가 `PLANNER_SAFETY_WATCH_SEC`(compose 기본 60초)마다 `GET /safety/
 
 ### 7.5 가상 상황으로 확인하기
 
-`backend/.env` 에 `SAFETY_SOURCE=mock` 으로 띄운 뒤 safety 의 `PUT /safety/sim` 으로 시나리오·가상 시각을 바꾼다
+`backend/.env` 에 `SAFETY_SOURCE=mock` 으로 띄운 뒤 safety 의 `PUT /safety/sim` 으로 날씨 시간표(시나리오는 프리셋)·가상 시각을 바꾼다
 ([`docs/safety/README.md` §1](../safety/README.md)). 실제 장소로 확인한 결과 (내일 일정: 짬홍 → 구룡포항 → 가옥거리 → 근대문화역사관):
 
 | 시나리오 | 경고 | 점검 결과 |
@@ -671,7 +671,8 @@ chat 1                                          Planner Agent 와 대화 (docs/a
 progress 1 7 visiting|done|planned [--at 14:05]  진행 상태 (version 그대로, progress_version 만 오른다)
 projection 1 [--day 1] [--now 15:05] [--at-item 7 [--arrived 14:05] | --moving 35.99,129.56]
                                                 현재 기준 재계산: 지연(delay_minutes)·다음 항목(next)·새 위반(new_violations)·재계산 일정
-trip …  / sim …                                 여행일·위치·이벤트·재생, safety 가상 상황 (docs/trip/README.md §8)
+trip …  / sim …                                 여행일·위치·이벤트·재생, safety 가상 상황·날씨 시간표 (docs/trip/README.md §8)
+                                                sim scenario storm --until 17:00 / sim add storm 15:00 17:00 / sim clear
 
 # 사용자 메모리·가이드 노트 (docs/docent/README.md §1·§3·§5, docs/agent/README.md §12)
 memory [--plan 1]                               메모리 (user + 그 계획의 plan 범위, 해설 길이 선호)
