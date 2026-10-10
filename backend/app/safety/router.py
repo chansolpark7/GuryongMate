@@ -5,7 +5,7 @@
 - POST /safety/assess          일정 항목(장소+시각)별 위험도와 행동 지침 (계획 Agent 용)
 - GET  /safety/zones           방파제·침수 감시 구역 위치 (지도 표시용)
 - GET  /safety/situation       지금 상황 요약 + fingerprint (planner 가 바뀌었을 때만 일정을 다시 점검)
-- GET/PUT /safety/sim          가상 상황 (SAFETY_SOURCE=mock 또는 SAFETY_SIM_ENABLED=true): 시나리오·가상 시각,
+- GET/PUT /safety/sim          가상 상황 (SAFETY_SOURCE=mock 또는 SAFETY_SIM_ENABLED=true): 날씨 시간표·가상 시각,
                                실제(live) <-> 가상(mock) 전환 (SAFETY_SIM_ENABLED 일 때)
 - GET  /safety/avoid           지금 길찾기에서 피할 구역 다각형 (routing 서비스가 우회에 사용)
 
@@ -22,10 +22,13 @@ from app.safety import geo
 from app.safety.config import settings
 from app.safety.places import PlaceLookup, get_place_lookup
 from app.safety.schemas import (
-    AssessRequest, AssessResult, AvoidResult, Outlook, SimState, SimUpdate, Situation, Status, ZoneView,
+    AssessRequest, AssessResult, AvoidResult, Outlook, SimSegmentView, SimState, SimUpdate, Situation, Status, ZoneView,
 )
 from app.safety.service import SafetyService
-from app.safety.sources import KST, MOCK_SCENARIOS, MockSources, SimSources, Sources, build_sources
+from app.safety.sources import (
+    KST, MOCK_SCENARIOS, SIM_KINDS, MockSources, SimSegment, SimSources, Sources, build_sources, check_timeline,
+    preset_timeline,
+)
 
 router = APIRouter(prefix="/safety", tags=["safety"])
 
@@ -105,10 +108,22 @@ def _sim(sources: Sources) -> MockSources | SimSources:
     return sources
 
 
+def _seg(seg: SimSegment) -> SimSegmentView:
+    return SimSegmentView(kind=seg.kind, start=seg.start, end=seg.end)
+
+
+def _kst(t: datetime) -> datetime:
+    return t.replace(tzinfo=KST) if t.tzinfo is None else t.astimezone(KST)
+
+
 def _sim_state(src: MockSources | SimSources) -> SimState:
     switchable = isinstance(src, SimSources)
-    return SimState(mode=src.mode if switchable else "sim", scenario=src.scenario, switchable=switchable,
-                    now=src.now(), offset_minutes=round(src.offset.total_seconds() / 60), scenarios=MOCK_SCENARIOS)
+    now = src.now()
+    seg = src.segment_at(now)
+    return SimState(mode=src.mode if switchable else "sim", scenario=seg.kind if seg else "calm",
+                    switchable=switchable, now=now, offset_minutes=round(src.offset.total_seconds() / 60),
+                    scenarios=MOCK_SCENARIOS, timeline=[_seg(x) for x in src.timeline],
+                    segment=_seg(seg) if seg else None, kinds=SIM_KINDS)
 
 
 @router.get("/sim", response_model=SimState)
@@ -116,26 +131,50 @@ def get_sim(sources: Annotated[Sources, Depends(get_sources)]) -> SimState:
     return _sim_state(_sim(sources))
 
 
+def _bad(code: str, message: str, **extra) -> HTTPException:
+    return HTTPException(422, {"code": code, "message": message, **extra})
+
+
 @router.put("/sim", response_model=SimState)
 def put_sim(body: SimUpdate, sources: Annotated[Sources, Depends(get_sources)]) -> SimState:
-    """시나리오·가상 시각·데이터 모드를 바꾼다. 가상 시각은 설정한 뒤 실제 시간만큼 흘러가고 live·sim 모두에 쓴다 (서비스를 다시 띄우면 초기화).
-    scenario 를 주면 가상 상황(mock)으로 바뀐다 (source 를 같이 주면 source 를 따른다)."""
+    """가상 시각·날씨 시간표·데이터 모드를 바꾼다 (서비스를 다시 띄우면 초기화).
+    - 가상 시각은 설정한 뒤 실제 시간만큼 흘러가고 live·sim 모두에 쓴다.
+    - timeline: 시간표 전체 교체. scenario: 시간표를 프리셋으로 교체 (설정한 가상 시각 기준 절대 구간, until 이면 그 시각에 끝).
+    - scenario 를 주면 가상 상황(mock)으로 바뀐다 (source 를 같이 주면 source 를 따른다). timeline 은 모드를 바꾸지 않는다."""
     src = _sim(sources)
     if body.scenario is not None and body.scenario not in MOCK_SCENARIOS:
-        raise HTTPException(422, {"code": "unknown_scenario", "message": f"알 수 없는 시나리오: {body.scenario}",
-                                  "scenarios": sorted(MOCK_SCENARIOS)})
+        raise _bad("unknown_scenario", f"알 수 없는 시나리오: {body.scenario}", scenarios=sorted(MOCK_SCENARIOS))
+    if body.until is not None and body.scenario is None:
+        raise _bad("invalid_request", "until 은 scenario 와 함께만 씁니다 (구간 끝은 timeline 의 end 로).")
+    if body.timeline is not None and body.scenario is not None:
+        raise _bad("invalid_request", "scenario(프리셋)와 timeline 은 함께 쓰지 않습니다.")
     source = body.source or ("mock" if body.scenario is not None else None)
     if source == "live" and not isinstance(src, SimSources):
         raise HTTPException(409, {"code": "switch_disabled",
                                   "message": "실제 데이터로 바꾸려면 SAFETY_SIM_ENABLED=true 로 띄워야 합니다."})
-    scenario, offset = body.scenario or src.scenario, src.offset
+    offset = src.offset
     if body.reset_clock:
         offset = timedelta(0)
     if body.now is not None:
-        when = body.now if body.now.tzinfo else body.now.replace(tzinfo=KST)
-        offset = when - src._clock()
+        offset = _kst(body.now) - src._clock()
+    now = src._clock() + offset  # 바뀐 가상 시각. 프리셋은 이 시각 기준이다
+
+    timeline = None
+    if body.timeline is not None:
+        if any(x.kind not in SIM_KINDS for x in body.timeline):
+            raise _bad("unknown_kind", "알 수 없는 구간 종류가 있습니다.", kinds=sorted(SIM_KINDS))
+        try:
+            timeline = check_timeline([SimSegment(x.kind, _kst(x.start), _kst(x.end)) for x in body.timeline])
+        except ValueError as e:
+            raise _bad("invalid_timeline", str(e)) from None
+    elif body.scenario is not None:
+        try:
+            timeline = preset_timeline(body.scenario, now, body.until and _kst(body.until))
+        except ValueError as e:
+            raise _bad("invalid_until", str(e)) from None
+
     if isinstance(src, SimSources):
-        src.set(scenario, offset, {"live": "live", "mock": "sim"}.get(source))
+        src.set(offset, timeline, {"live": "live", "mock": "sim"}.get(source))
     else:
-        src.set(scenario, offset)
+        src.set(offset, timeline)
     return _sim_state(src)

@@ -206,6 +206,12 @@ class UvView(BaseModel):
     at: datetime
 
 
+class SimSegmentView(BaseModel):
+    kind: str = Field(description="구간 종류: storm | rain | flood | wind (GET /safety/sim 의 kinds)")
+    start: datetime = Field(description="시작 (포함, 가상 시각 기준)")
+    end: datetime = Field(description="끝 (제외)")
+
+
 class Status(BaseModel):
     now: datetime
     overall_risk: Level | None
@@ -219,7 +225,8 @@ class Status(BaseModel):
     guidance: str
     data_status: dict[str, SourceStatus]
     mode: Literal["live", "sim"] = Field("live", description="live: 실제 데이터 / sim: 가상 상황(mock 시나리오)")
-    scenario: str | None = Field(None, description="가상 상황 시나리오 (mode=sim 일 때만)")
+    scenario: str | None = Field(None, description="가상 상황에서 지금 적용 중인 구간 종류, 없으면 calm (mode=sim 일 때만)")
+    segment: SimSegmentView | None = Field(None, description="가상 상황에서 지금 속한 구간 (mode=sim 일 때만)")
 
 
 class AvoidZone(BaseModel):
@@ -266,15 +273,22 @@ class Situation(BaseModel):
     warnings: list[str] = Field(description="발효 중인 구룡포 해당 특보")
     hours: list[SituationHour] = Field(description="예보가 있는 시각별 장소 종류 단계")
     data_ok: dict[str, bool]
+    mode: Literal["live", "sim"] = Field("live", description="live: 실제 데이터 / sim: 가상 상황")
+    scenario: str | None = Field(None, description="가상 상황에서 지금 적용 중인 구간 종류, 없으면 calm (mode=sim 일 때만)")
+    segment: SimSegmentView | None = Field(None, description="가상 상황에서 지금 속한 구간 (mode=sim 일 때만)")
 
 
 class SimState(BaseModel):
-    mode: Literal["live", "sim"] = Field(description="live: 실제 데이터 / sim: 가상 상황 (scenario 를 씀)")
-    scenario: str = Field(description="가상 상황 시나리오 (mode=live 이면 쓰지 않고, sim 으로 바꾸면 이것을 쓴다)")
+    mode: Literal["live", "sim"] = Field(description="live: 실제 데이터 / sim: 가상 상황 (timeline 을 씀)")
+    scenario: str = Field(description="시간표에서 지금(가상 시각) 적용 중인 구간 종류, 없으면 calm "
+                                      "(mode=live 이면 쓰지 않고, sim 으로 바꾸면 이것을 쓴다)")
     switchable: bool = Field(description="실행 중에 live <-> sim 을 바꿀 수 있는지 (SAFETY_SIM_ENABLED)")
     now: datetime = Field(description="지금 가상 시각 (시뮬레이션 시각이 아니면 실제 시각)")
     offset_minutes: int = Field(description="실제 시각과의 차이")
-    scenarios: dict[str, str] = Field(description="쓸 수 있는 시나리오와 설명")
+    scenarios: dict[str, str] = Field(description="시나리오(시간표 프리셋)와 설명")
+    timeline: list[SimSegmentView] = Field(default_factory=list, description="가상 날씨 시간표 (시작 순). 구간 밖은 평상시")
+    segment: SimSegmentView | None = Field(None, description="지금 속한 구간")
+    kinds: dict[str, str] = Field(default_factory=dict, description="구간 종류와 설명")
 
 
 class SimUpdate(BaseModel):
@@ -283,6 +297,9 @@ class SimUpdate(BaseModel):
     source: Literal["live", "mock"] | None = Field(
         None, description="live: 실제 데이터 / mock: 가상 상황 (SAFETY_SIM_ENABLED 일 때만 live 로 바꿀 수 있다). "
                           "생략하면 그대로, scenario 를 주면 mock")
-    scenario: str | None = Field(None, description="바꿀 시나리오 (생략하면 그대로)")
+    scenario: str | None = Field(None, description="시간표를 이 프리셋으로 바꾼다 (설정한 가상 시각 기준 절대 구간, 생략하면 그대로)")
+    until: datetime | None = Field(None, description="scenario 와 함께: 프리셋 구간이 끝나는 시각")
+    timeline: list[SimSegmentView] | None = Field(None, description="시간표 전체 교체 (최대 20개, start < end). "
+                                                                       "scenario 와 함께 쓰지 않는다. 데이터 모드는 바꾸지 않는다")
     now: datetime | None = Field(None, description="가상 시각. 이후 실제 시간만큼 흘러간다. 생략하면 그대로")
     reset_clock: bool = Field(False, description="true 면 실제 시각으로 되돌린다")

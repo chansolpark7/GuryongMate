@@ -7,7 +7,8 @@
                                                           (accept 단계: 선제 턴의 제안을 Agent 로 승인)
     trip events 3 [--follow] [--seen 41]  이벤트 보기 (--follow: 폴링, --seen: 확인 표시)
     trip tick 3                           틱(지연·안전 경고·자동 종료)을 지금 한 번
-    sim / sim scenario storm / sim now 2026-10-10T14:00 / sim reset    safety 가상 상황·시각
+    sim / sim scenario storm [--until 17:00] / sim now 2026-10-10T14:00 / sim reset    safety 가상 상황·시각
+    sim add storm 15:00 17:00 [--date 2026-10-10] / sim del 2 / sim clear             날씨 시간표 구간
     sim live / sim mock                   실제 데이터 <-> 가상 상황 (SAFETY_SIM_ENABLED)
 """
 import json
@@ -236,13 +237,17 @@ class Player:
             self.prev = act.at
             if self.sim_ok:  # 가상 시각을 재생 시각에 맞춘다 (--speed 0 이어도 모든 동작마다)
                 try:
-                    c.set_sim(scenario=act.data.get("scenario") if act.kind == "sim" else None, now=act.at.isoformat())
+                    sim = act.data if act.kind == "sim" else {}
+                    until = sim.get("until") and _clock_at(sim["until"], act.at).isoformat()
+                    c.set_sim(scenario=sim.get("scenario"), until=until if sim.get("scenario") else None,
+                              now=act.at.isoformat())
                 except Exception as e:
                     self.sim_ok = False
                     print(f"{YELLOW}가상 상황을 쓸 수 없습니다 (SAFETY_SOURCE=mock 또는 SAFETY_SIM_ENABLED 필요): {e}. "
                           f"위치의 recorded_at 만으로 재생합니다.{RESET}")
             if act.kind == "sim":
-                print(f"{DIM}{act.at:%H:%M:%S}{RESET} 가상 상황: {act.data.get('scenario', '-')}")
+                until = f" (~{act.data['until']})" if act.data.get("until") else ""
+                print(f"{DIM}{act.at:%H:%M:%S}{RESET} 가상 상황: {act.data.get('scenario', '-')}{until}")
                 if not self.started:
                     if self.sim_ok:
                         _wait_clock(c, plan, act.at)
@@ -346,29 +351,69 @@ def _wait_clock(c, plan: int, target: datetime, limit_sec: float = 10) -> None:
 
 # ---------- sim ----------
 
+KIND_LABEL = {"storm": "폭풍", "rain": "비", "flood": "침수", "wind": "강풍"}
+
+
+def _clock_at(text: str, ref: datetime) -> datetime:
+    """HH:MM -> ref 날짜의 그 시각, 아니면 ISO 시각 (시간대가 없으면 KST)."""
+    t = datetime.fromisoformat(f"{ref:%Y-%m-%d}T{text}" if len(text) <= 5 else text)
+    return t if t.tzinfo else t.replace(tzinfo=KST)
+
+
+def _span(seg: dict, now: datetime | None = None) -> str:
+    a, b = datetime.fromisoformat(seg["start"]), datetime.fromisoformat(seg["end"])
+    day = "" if now and a.date() == now.date() else f"{a:%m/%d} "
+    end = f"{b:%H:%M}" if b.date() == a.date() else f"{b:%m/%d %H:%M}"
+    return f"{day}{a:%H:%M}~{end}"
+
+
 def print_sim(s: dict) -> None:
     mode = s.get("mode", "sim")
-    what = f"가상 상황 {s['scenario']}" if mode == "sim" else f"실제 데이터 (가상 상황 {s['scenario']} 은 쓰지 않음)"
+    now = datetime.fromisoformat(s["now"])
+    seg = s.get("segment")
+    cur = f"{s['scenario']} ({_span(seg, now)})" if seg else s["scenario"]
+    what = f"가상 상황 {cur}" if mode == "sim" else "실제 데이터 (시간표는 가상 상황에서만 적용)"
     switch = " · live/mock 전환 가능" if s.get("switchable") else ""
     print(f"{what} · 지금 {s['now'][:19]} (실제와 {s['offset_minutes']}분 차이){switch}")
-    print(f"{DIM}  시나리오: {', '.join(s['scenarios'])}{RESET}")
+    timeline = s.get("timeline") or []
+    if timeline:
+        print("  날씨 시간표 (구간 밖은 평상시):")
+        for i, x in enumerate(timeline, 1):
+            mark = " ← 지금" if seg and x == seg else (
+                " (지남)" if datetime.fromisoformat(x["end"]) <= now else "")
+            print(f"    {i}. {KIND_LABEL.get(x['kind'], x['kind'])} {x['kind']:5} {_span(x, now)}{mark}")
+    else:
+        print("  날씨 시간표: 비어 있음 (평상시)")
+    print(f"{DIM}  시나리오(프리셋): {', '.join(s['scenarios'])} · 구간 종류: {', '.join(s.get('kinds') or [])}{RESET}")
 
 
 def cmd_sim(c, a):
     if a.sim_cmd is None:
         print_sim(c.sim())
     elif a.sim_cmd == "scenario":
-        print_sim(c.set_sim(scenario=a.name))
+        until = a.until and _clock_at(a.until, _now(c)).isoformat()
+        print_sim(c.set_sim(scenario=a.name, until=until))
     elif a.sim_cmd == "now":
-        when = a.when
-        if len(when) <= 5:  # HH:MM -> 가상 시각의 날짜
-            when = f"{_now(c):%Y-%m-%d}T{when}"
-        t = datetime.fromisoformat(when)
-        print_sim(c.set_sim(now=(t if t.tzinfo else t.replace(tzinfo=KST)).isoformat()))
+        print_sim(c.set_sim(now=_clock_at(a.when, _now(c)).isoformat()))
     elif a.sim_cmd == "reset":
         print_sim(c.set_sim(reset_clock=True))
     elif a.sim_cmd in ("live", "mock"):
         print_sim(c.set_sim(source=a.sim_cmd))
+    elif a.sim_cmd == "add":
+        cur = c.sim()
+        ref = datetime.fromisoformat(f"{a.date}T12:00:00+09:00") if a.date else datetime.fromisoformat(cur["now"])
+        start, end = _clock_at(a.start, ref), _clock_at(a.end, ref)
+        if end <= start and len(a.end) <= 5:  # 23:00 02:00 -> 다음 날 02:00
+            end += timedelta(days=1)
+        seg = {"kind": a.kind, "start": start.isoformat(), "end": end.isoformat()}
+        print_sim(c.set_sim(timeline=[*cur.get("timeline", []), seg]))
+    elif a.sim_cmd == "del":
+        timeline = c.sim().get("timeline", [])
+        if not 1 <= a.n <= len(timeline):
+            raise SystemExit(f"{a.n}번 구간이 없습니다 (1~{len(timeline)})")
+        print_sim(c.set_sim(timeline=[x for i, x in enumerate(timeline, 1) if i != a.n]))
+    elif a.sim_cmd == "clear":
+        print_sim(c.set_sim(timeline=[]))
 
 
 # ---------- 등록 ----------
@@ -411,12 +456,22 @@ def register(sub) -> None:
     p = add("tick", cmd_tick, "틱을 지금 한 번 (지연 재판정·안전 경고 수집·자동 종료·선제 턴 전송)")
     p.add_argument("--at", help="판정 시각 HH:MM (생략: trip 의 지금)")
 
-    sp = sub.add_parser("sim", help="safety 가상 상황·시각 (SAFETY_SOURCE=mock 또는 SAFETY_SIM_ENABLED): sim / sim scenario storm / "
+    sp = sub.add_parser("sim", help="safety 가상 상황·시각·날씨 시간표 (SAFETY_SOURCE=mock 또는 SAFETY_SIM_ENABLED): "
+                                    "sim / sim scenario storm --until 17:00 / sim add storm 15:00 17:00 / sim clear / "
                                     "sim now 14:00 / sim live / sim mock")
     sp.set_defaults(fn=cmd_sim)
     ss = sp.add_subparsers(dest="sim_cmd", metavar="명령")
-    p = ss.add_parser("scenario", help="calm | rain | wind_tomorrow | flood | storm")
+    p = ss.add_parser("scenario", help="시간표를 프리셋으로 바꿈 (지금 기준): calm | rain | wind_tomorrow | flood | storm")
     p.add_argument("name")
+    p.add_argument("--until", help="프리셋 구간이 끝나는 시각 (HH:MM 은 가상 시각의 날짜, 또는 ISO)")
+    p = ss.add_parser("add", help="날씨 구간 추가: sim add storm 15:00 17:00 (구간 밖은 평상시)")
+    p.add_argument("kind", help="storm | rain | flood | wind")
+    p.add_argument("start", help="HH:MM 또는 ISO")
+    p.add_argument("end", help="HH:MM 또는 ISO (끝 시각은 포함하지 않음)")
+    p.add_argument("--date", help="HH:MM 의 날짜 YYYY-MM-DD (생략: 가상 시각의 날짜)")
+    p = ss.add_parser("del", help="시간표의 n번째 구간 삭제 (sim 출력의 번호)")
+    p.add_argument("n", type=int)
+    ss.add_parser("clear", help="시간표 비우기 (평상시, 데이터 모드는 그대로)")
     p = ss.add_parser("now", help="가상 시각 (2026-10-10T14:00 또는 HH:MM)")
     p.add_argument("when")
     ss.add_parser("reset", help="실제 시각으로")

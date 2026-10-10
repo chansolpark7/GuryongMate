@@ -20,7 +20,7 @@
 | `GET` | `/safety/status` | 지금 구역별 위험도, 센서 실측, 방파제 CCTV 집계, 특보 | 앱 지도, 현재 상황 |
 | `GET` | `/safety/zones` | 방파제·침수 감시 구역 위치 | 앱 지도 |
 | `GET` | `/safety/situation` | 지금 상황 요약 + `fingerprint` (상황이 바뀌면 달라짐) | planner 주기 점검 |
-| `GET`·`PUT` | `/safety/sim` | 가상 상황: 시나리오·가상 시각 바꾸기, 실제 ↔ 가상 전환 (`SAFETY_SOURCE=mock` 또는 `SAFETY_SIM_ENABLED=true`) | 시연·테스트·발표 데모 |
+| `GET`·`PUT` | `/safety/sim` | 가상 상황: 날씨 시간표·가상 시각 바꾸기, 실제 ↔ 가상 전환 (`SAFETY_SOURCE=mock` 또는 `SAFETY_SIM_ENABLED=true`) | 시연·테스트·발표 데모 |
 | `GET` | `/safety/avoid?min_risk=caution` | 지금 길찾기에서 피할 구역 다각형 | routing (위험 구역 우회) |
 
 모든 조회에 `now`(기준 시각 덮어쓰기)를 줄 수 있다. 주지 않으면 지금 시각이고, 가상 시각을 설정했으면 그 시각이다 (`/safety/sim`).
@@ -74,12 +74,12 @@
 {"type": "rain", "level": "info", "reason": "10/05 13~15시 강수 최대 5mm/h 예보", "source": "기상청 단기예보"}
 ```
 
-악천후 예시 (storm mock, 기준 시각 10/04 10:00) — 같은 날씨에서 장소마다 판단이 다르다.
+악천후 예시 (storm 프리셋 = 10/04 10:00~10/05 16:00 폭풍, 기준 시각 10/04 10:00) — 같은 날씨에서 장소마다 판단이 다르다.
 ```json
 {"label": "북방파제", "indoor": null, "risk": "danger", "sensitivity": ["방파제"],
- "better_times": [{"start": "2026-10-05T15:00+09:00", "end": "2026-10-05T19:00+09:00", "has_info": false},
+ "better_times": [{"start": "2026-10-05T16:00+09:00", "end": "2026-10-05T19:00+09:00", "has_info": false},
                   {"start": "2026-10-06T08:00+09:00", "end": "2026-10-06T19:00+09:00", "has_info": false}],
- "advice": "위험: 10/04 14시 풍속 16m/s 예보; … 이 시간대 방문은 피하는 것이 좋다. … 이 장소에 주의·위험 신호가 없는 시간대: 10/05 15:00~19:00, 10/06 08:00~19:00 (better_times). 예보는 바뀔 수 있으니 단정하지 마라."}
+ "advice": "위험: 10/04 14시 풍속 16m/s 예보; … 이 시간대 방문은 피하는 것이 좋다. … 이 장소에 주의·위험 신호가 없는 시간대: 10/05 16:00~19:00, 10/06 08:00~19:00 (better_times). 예보는 바뀔 수 있으니 단정하지 마라."}
 {"label": "구룡포 근대문화역사관", "indoor": true, "risk": "safe", "sensitivity": ["실내"],
  "hazards": [{"level": "info", "reason": "10/04 15~17시 강수 최대 35mm/h 예보 (실내라 이동할 때만 영향)"}, …],
  "advice": "실내 장소라 방문 자체는 괜찮다. 이동할 때 비·바람만 조심하면 되고, 야외 일정의 대안으로 적합하다."}
@@ -100,7 +100,7 @@
 지금 상태. 구역(북·남방파제, 침수 감시 구역 9곳)별 `risk`·`reasons`, 센서 10대 실측값, 방파제별 최근 1시간 CCTV 집계,
 자외선, 발효 중 특보, 앞으로 12시간 예보상 위험 신호. **지금 상태일 뿐이라 다른 날짜 일정 판단에는 쓰지 않는다.**
 구역·센서의 `risk` 는 3단계, 데이터를 받지 못해 판단하지 못한 구역은 `null`. 센서의 참고 신호(노면 수위 감지)는 `note`.
-`mode`(`live` 실제 데이터 / `sim` 가상 상황)와 `scenario`(sim 일 때 시나리오, live 면 `null`)로 지금 어느 데이터인지 알려준다 — 앱이 "실제 데이터"·"가상 상황" 표시에 쓴다.
+`mode`(`live` 실제 데이터 / `sim` 가상 상황)와 `scenario`(sim 일 때 지금 적용 중인 날씨 구간 종류 또는 `calm`, live 면 `null`)·`segment`(지금 속한 구간)로 지금 어느 데이터인지 알려준다 — 앱이 "실제 데이터"·"가상 상황" 표시에 쓴다.
 
 ### GET /safety/situation
 지금 상황 요약과 `fingerprint`. **이용자는 fingerprint 를 저장해 두었다가 바뀌었을 때만 일정을 다시 점검한다**
@@ -123,39 +123,68 @@
   - 참고 신호만 바뀌어도 바뀐다 (약한 비 소식도 일정 조정에 참고할 수 있으니).
   - 데이터 장애·복구도 바뀐다.
 
-### GET·PUT /safety/sim (가상 상황, 실제 ↔ 가상 전환)
-`SAFETY_SOURCE=mock` 또는 `SAFETY_SIM_ENABLED=true` 일 때만 열린다 (아니면 `404 sim_disabled`). 서비스를 다시 띄우면 초기화된다.
+### GET·PUT /safety/sim (가상 상황: 날씨 시간표·가상 시각, 실제 ↔ 가상 전환)
+`SAFETY_SOURCE=mock` 또는 `SAFETY_SIM_ENABLED=true` 일 때만 열린다 (아니면 `404 sim_disabled`). 서비스를 다시 띄우면 초기화된다 (시간표·가상 시각 모두).
 
 | 설정 | 시작 모드 | 실행 중 전환 |
 |---|---|---|
 | `SAFETY_SOURCE=live` (기본) | live | 없음 (`/safety/sim` 404) |
-| `SAFETY_SOURCE=mock` | sim | 시나리오·가상 시각만 (`source: "live"` 는 `409 switch_disabled`) |
-| `SAFETY_SIM_ENABLED=true` (+ `SAFETY_SOURCE`) | `SAFETY_SOURCE` 대로 (live 면 live, mock 이면 sim) | **live ↔ sim** + 시나리오·가상 시각 (발표 데모: 실제 DT 데이터 화면 → 가상 악천후) |
+| `SAFETY_SOURCE=mock` | sim | 시간표·가상 시각만 (`source: "live"` 는 `409 switch_disabled`) |
+| `SAFETY_SIM_ENABLED=true` (+ `SAFETY_SOURCE`) | `SAFETY_SOURCE` 대로 (live 면 live, mock 이면 sim) | **live ↔ sim** + 시간표·가상 시각 (발표 데모: 실제 DT 데이터 화면 → 가상 악천후) |
+
+**가상 날씨 시간표** — 가상 상황(`mode: sim`)의 날씨는 구간 목록 `{kind, start, end}` 로 정한다 ("시뮬레이션은 실제 여행을 빠르게 보는 것": 날씨도 정해진 시각에 오고 그친다).
+- 구간은 가상 시각 기준 **절대 시각** (`start` 포함, `end` 제외). 가상 시각을 옮겨도 구간은 밀리지 않는다. 최대 20개.
+- **구간 밖은 평상시(calm)**. 구간이 겹치면 그 시각에는 더 심한 것 하나: `storm > flood > wind > rain`.
+- **예보**: 시각마다 그 시간(정시부터 1시간)과 겹치는 구간의 날씨. 구간을 넣는 즉시 예보 범위(약 3일, mock 은 70시간) 안이면 보인다 → planner 가 미리 경고한다.
+- **지금 관측값**(침수 센서·특보·방파제 CCTV·자외선): 가상 시각이 속한 구간의 값, 구간 밖이면 평상시. 구간이 끝나면 센서·특보가 평상시로 돌아간다.
+- 지금 관측값은 **다음 구간 경계까지만** 방문 판단에 쓴다 (`observed_until`). 예: 폭풍이 17:00 에 끝나면 지금(15:20) 발효 중 특보·센서는 17:30 방문에 적용하지 않고, 그 방문은 예보(평상시)로만 판단한다.
+  실제 데이터는 관측값이 언제 바뀔지 모르므로 이 제한이 없다 (§2 의 특보 6·24시간 규칙 그대로).
+- **실제 데이터 모드(live)는 시간표를 쓰지 않는다.** 기억해 두었다가 sim 으로 바꾸면 쓴다.
+
+| 구간 종류 (`kind`) | 날씨 (구간 안) | 지금 관측값 (가상 시각이 구간 안일 때) |
+|---|---|---|
+| `storm` 폭풍 | 강수확률 90%, 시간당 8mm (구간 시작 6~14시간째는 35mm), 풍속 16m/s, 파고 3.5m | 호우·강풍·풍랑주의보, 침수 센서 상승 (수협 맨홀 3, 파출소 지표면·하천·강우 2), 방파제 CCTV 3배·북방파제 실족 1, 자외선 0.5 |
+| `flood` 침수 | 약한 비 (시간당 5mm) | 침수 센서 상승 (수협 맨홀 등급 3, 파출소 지표면 등급 2) |
+| `wind` 강풍 | 풍속 15m/s, 파고 3.2m (특보 없음) | 평상시와 같음 |
+| `rain` 비 | 시간당 5mm | 평상시와 같음 |
 
 ```http
 PUT /safety/sim
-{"source": "mock", "scenario": "storm", "now": "2026-10-10T15:20:00+09:00"}
+{"source": "mock", "scenario": "storm", "until": "2026-10-10T17:00:00+09:00", "now": "2026-10-10T15:20:00+09:00"}
+
+PUT /safety/sim
+{"timeline": [{"kind": "storm", "start": "2026-10-10T15:20:00+09:00", "end": "2026-10-10T17:00:00+09:00"},
+              {"kind": "rain", "start": "2026-10-11T09:00:00+09:00", "end": "2026-10-11T12:00:00+09:00"}]}
 ```
 - `source` (선택): `live`(실제 데이터) | `mock`(가상 상황). 생략하면 그대로인데, **`scenario` 를 주면 `mock`** 이다 (기존 재생 파일의 `sim` 단계가 그대로 가상 상황으로 바꾼다).
-  `scenario` 와 `source: "live"` 를 같이 주면 시나리오만 기억해 두고 live 로 둔다.
-- `scenario` (선택): 아래 시나리오 중 하나. 모르는 값은 `422 unknown_scenario`.
+  `scenario` 와 `source: "live"` 를 같이 주면 시간표만 바꿔 기억해 두고 live 로 둔다.
+- `scenario` (선택): **시간표를 아래 프리셋으로 바꾼다.** 설정한 순간의 가상 시각(같은 요청의 `now` 가 있으면 그 시각) 기준 절대 구간이 되고 더는 밀리지 않는다. 모르는 값은 `422 unknown_scenario`.
+- `until` (선택, `scenario` 와 함께만): 프리셋 구간이 끝나는 시각. 구간 시작보다 이르면 `422 invalid_until`. `scenario` 없이 주면 `422 invalid_request`. `calm` 이면 무시.
+- `timeline` (선택): 시간표 **전체 교체** (`[]` 이면 비움). 데이터 모드는 바꾸지 않는다. `start < end` 가 아니거나 20개를 넘으면 `422 invalid_timeline`, 모르는 `kind` 는 `422 unknown_kind`, `scenario` 와 함께 주면 `422 invalid_request`. 시간대가 없는 시각은 KST.
 - `now` (선택): 가상 시각. 설정한 뒤 실제 시간만큼 흘러간다. `now` 를 주지 않은 모든 조회가 이 시각을 쓴다. **live·sim 모두 적용된다.**
 - `reset_clock: true`: 실제 시각으로 되돌린다. 정의되지 않은 필드는 422.
-- 응답: `{"mode": "live"|"sim", "scenario", "switchable", "now", "offset_minutes", "scenarios": {이름: 설명}}`.
-  `scenario` 는 live 일 때도 기억해 둔 시나리오(sim 으로 바꾸면 쓸 것)다. 지금 어느 모드인지는 `mode`, `GET /safety/status` 의 `mode`·`scenario` 로도 본다.
+- 응답: `{"mode": "live"|"sim", "scenario", "switchable", "now", "offset_minutes", "timeline": [{kind, start, end}], "segment", "scenarios": {이름: 설명}, "kinds": {종류: 설명}}`.
+  `scenario` 는 **지금(가상 시각) 적용 중인 구간 종류, 없으면 `calm`** (`storm`·`flood`·`wind`·`rain`·`calm`). `segment` 는 지금 속한 구간.
+  live 일 때도 기억해 둔 시간표 기준이다 (sim 으로 바꾸면 쓸 것). 지금 어느 모드인지는 `mode`, `GET /safety/status` 의 `mode`·`scenario`·`segment` 로도 본다.
+  `scenarios` 는 프리셋 설명 (앱 설정의 시나리오 칩이 그대로 쓴다), `kinds` 는 구간 종류 설명.
+- `GET /safety/status`·`/safety/situation` 도 sim 이면 `scenario`(지금 구간 종류 또는 calm)·`segment` 를 준다. situation `fingerprint` 에는 지금 구간이 들어가
+  구간이 시작·끝나는 순간 바뀐다 → planner 가 다시 점검한다 (폭풍이 끝날 때 남은 일정 중 위험했던 것이 있으면 경고가 내려가 trip `safety_eased`).
 - **live 에서 가상 시각**: 발표일(10/13)에 계획일(10/10) 시각으로 시연하면 실제 예보·CCTV 의 시각이 판단 시각과 맞지 않는다.
   그래서 live 모드는 **지금 실제 관측·예보를 가상 시각의 것으로 옮겨** 판단한다 (모든 시각을 가상 시각 차이만큼 — 예보가 정시 단위라 시간 단위로 반올림 — 옮김.
   조위는 그날에 해당하는 실제 날짜의 것을 옮김). 응답 `data_status[*].note` 에 "실제 데이터 (가상 시각에 맞춰 시각을 옮김)" 가 붙는다. 가상 시각이 실제와 같으면 옮기지 않는다.
 - 요청마다 그 순간의 모드로 소스 하나를 정해 끝까지 쓴다 (요청 도중 전환돼도 섞이지 않음). 전환하면 내용이 달라지므로 `/safety/situation` 의 `fingerprint` 가 바뀌어 planner 가 일정을 다시 점검한다.
 - live 로 바꾼 동안 실제 데이터에 주의·위험이 있으면 그대로 planner 경고·trip `safety_raised` 로 이어진다 (실제 상황이므로). 발표 전 확인: `docs/demo/README.md`.
 
-| 시나리오 | 내용 | 기대 결과 |
+| 시나리오 (프리셋) | 시간표 (설정한 순간 기준) | 구간 안 기대 결과 |
 |---|---|---|
-| `calm` | 평상시 | 모두 safe |
-| `rain` | 지금부터 2~9시간 뒤 시간당 5mm | 단계는 safe, 비 소식은 `info` |
-| `wind_tomorrow` | 내일 12~18시 풍속 15m/s·파고 3.2m (특보 없음) | 방파제 danger, 그 밖의 야외 caution, 실내 safe+info |
-| `flood` | 지금 침수 센서 상승 (수협 맨홀 등급 3, 파출소 지표면 등급 2) + 약한 비 | 센서 반경 200m 안 방문(3시간 안)만 caution·danger |
-| `storm` | 호우·강풍·풍랑 특보 + 센서 상승 + 30시간 악천후 | 방파제·침수 구역 danger, 야외 caution, 실내 safe+info |
+| `calm` | 비움 | 모두 safe |
+| `rain` | `rain` 2~9시간 뒤 | 단계는 safe, 비 소식은 `info` |
+| `wind_tomorrow` | `wind` 다음 날 12~18시 | 방파제 danger, 그 밖의 야외 caution, 실내 safe+info |
+| `flood` | `flood` 지금~9시간 | 센서 반경 200m 안 방문(3시간 안)만 caution·danger |
+| `storm` | `storm` 지금~30시간 | 방파제·침수 구역 danger, 야외 caution, 실내 safe+info |
+
+`until` 을 주면 그 시각에 끝난다 (예: `storm` + `until` 17:00 → 15:20~17:00 폭풍, 16:00 북방파제 danger, 17:30 이후 일정은 예보상 safe, 17:05 에는 센서·특보 평상시).
+구간 밖 시각은 어느 시나리오든 `calm` 과 같다.
 
 ### GET /safety/avoid
 지금 길찾기에서 피할 구역. routing 서비스가 `hazards: "avoid"|"report"` 경로를 계산할 때 부른다 (`docs/routing/README.md` §2).
@@ -307,8 +336,8 @@ docker compose up -d safety                                # db + safety
 docker compose exec safety pytest tests/safety             # DB·외부 API 없이 동작 (mock + 실제 응답 fixture)
 curl "localhost:${API_PORT:-8000}/safety/status"           # gateway 까지 띄운 경우
 ```
-- 키 없이 개발: `backend/.env` 에 `SAFETY_SOURCE=mock`. 시작 시나리오는 `SAFETY_MOCK_SCENARIO` (기본 calm),
-  실행 중에는 `PUT /safety/sim` 으로 시나리오·가상 시각을 바꾼다 (§1, 응답 `data_status[*].note` 에 mock 표시).
+- 키 없이 개발: `backend/.env` 에 `SAFETY_SOURCE=mock`. 시작 시나리오는 `SAFETY_MOCK_SCENARIO` (기본 calm, 띄운 시각 기준 프리셋),
+  실행 중에는 `PUT /safety/sim` 으로 날씨 시간표·가상 시각을 바꾼다 (§1, 응답 `data_status[*].note` 에 mock 표시).
 - 발표 데모: `SAFETY_SIM_ENABLED=true` (+ 키). 실제 데이터로 시작해 `PUT /safety/sim {"source": "mock", "scenario": "storm"}` 으로 바꾸고
   `{"source": "live"}` 로 되돌린다. CLI: `python scripts/planner/cli.py sim live` / `sim mock` / `sim scenario storm`. 진행 스크립트: `scripts/demo/run_demo.py`.
 - 가상 상황 시연 (일정에 경고가 들어오는지):

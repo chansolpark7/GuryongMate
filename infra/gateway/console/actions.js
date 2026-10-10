@@ -106,12 +106,25 @@ export function setSource(source) {
   });
 }
 
-export function setScenario(name) {
+/** 시나리오 = 날씨 시간표 프리셋 (지금 기준 절대 구간). untilMs 가 있으면 그 시각에 끝난다. */
+export function setScenario(name, untilMs = null) {
   return guard("시나리오", async () => {
-    await putSim({ scenario: name });
-    toast(`가상 상황: ${name}`);
+    const body = { scenario: name };
+    if (untilMs != null && name !== "calm") body.until = kstIso(untilMs);
+    await putSim(body);
+    toast(`가상 상황: ${name}${body.until ? ` (~${fmtKst(untilMs, { seconds: false })})` : ""}`);
     await loadSafety();
     if (document.getElementById("apply-now")?.checked) await scanAndTick();
+  });
+}
+
+/** 🔒 날씨 시간표 전체 교체 [{kind, start, end}]. 데이터 모드는 바꾸지 않는다 (실제 데이터면 기억만). */
+export function setTimeline(timeline, label) {
+  return guard("시간표", async () => {
+    await putSim({ timeline });
+    toast(label);
+    await loadSafety();
+    if (document.getElementById("apply-now")?.checked && S.sim?.mode === "sim") await scanAndTick();
   });
 }
 

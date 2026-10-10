@@ -8,8 +8,8 @@ from app.safety.config import settings
 from app.safety.places import PlaceLookup, PlacesUnavailable
 from app.safety.schemas import (
     AssessRequest, AssessResult, AvoidResult, AvoidZone, BreakwaterActivity, DaySummary, Hazard, HourForecastView,
-    Level, Outlook, SafeWindow, SensorView, Situation, SituationHour, SourceStatus, Status, TideView, TimeWindow,
-    UvView, VisitAssessment, ZoneStatus,
+    Level, Outlook, SafeWindow, SensorView, SimSegmentView, Situation, SituationHour, SourceStatus, Status, TideView,
+    TimeWindow, UvView, VisitAssessment, ZoneStatus,
 )
 from app.safety.sources import KST, ActiveWarning, Fetched, Forecast, MockSources, SimSources, Sources
 
@@ -49,6 +49,25 @@ class SafetyService:
         self.places = places
         self.mock = isinstance(self.src, MockSources)
         self.note = MOCK_NOTE if self.mock else getattr(self.src, "data_note", None)
+        # 지금 관측값(센서·CCTV·특보)이 유지되는 끝 시각. 가상 상황은 시간표로 알 수 있다 (지금 구간이 끝나는 시각 등).
+        # 그 뒤 방문·시각에는 지금 관측값을 쓰지 않고 예보로만 판단한다. 실제 데이터는 알 수 없어 None (제한 없음)
+        self.obs_until: datetime | None = getattr(self.src, "observed_until", lambda: None)()
+
+    def _obs(self, t: datetime) -> bool:
+        """t 시각에 지금 관측값(실측 센서·CCTV·발효 특보)을 적용할 수 있는지."""
+        return self.obs_until is None or t < self.obs_until
+
+    def _active(self, active: list[ActiveWarning], t: datetime) -> list[ActiveWarning]:
+        return active if self._obs(t) else []
+
+    def _sim_now(self) -> tuple[str | None, SimSegmentView | None]:
+        """가상 상황이면 지금(가상 시각) 적용 중인 구간 종류(없으면 calm)와 구간. 지금 관측값은 이 구간의 값이다."""
+        if not self.mock:
+            return None, None
+        seg = self.src.segment_at(self.src.now())
+        if seg is None:
+            return "calm", None
+        return seg.kind, SimSegmentView(kind=seg.kind, start=seg.start, end=seg.end)
 
     def _now(self, now: datetime | None) -> datetime:
         """기준 시각. 주지 않으면 소스의 시각 (mock 시뮬레이션 중이면 가상 시각)."""
@@ -66,8 +85,7 @@ class SafetyService:
         first = risk.floor_hour(start)
         return [h for t, h in fc.value.hours.items() if first <= t < end or t == first]
 
-    @staticmethod
-    def _slot_level(fc: Forecast, start: datetime, end: datetime, sens: set[str], indoor: bool,
+    def _slot_level(self, fc: Forecast, start: datetime, end: datetime, sens: set[str], indoor: bool,
                     active: list[ActiveWarning], now: datetime, sensor_hz: list[Hazard]) -> str | None:
         """한 시간대의 최고 등급. 예보가 빠진 시각이 있으면 None (판단 불가)."""
         levels = []
@@ -78,8 +96,9 @@ class SafetyService:
                 return None
             levels.append(risk.hour_level(h, sens, indoor))
             t += timedelta(hours=1)
-        levels += [w.level for w in risk.timed_warning_hazards(active, sens, start, now, indoor=indoor)]
-        if start - now <= risk.NOW_WINDOW:
+        levels += [w.level for w in risk.timed_warning_hazards(self._active(active, start), sens, start, now,
+                                                               indoor=indoor)]
+        if start - now <= risk.NOW_WINDOW and self._obs(start):
             levels += [h.level for h in sensor_hz]
         return risk.worst(levels)
 
@@ -151,6 +170,7 @@ class SafetyService:
                                                        abnormal=r.abnormal))
 
         overall = _overall([z.risk for z in zones])
+        scenario, segment = self._sim_now()
         data = {"sensors": sensors, "breakwater": bw, "uv": uv, "forecast": fc, "warnings": warns}
         missing = [SOURCE_LABEL[k] for k, f in data.items() if not f.ok]
         risky = [z.name for z in zones if z.risk in ("caution", "danger")]
@@ -172,7 +192,7 @@ class SafetyService:
             next_hours=_scoped(risk.forecast_hazards(self._hours(fc, now, now + timedelta(hours=12)),
                                                      {"breakwater", "flood"})),
             guidance=guidance, data_status={k: _status(f, self.note) for k, f in data.items()},
-            mode="sim" if self.mock else "live", scenario=self.src.scenario if self.mock else None,
+            mode="sim" if self.mock else "live", scenario=scenario, segment=segment,
         )
 
     # ---------- 길찾기 우회 구역 ----------
@@ -226,13 +246,14 @@ class SafetyService:
             if warns.ok and warns.value:
                 active = warns.value.active
                 warnings = [f"{w.name} : {w.areas}" for w in active]
-                hazards = risk.timed_warning_hazards(active, {"breakwater", "flood"}, max(start, now), now,
-                                                     warns.fetched_at) + hazards
+                hazards = risk.timed_warning_hazards(self._active(active, max(start, now)), {"breakwater", "flood"},
+                                                     max(start, now), now, warns.fetched_at) + hazards
 
         safe: list[SafeWindow] = []
         for kind, sens in (("breakwater", {"breakwater"}), ("flood", {"flood"}), ("outdoor", set())):
             levels = {h.time: risk.worst([risk.hour_level(h, sens), *(
-                w.level for w in risk.timed_warning_hazards(active, sens, max(h.time, now), now))]) for h in hours}
+                w.level for w in risk.timed_warning_hazards(self._active(active, max(h.time, now)), sens,
+                                                            max(h.time, now), now))]) for h in hours}
             safe += [SafeWindow(place_kind=kind, start=a, end=b, has_info=info)
                      for a, b, info in risk.safe_windows(levels, timedelta(hours=1))]
 
@@ -348,20 +369,21 @@ class SafetyService:
                     hazards += risk.forecast_hazards(self._hours(fc, max(start, now), end), sens, bool(indoor))
                 else:
                     missing = True
-                if start - now <= risk.WARNING_WINDOW:
+                obs = self._obs(start)  # 지금 관측값이 끝난 뒤 방문은 예보로만 판단
+                if start - now <= risk.WARNING_WINDOW and obs:
                     if warns is not None and warns.ok:
                         hazards += risk.timed_warning_hazards(active, sens, max(start, now), now, warns.fetched_at,
                                                               bool(indoor))
                     else:
                         missing = True
-                if lat is not None and sensors is not None:
+                if lat is not None and sensors is not None and obs:
                     if sensors.ok and sensors.value:
                         sensor_hz = risk.sensor_hazards(sensors.value, lat, lng, sensors.fetched_at, pts)
                         if t.horizon == "now" and risk.sensor_unknown_near(sensors.value, lat, lng, pts):
                             missing = True  # 반경 안 센서가 등급을 주지 않음
                     elif t.horizon == "now" and "flood" in sens:
                         missing = True
-                if t.horizon == "now":
+                if t.horizon == "now" and obs:
                     hazards += sensor_hz
                     if lat is not None and "breakwater" in sens:
                         if bw is not None and bw.ok and bw.value is not None:
@@ -439,7 +461,7 @@ class SafetyService:
             for t in sorted(x for x in fc.value.hours if x >= risk.floor_hour(now)):
                 h = fc.value.hours[t]
                 raw = {k: risk.worst([risk.hour_level(h, sens, indoor), *(
-                    w.level for w in risk.timed_warning_hazards(active, sens, t, now, indoor=indoor))])
+                    w.level for w in risk.timed_warning_hazards(self._active(active, t), sens, t, now, indoor=indoor))])
                        for k, (sens, indoor) in kinds.items()}
                 hours.append(SituationHour(time=t, levels={k: risk.public(v) for k, v in raw.items()},
                                            info=[k for k, v in raw.items() if v == "info"]))
@@ -450,6 +472,8 @@ class SafetyService:
                    if h.info or any(v != "safe" for v in h.levels.values())]
         basis = {"until": last.isoformat() if last else None, "zones": zones, "warnings": st.warnings,
                  "hours": notable, "ok": data_ok}
+        if self.mock:  # 가상 상황: 지금 구간이 바뀌면(시작·끝) 다시 점검하게
+            basis["sim"] = [st.scenario, st.segment and st.segment.model_dump(mode="json")]
         digest = hashlib.sha256(json.dumps(basis, sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:16]
         return Situation(now=now, fingerprint=digest, forecast_until=last, zones=zones, warnings=st.warnings,
-                         hours=hours, data_ok=data_ok)
+                         hours=hours, data_ok=data_ok, mode=st.mode, scenario=st.scenario, segment=st.segment)

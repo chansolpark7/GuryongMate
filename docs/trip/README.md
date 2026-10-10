@@ -175,6 +175,7 @@
 - `near_hazard`: 걸린 구역을 하나로 묶고, 가까운 구역(같은 거리면 더 위험한 구역)으로 문구를 만든다. 원인 키는 구역 + 단계라 같은 구역이 `caution` → `danger` 로 오르면 다시 알린다.
   구역은 safety 상황(`fingerprint`)이 바뀔 때만 다시 받고, `TRIP_HAZARD_CACHE_SEC`(5초) 동안은 상황도 다시 묻지 않는다. 틱마다 새로 본다.
 - `safety_raised`·`safety_eased`: 경고의 `changes` 중 **오늘 날짜, 오늘 남은 항목(planned·visiting)** 의 것만 본다. 여러 항목이면 첫 항목으로 문구를 만들고 "(그 밖에 n건)".
+  - 한계: 위험했던 항목이 이미 지난 뒤 상황이 풀리면 내려갈 항목이 없어 `safety_eased` 가 나오지 않는다 ("상황이 끝났다"는 신호 없음). 열린 문제: [docs/console/README.md §7.6](../console/README.md).
 
 ### 3.3 Event 형식
 
@@ -372,8 +373,12 @@ trip replay 3 scene3_delay [--speed 10] [-v]   경로 재생 (plan 자리에 new
 trip events 3 [--after N] [--follow]  이벤트 보기 (--follow: 3초마다 폴링. failed: 선제 턴 전송 실패, 시도 수·사유 표시)
 trip events 3 --seen 41               이벤트 확인 표시 (delivered -> handled)
 trip tick 3 [--at 15:45]              틱을 지금 한 번 (지연·안전 경고·자동 종료·선제 턴 전송)
-sim / sim scenario storm / sim now 2026-10-10T14:00 (또는 14:00) / sim reset   safety 가상 상황·시각 (PUT /safety/sim)
-sim live / sim mock                   실제 데이터 <-> 가상 상황 (SAFETY_SIM_ENABLED=true)
+sim                                   가상 상황·가상 시각·날씨 시간표 보기 (GET /safety/sim)
+sim scenario storm [--until 17:00]    시간표를 프리셋으로 (지금 기준 절대 구간, --until: 끝 시각 HH:MM 또는 ISO)
+sim add storm 15:00 17:00 [--date 2026-10-10]   날씨 구간 추가 (storm|rain|flood|wind, 끝은 포함 안 함, 생략한 날짜는 가상 시각의 날짜)
+sim del 2 / sim clear                 n번째 구간 삭제 / 시간표 비우기 (데이터 모드는 그대로)
+sim now 2026-10-10T14:00 (또는 14:00) / sim reset   가상 시각 / 실제 시각으로 (PUT /safety/sim)
+sim live / sim mock                   실제 데이터 <-> 가상 상황 (SAFETY_SIM_ENABLED=true). 시간표는 가상 상황에서만 적용
 ```
 
 ```bash
@@ -407,6 +412,7 @@ python scripts/planner/cli.py trip end 7      # 재생이 끝나도 여행일은
    {"walk_to": "kto-2610501"},                                // routing 도보 경로선을 따라 걸음 (70m/분, 점 간격 30초. 경로선이 없으면 직선)
    {"drive_to": [35.9912, 129.5572]},                         // 차량 경로선을 따라 감 (400m/분, 점 간격 10초). 장소 자리에 [lat, lng] (경유 지점)도 된다
    {"at": "+95", "sim": {"scenario": "storm"}, "tick": true}, // 시작 +95분(또는 "HH:MM")까지 그 자리에서 기다린 뒤 안전 상황 변경, 틱
+   {"sim": {"scenario": "storm", "until": "17:00"}},          // 날씨 시간표 프리셋 + 끝 시각 (HH:MM 은 재생 시각의 날짜). 시나리오는 그 순간 기준 절대 구간
    {"skip": "kto-2660046"},                                   // 그 장소 항목을 건너뜀으로 (사용자가 일정에서 뺌, PATCH status=skipped)
    {"accept": {"remove": "poi-gr-breakwater-north", "add": "kto-2603493"}},  // 가장 최근 선제 턴(단계 3)의 제안을 승인 (앱 [전체 적용]).
                                                               // remove·add 는 기대하는 변경: CLI 는 Agent 로 승인하고 확인만, pytest 의 가짜 planner 는 이대로 바꾼다
