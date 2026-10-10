@@ -231,6 +231,19 @@ def _resolve_session(clients: Clients, plan_id: int, auth: dict) -> str | None:
         return None
 
 
+def prepare_guide(clients: Clients, user_id: str, plan_id: int, place_ids: list[str] | None = None) -> None:
+    """가이드 자동 준비 요청 (여행 시작 때 일정 전체, 도착 때 그 장소. docs/docent/README.md §3.2). 응답 뒤 백그라운드로 부른다.
+    노트가 이미 있거나 준비 중·실패면 agent 가 건너뛴다. 실패해도(agent 접근 불가·호출 수 제한 429) 여행에는 영향 없음 — 로그만."""
+    try:
+        job = clients.agent.prepare_guide(plan_id, place_ids, background_auth(user_id))
+        log.info("trip: 가이드 자동 준비 요청 (계획 %s, %s): 작업 %s %s곳, 이어서 %s곳", plan_id, place_ids or "전체",
+                 job.get("status"), job.get("total"), len(job.get("queued") or []))
+    except UpstreamError as e:
+        log.warning("trip: 가이드 자동 준비 요청 실패 (계획 %s, %s): %s", plan_id, place_ids or "전체", e)
+    except Exception:
+        log.exception("trip: 가이드 자동 준비 요청 중 오류 (계획 %s)", plan_id)
+
+
 def start(db: Session, user_id: str, plan_id: int, session_id: str | None, auth: dict, clients: Clients,
           clock: Clock) -> TripState:
     plan = _ensure_plan(clients, plan_id, auth)

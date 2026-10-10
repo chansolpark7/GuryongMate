@@ -47,9 +47,12 @@ def _dispatch_plan(user_id: str, plan_id: int, clients: Clients, clock: Clock, n
 
 @router.post("/plans/{plan_id}/start", response_model=TripState)
 def start_trip(plan_id: int, db: DbSession, user_id: CurrentUser, auth: ForwardAuth, clients: Deps, clock: Now,
-               body: Annotated[StartRequest | None, Body()] = None) -> TripState:
-    """여행일 시작 (오늘이 계획 기간 안이어야 한다. 아니면 409 not_trip_day). 같은 날 다시 부르면 그대로 돌려준다."""
-    return service.start(db, user_id, plan_id, (body or StartRequest()).session_id, auth, clients, clock)
+               background: BackgroundTasks, body: Annotated[StartRequest | None, Body()] = None) -> TripState:
+    """여행일 시작 (오늘이 계획 기간 안이어야 한다. 아니면 409 not_trip_day). 같은 날 다시 부르면 그대로 돌려준다.
+    응답 뒤 아직 노트가 없는 장소의 가이드 준비를 agent 에 요청한다 (실패해도 시작에는 영향 없음)."""
+    state = service.start(db, user_id, plan_id, (body or StartRequest()).session_id, auth, clients, clock)
+    background.add_task(service.prepare_guide, clients, user_id, plan_id)
+    return state
 
 
 @router.post("/plans/{plan_id}/end", response_model=TripState)
@@ -76,6 +79,10 @@ def post_location(plan_id: int, body: Annotated[LocationIn | LocationBatch, Body
         background.add_task(service.resume, service.latest_trip(db, user_id, plan_id).id, clients, clock)
     else:
         _send_queued(background, result.state, result.events, user_id, clients, clock)
+    # 도착한 장소에 해설이 없으면 지금이라도 준비 (노트가 있거나 준비 중·실패면 agent 가 건너뛴다)
+    arrived = list(dict.fromkeys(e.payload["place_id"] for e in result.events if e.type == "arrived"))
+    if arrived:
+        background.add_task(service.prepare_guide, clients, user_id, plan_id, arrived)
     return result
 
 

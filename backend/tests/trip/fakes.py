@@ -316,6 +316,8 @@ class FakeAgent:
         self.busy = False  # 409 agent_busy
         self.missing = False  # 엔드포인트가 아직 없음 (404 Not Found)
         self.during_send = None  # 보내는 도중 실행할 함수 (동시 전송 확인)
+        self.guide_calls: list[tuple[int, list[str] | None, dict]] = []  # 가이드 자동 준비 요청 (plan_id, place_ids, auth)
+        self.guide_error: UpstreamError | None = None  # 가이드 준비 요청이 낼 오류 (접근 불가·429)
 
     def latest_session(self, plan_id, auth):
         s = self.sessions.get(plan_id)
@@ -337,6 +339,13 @@ class FakeAgent:
         self.received.append((session_id, event, trip))
         return {"text": "제안드려요", "message_id": 500 + len(self.received),
                 "cards": [{"type": "proposal", "proposal": {"id": 900 + len(self.received)}}], "error": None}
+
+    def prepare_guide(self, plan_id, place_ids, auth):
+        self.guide_calls.append((plan_id, place_ids, auth))
+        if self.guide_error:
+            raise self.guide_error
+        return {"job_id": "j", "plan_id": plan_id, "status": "running", "total": len(place_ids or []), "places": [],
+                "queued": []}
 
 
 def fakes() -> Clients:
