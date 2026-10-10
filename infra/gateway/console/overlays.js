@@ -44,12 +44,13 @@ function renderMotion() {
   if (!m) return;
   const left = Math.max(0, (m.end - m.t) / 60e3);
   const name = m.label || "그 자리";
-  const what = m.kind === "stay" ? `${name}에서 머무는 중` : `${josa(name, "로")} ${m.kind === "car" ? "차로 가는" : "걷는"} 중`;
+  const what = m.kind === "arrive" ? `${name} 도착 확인 중…`
+    : m.kind === "stay" ? `${name}에서 머무는 중` : `${josa(name, "로")} ${m.kind === "car" ? "차로 가는" : "걷는"} 중`;
   const pct = m.total ? Math.round((m.done / m.total) * 100) : 0;
   box.replaceChildren(
     h("div.mc-row",
-      h("span.ic", m.kind === "stay" ? "⏸" : m.kind === "car" ? "🚗" : "🚶"),
-      h("span.mc-text", h("b", what), h("span.muted", ` · ${m.stop ? "멈추는 중…" : `${fmtMinutes(left)} 남음`}`)),
+      h("span.ic", { arrive: "📍", stay: "⏸", car: "🚗" }[m.kind] || "🚶"),
+      h("span.mc-text", h("b", what), h("span.muted", ` · ${m.stop ? "멈추는 중…" : m.kind === "arrive" ? `최대 ${fmtMinutes(left)}` : `${fmtMinutes(left)} 남음`}`)),
       m.path ? h(`button.btn.sm.follow${prefs.follow ? ".on" : ""}`, {
         title: "걷는 동안 지도가 사용자를 가운데에 두고 따라가요", "aria-pressed": String(!!prefs.follow),
         onclick: () => setPref("follow", !prefs.follow),

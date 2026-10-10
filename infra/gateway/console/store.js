@@ -23,7 +23,7 @@ export const S = {
   events: new Map(), // id -> Event
   alerts: [],
   // 이 대시보드에만 있는 상태
-  motion: null, // 진행 중인 이동 {kind, label, stop, sent, ignored, total, done, t0, t, end, speed, clock, line, path}
+  motion: null, // 진행 중인 이동 {kind(walk|car|stay|arrive), label, stop, sent, ignored, total, done, t0, t, end, speed, clock, line, path}
   play: null, // 시간 재생 {speed, stop, t0, r0}
   arm: null, // 날씨 그리기 도구 (종류, null = 꺼짐)
   locLog: [], // 최근 위치 전송 결과 (개발자 정보) [{at, kind, accepted, ignored, events}]
@@ -90,6 +90,8 @@ const PREF_DEFAULT = {
   feedOpen: null, // 오른쪽 피드 (null = 화면 폭으로 정함)
   weatherOpen: true,
   follow: false, // 걷는 중 지도가 사용자를 따라감
+  moveMode: "walk", // 말풍선에서 마지막으로 고른 이동 수단 (walk | car, 강조 표시)
+  autoStay: true, // 일정 장소로 걷기·차가 끝나면 2분 머물러 도착 판정을 바로 낸다
 };
 
 export const prefs = (() => {

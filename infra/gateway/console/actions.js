@@ -10,6 +10,7 @@ export const CAR_M_PER_MIN = 500; // 차 30km/h 가정
 const WALK_STEP_M = 25; // 걸을 때 점 간격
 const CAR_STEP_M = 60; // 차는 점 간격 약 7초 (위험 구역 접근 50m 를 크게 건너뛰지 않게)
 const STAY_POINT_SEC = 30;
+const ARRIVE_STAY_MIN = 2; // 도착 판정(반경 안 90초)이 나도록 걷기·차 끝에 이어 머무는 시간
 export const CONTINUE_HOURS = 30; // 날씨 "계속" = 지금부터 30시간 (폭풍 프리셋과 같은 길이)
 
 /** 실패를 알리고 다시 던지지 않는다 (버튼 핸들러용). 성공하면 fn 의 결과, 실패하면 undefined. */
@@ -398,8 +399,9 @@ export function teleport(lat, lng, label = null) {
   });
 }
 
-/** 점 목록 [{lat,lng,t}] 을 가상 시각과 함께 재생한다. 점마다 🔒 PUT /safety/sim {now} → 위치 전송 → 배속만큼 기다림. */
-async function play(points, motion) {
+/** 점 목록 [{lat,lng,t}] 을 가상 시각과 함께 재생한다. 점마다 🔒 PUT /safety/sim {now} → 위치 전송 → 배속만큼 기다림.
+ * until(r): 위치 전송 응답을 보고 true 면 거기서 끝낸다 (멈춤 아님). 끝까지 갔거나 until 로 끝나면 true, 멈췄으면 false. */
+async function play(points, motion, { until = null } = {}) {
   const speed = prefs.speed;
   const t0 = points[0]?.t ?? simNow();
   // clock: 화면용 가상 시각 = t + (지금 - at) × speed, 다음 전송 점 시각(max)에서 멈춘다 (store.simNow). 지도 마커도 이 시각으로 path 위를 움직인다
@@ -407,6 +409,7 @@ async function play(points, motion) {
     clock: speed > 0 ? { t: t0, at: performance.now(), max: t0 } : null, ...motion };
   emit("motion");
   let simOk = !S.simDisabled;
+  let reached = false;
   try {
     if (speed === 0) {
       // 기다리지 않음: 100점씩 묶어 보내고 시각은 마지막에 한 번
@@ -417,8 +420,9 @@ async function play(points, motion) {
         S.motion.done = Math.min(points.length, i + 100);
         S.motion.t = chunk.at(-1).t;
         applyLocation(r, motion.kind);
+        if (until?.(r)) { reached = true; break; }
       }
-      if (simOk && points.length) await putSim({ now: kstIso(points[points.length - 1].t) });
+      if (simOk && points.length) await putSim({ now: kstIso(S.motion.t) });
     } else {
       let prevT = null;
       for (const p of points) {
@@ -445,11 +449,13 @@ async function play(points, motion) {
         S.motion.t = p.t;
         S.motion.clock = { t: p.t, at: performance.now(), max: p.t };
         applyLocation(r, motion.kind);
+        if (until?.(r)) { reached = true; break; }
       }
     }
     const m = S.motion;
     if (m.ignored) toast(`버려진 위치 ${m.ignored}개 (이전 위치보다 이른 시각)`, "warn");
-    else if (m.stop) toast("멈췄습니다");
+    else if (m.stop && !reached) toast("멈췄습니다");
+    return reached || !m.stop;
   } finally {
     S.motion = null;
     emit("motion");
@@ -465,8 +471,17 @@ export function stopMotion() {
   }
 }
 
-/** 걸어가기(walk) / 차로 가기(car): 경로선을 따라 일정 간격 점, 속도로 점마다 가상 시각을 계산. */
-export function travel(lat, lng, mode = "walk", label = null) {
+/** 머물기 점: 같은 좌표로 t0 부터 30초 간격, minutes 분까지. */
+function stayPoints(lat, lng, t0, minutes) {
+  const pts = [];
+  for (let s = 0; s <= minutes * 60; s += STAY_POINT_SEC) pts.push({ lat, lng, t: t0 + s * 1000 });
+  if ((minutes * 60) % STAY_POINT_SEC) pts.push({ lat, lng, t: t0 + minutes * 60e3 });
+  return pts;
+}
+
+/** 걸어가기(walk) / 차로 가기(car): 경로선을 따라 일정 간격 점, 속도로 점마다 가상 시각을 계산.
+ * arrive: 목적지가 일정 장소면 true — 닿은 뒤 같은 좌표로 2분 머물러 도착 판정을 바로 낸다 (prefs.autoStay, 도착 이벤트가 오면 거기서 끝). */
+export function travel(lat, lng, mode = "walk", label = null, { arrive = false } = {}) {
   if (!needTrip()) return Promise.resolve();
   return guard(mode === "car" ? "차로 가기" : "걸어가기", async () => {
     const loc = S.trip.location;
@@ -507,7 +522,11 @@ export function travel(lat, lng, mode = "walk", label = null) {
     // 같은 초로 반올림된 점은 하나만
     const uniq = out.filter((p, i) => i === 0 || p.t > out[i - 1].t || i === out.length - 1);
     const meters = Math.round(walked);
-    await play(uniq, { kind: mode, label, meters, line, path });
+    const done = await play(uniq, { kind: mode, label, meters, line, path });
+    if (done && arrive && prefs.autoStay && S.planId != null && tripActive()) {
+      await play(stayPoints(lat, lng, startTime(), ARRIVE_STAY_MIN), { kind: "arrive", label, minutes: ARRIVE_STAY_MIN },
+        { until: (r) => r.events.some((e) => e.type === "arrived") });
+    }
   });
 }
 
@@ -519,11 +538,7 @@ export function stay(minutes = 3, lat = null, lng = null, label = null) {
     const la = lat ?? loc?.lat;
     const ln = lng ?? loc?.lng;
     if (la == null) { toast("지금 위치가 없어요. 먼저 지도에서 이동하세요", "warn"); return; }
-    const t0 = startTime();
-    const pts = [];
-    for (let s = 0; s <= minutes * 60; s += STAY_POINT_SEC) pts.push({ lat: la, lng: ln, t: t0 + s * 1000 });
-    if ((minutes * 60) % STAY_POINT_SEC) pts.push({ lat: la, lng: ln, t: t0 + minutes * 60e3 });
-    await play(pts, { kind: "stay", label, minutes });
+    await play(stayPoints(la, ln, startTime(), minutes), { kind: "stay", label, minutes });
   });
 }
 

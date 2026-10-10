@@ -48,6 +48,7 @@ function skeleton() {
   const sim = S.sim;
   // 조작 스위치
   const auto = h("input", { type: "checkbox", checked: prefs.autoScan, onchange: (e) => setPref("autoScan", e.target.checked) });
+  const autoStay = h("input", { type: "checkbox", checked: prefs.autoStay, onchange: (e) => setPref("autoStay", e.target.checked) });
   const speed = h("select", { onchange: (e) => setPref("speed", Number(e.target.value)) },
     ...[[0, "즉시"], [5, "5배"], [10, "10배"], [20, "20배"], [60, "60배"], [120, "120배"]].map(([v, t]) => h("option", { value: String(v) }, t)));
   speed.value = String(prefs.speed);
@@ -98,6 +99,7 @@ function skeleton() {
     sec("연결", h("ul.kv#dev-conn")),
     sec("조작",
       h("label.check", auto, " 날씨를 바꾸면 바로 안전 점검 + 틱 (끄면 planner 주기를 기다림)"),
+      h("label.check", autoStay, " 도착하면 자동으로 머물기 (일정 장소로 걷기·차가 닿으면 2분, 도착 판정이 바로 남)"),
       h("div.row", h("span.muted", "걷기·머물기 배속"), speed, h("span.muted.small", "실제 1초 = 가상 N초")),
       h("div.row", stayMin, h("span.muted", "분"),
         h("button.btn.sm", { onclick: () => stay(Math.min(180, Math.max(1, Number(stayMin.value) || 3))) }, "지금 위치에서 머물기")),

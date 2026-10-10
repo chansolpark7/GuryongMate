@@ -443,15 +443,15 @@ body[data-drag=draw], body[data-drag=draw] * { cursor: crosshair !important; }
 .mpop-title { font-size: 15px; display: block; }
 .mpop-sub { color: #8B95A1; font-size: 12px; margin: 4px 0 10px; }
 .mpop-actions { display: grid; gap: 6px; margin-top: 8px; }
-.mpop-actions.three { grid-template-columns: 1fr 1fr 36px; }
+.mpop-actions.two { grid-template-columns: 1fr 1fr; }
+.mpop-small { display: flex; gap: 6px; align-items: center; margin-top: 8px; }
+.mpop .mpop-small .btn { flex: 1; min-height: 30px; padding: 0 6px; font-size: 12px; color: #4B5563; }
+.mpop-small select { min-height: 30px; font-size: 12px; background: #F3F4F6; color: #111827; padding: 0 4px; }
 .mpop .btn { background: #fff; color: #111827; border-color: #E8EBEF; }
 .mpop .btn.primary { background: #2F6BFF; border-color: #2F6BFF; color: #fff; }
 .stay-row { display: flex; gap: 6px; align-items: center; }
 .stay-row .btn:first-child { flex: 1; }
 .stay-row select { min-height: 36px; background: #F3F4F6; color: #111827; padding: 0 6px; }
-.mpop-more { display: flex; gap: 6px; margin-top: 6px; }
-.mpop-more[hidden] { display: none; }
-.mpop-more .btn { flex: 1; }
 .pop-note { color: #D97706; font-size: 13px; margin: 6px 0 0; }
 
 /* 이벤트 말풍선 (2~3초) */
