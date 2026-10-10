@@ -1,3 +1,4 @@
+import 'package:flutter/gestures.dart' show PointerDeviceKind;
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
@@ -57,6 +58,15 @@ abstract final class AppText {
 abstract final class AppShadow {
   static const card = [BoxShadow(color: Color(0x0F111827), blurRadius: 12, offset: Offset(0, 2))];
   static const floating = [BoxShadow(color: Color(0x24111827), blurRadius: 24, offset: Offset(0, 8))];
+}
+
+/// 데스크톱(Windows 데모)에서도 목록·바텀 시트를 마우스로 끌 수 있게. Flutter 기본은 터치·펜만 끌기로 스크롤한다
+/// (그래서 Today 패널·AI 시트 목록이 마우스로는 접히거나 펼쳐지지 않았다).
+class AppScrollBehavior extends MaterialScrollBehavior {
+  const AppScrollBehavior();
+
+  @override
+  Set<PointerDeviceKind> get dragDevices => {...super.dragDevices, PointerDeviceKind.mouse};
 }
 
 ThemeData buildTheme() {

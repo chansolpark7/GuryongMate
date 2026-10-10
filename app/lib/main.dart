@@ -59,6 +59,7 @@ class _GuryongAppState extends State<GuryongApp> {
       builder: withTripOverlay,
       debugShowCheckedModeBanner: false,
       theme: buildTheme(),
+      scrollBehavior: const AppScrollBehavior(),
       locale: const Locale('ko', 'KR'),
       supportedLocales: const [Locale('ko', 'KR'), Locale('en')],
       localizationsDelegates: const [

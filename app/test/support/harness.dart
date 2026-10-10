@@ -50,6 +50,7 @@ Widget app(AppSession session, Widget home) => ChangeNotifierProvider.value(
       child: MaterialApp(
         debugShowCheckedModeBanner: false,
         theme: buildTheme(),
+        scrollBehavior: const AppScrollBehavior(), // main.dart 와 같게
         builder: withTripOverlay, // 동행 전역 오버레이 (main.dart 와 같게)
         locale: const Locale('ko', 'KR'),
         supportedLocales: const [Locale('ko', 'KR')],

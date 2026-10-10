@@ -1,10 +1,12 @@
 // 동행 모드 화면 — 여행 재생 fixture(trip/scene2·3·4)와 흐름 fixture(f3~f6)로 그린다 (LLM 호출 없음).
 // 앱은 데모 위치 모드: 위치를 보내지 않고 서버 상태·이벤트(폴링)만 그린다 (trip §2.2, 33).
+import 'package:flutter/gestures.dart' show PointerDeviceKind;
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:guryong_mate/core/theme/app_theme.dart';
+import 'package:guryong_mate/core/widgets/common.dart';
 import 'package:guryong_mate/features/chat/chat_controller.dart';
 import 'package:guryong_mate/features/planner/planner_shell.dart';
 import 'package:guryong_mate/features/trip/location.dart';
@@ -345,5 +347,20 @@ void main() {
     expect(toNext, hasLength(1), reason: '다음 장소로 가는 Primary 선은 안내선 하나만 (구간선 숨김)');
     expect(toNext.single.points, hasLength(3), reason: '지금 위치부터 남은 부분');
     expect(at(toNext.single.points.first, loc), isTrue);
+  });
+  testWidgets('14 패널: 마우스로도 끌어서 펼치고 접는다 (데스크톱 데모)', (tester) async {
+    final r = TripReplay('scene4_safety', flows: ['f6_safety.json']);
+    r.advanceTo('12:40:00');
+    await openShell(tester, r.gw, r.planId);
+    tripOf(tester).dismissArrival();
+    await settle(tester, 10);
+    double top() => tester.getTopLeft(find.byType(Grabber).last).dy;
+    final base = top();
+    await tester.drag(find.byType(Grabber).last, const Offset(0, -250), kind: PointerDeviceKind.mouse);
+    await settle(tester, 20);
+    expect(top(), lessThan(base - 200), reason: '펼침');
+    await tester.drag(find.byType(Grabber).last, const Offset(0, 600), kind: PointerDeviceKind.mouse);
+    await settle(tester, 20);
+    expect(top(), greaterThan(base + 100), reason: '접힘 (지도를 넓게)');
   });
 }
