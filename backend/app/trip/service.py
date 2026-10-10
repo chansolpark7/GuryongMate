@@ -133,6 +133,14 @@ def _known(db: Session, td: TripDay) -> set[str]:
     return policy.known_causes(list(db.scalars(select(TripEvent.cause_key).where(TripEvent.trip_day_id == td.id))))
 
 
+def _last_delay(db: Session, td: TripDay) -> tuple[int, float | None] | None:
+    """이 여행일의 마지막 delay 이벤트 (id, 그때 delay_minutes). 일정 밀림을 다시 물을 기준 (judge.behind_ref).
+    전송에 실패(failed)했거나 큐에서 대체된(suppressed) 것도 센다 — 원인 키와 같이, 같은 상황을 다시 만들지 않는다."""
+    row = db.execute(select(TripEvent.id, TripEvent.payload).where(
+        TripEvent.trip_day_id == td.id, TripEvent.type == "delay").order_by(TripEvent.id.desc()).limit(1)).first()
+    return (row[0], (row[1] or {}).get("delay_minutes")) if row else None
+
+
 def _record(db: Session, td: TripDay, dets: list[judge.Detection], known: set[str]) -> list[TripEvent]:
     out = []
     for d in policy.fresh(dets, known):
@@ -343,7 +351,8 @@ def record_location(db: Session, user_id: str, plan_id: int, points: list[Locati
         proj = _project(clients, td, track, last.recorded_at, auth)
         if proj is not None:
             _apply_projection(td, proj)
-            d = judge.judge_delay(proj, last.recorded_at, known)
+            d = judge.judge_delay(proj, last.recorded_at, known, behind_min=settings.behind_min, plan=plan,
+                                  day=td.day, track=track, notice=_last_delay(db, td))
             if d:
                 dets.append(d)
         by_id = {s.item_id: s for s in spots}
@@ -383,10 +392,12 @@ def tick_trip(db: Session, td: TripDay, clients: Clients, clock: Clock, now: dat
     spots = judge.spots_from_plan(plan, td.day)
 
     # 1. 위치가 안 들어와도 시간이 흐르면 지연이 생긴다
-    proj = _project(clients, td, _load_track(td), now, auth)
+    track = _load_track(td)
+    proj = _project(clients, td, track, now, auth)
     if proj is not None:
         _apply_projection(td, proj)
-        d = judge.judge_delay(proj, now, known)
+        d = judge.judge_delay(proj, now, known, behind_min=settings.behind_min, plan=plan, day=td.day,
+                              track=track, notice=_last_delay(db, td))
         if d:
             dets.append(d)
 

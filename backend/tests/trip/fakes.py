@@ -78,7 +78,7 @@ class FakePlanner:
                           "arrived_at": None, "done_at": None})
         self.plans[pid] = {"id": pid, "user": user, "title": plan["title"], "start_date": plan["start_date"],
                            "end_date": plan.get("end_date", plan["start_date"]), "day_start": plan["day_start"],
-                           "day_end": plan["day_end"], "items": items}
+                           "day_end": plan["day_end"], "items": items, "version": 1}
         return pid
 
     def item(self, plan_id: int, order: int) -> dict:
@@ -88,11 +88,19 @@ class FakePlanner:
         """사용자가 그 장소 항목을 건너뜀으로 바꿈 (PATCH status=skipped)."""
         it = next(i for i in self.plans[plan_id]["items"] if i["place_id"] == place_id and i["status"] == "planned")
         it["status"] = "skipped"
+        self.plans[plan_id]["version"] += 1
 
     def replace(self, plan_id: int, remove: str, add: str, stay: int = 40) -> None:
         """사용자가 선제 턴의 교체 제안(remove 장소 -> add 장소, 같은 순서)을 승인함."""
         it = next(i for i in self.plans[plan_id]["items"] if i["place_id"] == remove and i["status"] == "planned")
         it["place_id"], it["stay"] = add, stay
+        self.plans[plan_id]["version"] += 1
+
+    def set_stay(self, plan_id: int, place_id: str, stay: int) -> None:
+        """사용자가 체류 시간을 바꾸는 제안을 승인함 (일정 밀림: 지금 장소 체류 늘리기). version 이 오른다."""
+        it = next(i for i in self.plans[plan_id]["items"] if i["place_id"] == place_id)
+        it["stay"] = stay
+        self.plans[plan_id]["version"] += 1
 
     def add_alert(self, plan_id: int, kind: str, changes: list[tuple[int, str, str]]) -> dict:
         """changes: (item_id, from_risk, to_risk)."""
@@ -203,7 +211,7 @@ class FakePlanner:
                           "start_at": fmt(r["start"]), "end_at": fmt(r["end"]), "arrived_at": it["arrived_at"],
                           "done_at": it["done_at"]})
         return {"id": p["id"], "title": p["title"], "start_date": p["start_date"], "end_date": p["end_date"],
-                "day_start": p["day_start"], "day_end": p["day_end"], "version": 1,
+                "day_start": p["day_start"], "day_end": p["day_end"], "version": p["version"],
                 "days": [{"day": 1, "date": p["start_date"], "end_at": fmt(rows[-1]["end"]) if rows else None,
                           "items": items}], "violations": vs}
 

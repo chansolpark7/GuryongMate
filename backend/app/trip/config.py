@@ -22,6 +22,9 @@ class TripSettings(BaseSettings):
     hazard_near_m: float = 50
     hazard_cache_sec: float = 5  # 이 시간 동안은 safety 상황(fingerprint)을 다시 묻지 않는다 (틱마다 새로 본다)
 
+    # 일정 밀림 (§3.2): 다음 일정의 예상 시작이 계획보다 이만큼(분) 늦으면 delay(behind_schedule). 이 간격마다 다시 묻는다. 0 이면 끔
+    behind_min: float = 30
+
     # Event Policy (§4)
     proactive_cooldown_min: float = 10
     # 선제 턴 전송 실패(agent 접근 불가·오류): 이 횟수만큼 실패하면 failed 로 남기고 더 보내지 않는다.
