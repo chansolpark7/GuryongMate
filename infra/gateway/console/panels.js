@@ -2,12 +2,12 @@
 import { api } from "./api.js";
 import { S, dayItems, on, simNow, tripActive } from "./store.js";
 import {
-  endTrip, getSpeed, resetClock, scanAndTick, setClock, setScenario, setSource, setSpeed, shiftClock,
+  endTrip, getSpeed, resetClock, scanAndTick, setClock, setScenario, setSource, setSpeed, setTimeline, shiftClock,
   startTrip, stay, stopMotion, teleport, travel, onBusy, onTripError,
 } from "./actions.js";
 import { EVENT_KO, STATUS_KO } from "./ui.js";
 import { focus } from "./map.js";
-import { fmtKst, h, ms, parseLocalKst, riskKo, toLocalKst } from "./util.js";
+import { fmtKst, h, kstIso, ms, parseLocalKst, riskKo, toLocalKst } from "./util.js";
 
 const $ = (id) => document.getElementById(id);
 const ITEM_STATUS_KO = { planned: "예정", visiting: "머무는 중", done: "완료", skipped: "건너뜀" };
@@ -33,6 +33,17 @@ export function initPanels() {
   $("src-live").addEventListener("click", () => setSource("live"));
   $("src-mock").addEventListener("click", () => setSource("mock"));
   $("btn-scan").addEventListener("click", scanAndTick);
+  for (const b of $("until-seg").querySelectorAll("button")) {
+    b.addEventListener("click", () => {
+      untilChoice = b.dataset.until;
+      if (untilChoice === "at" && !$("until-time").value) $("until-time").value = hhmm(simNow() + 60 * 60e3);
+      renderSafety();
+    });
+  }
+  $("seg-add").addEventListener("submit", (e) => {
+    e.preventDefault();
+    addSegment();
+  });
   try {
     const v = localStorage.getItem(APPLY_KEY);
     if (v !== null) $("apply-now").checked = v === "1";
@@ -72,7 +83,7 @@ export function initPanels() {
   on("sim", () => { renderConn(); renderClockControls(); renderSafety(); });
   on("safety", renderSafety);
   on("plans", renderPlans);
-  on("plan", () => { renderPlans(); renderItinerary(); renderClockControls(); });
+  on("plan", () => { renderPlans(); renderItinerary(); renderClockControls(); renderSafety(); });
   on("trip", () => { renderTrip(); renderItinerary(); renderTimeline(); });
   on("motion", () => { renderMotion(); renderTrip(); renderItinerary(); });
   on("events", renderTimeline);
@@ -198,16 +209,23 @@ function renderSafety() {
   chips.replaceChildren(...names.map((n) => h("button.chip-btn", {
     class: sim.scenario === n ? (sim.mode === "sim" ? "on" : "remembered") : "",
     disabled: !ok,
-    title: sim.scenarios[n],
-    onclick: () => setScenario(n),
+    title: `${sim.scenarios[n]} — 시간표를 이 프리셋으로 바꾼다 (지금 기준, 시각을 옮겨도 밀리지 않음)`,
+    onclick: () => setScenario(n, untilMs()),
   }, SCENARIO_KO[n] ? `${SCENARIO_KO[n]}` : n)));
+  for (const b of $("until-seg").querySelectorAll("button")) {
+    b.classList.toggle("on", b.dataset.until === untilChoice);
+    b.disabled = !ok;
+  }
+  $("until-time").hidden = untilChoice !== "at";
   const desc = $("scenario-desc");
   if (sim) {
-    const d = sim.scenarios?.[sim.scenario] || "";
+    const seg = sim.segment;
+    const now = `지금 ${KIND_KO[sim.scenario] || sim.scenario}${seg ? ` (${span(seg)})` : ""}`;
     desc.textContent = sim.mode === "sim"
-      ? `가상 상황 ${SCENARIO_KO[sim.scenario] || sim.scenario}: ${d} (지금 기준 상태)`
-      : `실제 데이터 사용 중. 가상으로 바꾸면 '${SCENARIO_KO[sim.scenario] || sim.scenario}' 를 쓴다.`;
+      ? `가상 상황 · ${now}. 칩은 시간표 프리셋 (끝: ${UNTIL_KO[untilChoice]})`
+      : `실제 데이터 사용 중 — 시간표는 가상 상황에서만 적용 (가상으로 바꾸면 ${now}).`;
   } else desc.textContent = "";
+  renderSimTimeline(sim, ok);
   $("btn-scan").disabled = !ok || !$("scan-busy").hidden;
 
   const st = S.status;
@@ -233,6 +251,113 @@ function renderSafety() {
 }
 
 const SCENARIO_KO = { calm: "평상시", rain: "비", wind_tomorrow: "내일 강풍", flood: "침수 센서", storm: "폭풍" };
+const KIND_KO = { storm: "폭풍", flood: "침수", wind: "강풍", rain: "비", calm: "평상시" };
+const UNTIL_KO = { none: "계속", 60: "1시간 뒤", 120: "2시간 뒤", at: "시각 지정" };
+const DAY_MS = 24 * 3600e3;
+let untilChoice = "none"; // 시나리오 칩의 끝: none | 60 | 120 | at
+
+const hhmm = (t) => fmtKst(t, { date: false, seconds: false });
+const kstDay = (t) => kstIso(t).slice(0, 10);
+const dayStart = (t) => Date.parse(`${kstDay(t)}T00:00:00+09:00`);
+
+/** "15:20~17:00" (가상 시각과 다른 날이면 날짜도). */
+function span(seg) {
+  const a = ms(seg.start);
+  const b = ms(seg.end);
+  const day = kstDay(a) === kstDay(simNow()) ? "" : `${fmtKst(a).slice(0, 5)} `;
+  return `${day}${hhmm(a)}~${kstDay(b) === kstDay(a) ? hhmm(b) : fmtKst(b, { seconds: false })}`;
+}
+
+/** 시나리오 칩의 끝 시각 (ms) 또는 null(계속). 시각 지정이 지금보다 이르면 다음 날. */
+function untilMs() {
+  if (untilChoice === "none") return null;
+  const now = simNow();
+  if (untilChoice !== "at") return now + Number(untilChoice) * 60e3;
+  const v = $("until-time").value;
+  if (!v) return null;
+  const t = Date.parse(`${kstDay(now)}T${v}:00+09:00`);
+  return t <= now ? t + DAY_MS : t;
+}
+
+/** 날씨 시간표: 그날(가상 시각 날짜) 0~24시 막대(구간 색칠·지금 선·일정 눈금) + 구간 목록(삭제). */
+function renderSimTimeline(sim, ok) {
+  const box = $("sim-timeline");
+  const note = $("timeline-note");
+  const kinds = Object.keys(sim?.kinds || {});
+  const sel = $("seg-kind");
+  if (sel.options.length !== kinds.length) {
+    sel.replaceChildren(...kinds.map((k) => h("option", { value: k, title: sim.kinds[k] }, KIND_KO[k] || k)));
+  }
+  for (const id of ["seg-kind", "seg-start", "seg-end", "seg-add-btn"]) $(id).disabled = !ok;
+  if (!sim) { box.replaceChildren(); note.hidden = true; return; }
+  note.hidden = sim.mode === "sim";
+  note.textContent = "실제 데이터 모드: 시간표는 가상 상황에서만 적용된다 (기억해 두었다가 [가상 상황] 으로 바꾸면 씀).";
+
+  const now = simNow();
+  const d0 = dayStart(now);
+  const pct = (t) => Math.min(100, Math.max(0, ((t - d0) / DAY_MS) * 100));
+  // 내용이 같으면 다시 만들지 않고 지금 선만 옮긴다 (안전 상황을 몇 초마다 다시 그려서, 다시 만들면 [삭제] 클릭이 사라진다)
+  const items = dayItems().filter((it) => it.status !== "skipped" && it.start_at);
+  const sig = JSON.stringify([sim.mode, ok, kstDay(now), sim.timeline, sim.segment,
+    (sim.timeline || []).filter((x) => ms(x.end) <= now).length, items.map((it) => [it.start_at, it.place_id])]);
+  const nowLine = box.querySelector(".tl-now");
+  if (box.dataset.sig === sig && nowLine) {
+    nowLine.style.left = `${pct(now)}%`;
+    nowLine.title = `지금 ${hhmm(now)}`;
+    return;
+  }
+  box.dataset.sig = sig;
+  const bar = h(`div.tl-bar${sim.mode === "sim" ? "" : ".off"}`, { title: `${kstDay(now)} 0~24시 (가상 시각 날짜)` });
+  for (const x of sim.timeline || []) {
+    const a = pct(ms(x.start));
+    const b = pct(ms(x.end));
+    if (b <= a) continue; // 그날 밖
+    bar.append(h(`div.tl-seg.k-${x.kind}`, {
+      style: { left: `${a}%`, width: `${b - a}%` }, title: `${KIND_KO[x.kind] || x.kind} ${span(x)}`,
+    }));
+  }
+  for (const it of items) {
+    const t = Date.parse(`${kstDay(now)}T${it.start_at.slice(0, 5)}:00+09:00`);
+    bar.append(h("div.tl-item", { style: { left: `${pct(t)}%` }, title: `${it.start_at.slice(0, 5)} ${it.place?.title || it.place_id}` }));
+  }
+  bar.append(h("div.tl-now", { style: { left: `${pct(now)}%` }, title: `지금 ${hhmm(now)}` }));
+  const axis = h("div.tl-axis", ...[0, 6, 12, 18, 24].map((x) => h("span", { style: { left: `${(x / 24) * 100}%` } }, String(x))));
+
+  const cur = sim.segment;
+  const list = (sim.timeline || []).map((x, i) => {
+    const isCur = cur && x.kind === cur.kind && x.start === cur.start && x.end === cur.end;
+    const past = ms(x.end) <= now;
+    return h(`li${isCur ? ".cur" : past ? ".past" : ""}`,
+      h(`span.tl-dot.k-${x.kind}`), ` ${KIND_KO[x.kind] || x.kind} ${span(x)}`,
+      isCur ? h("span.muted", " ← 지금") : past ? h("span.muted", " (지남)") : null,
+      h("button.link", {
+        disabled: !ok, title: "이 구간 삭제",
+        onclick: () => setTimeline((sim.timeline || []).filter((_, j) => j !== i), `구간 삭제: ${KIND_KO[x.kind] || x.kind} ${span(x)}`),
+      }, "삭제"));
+  });
+  box.replaceChildren(
+    h("div.tl-head", h("span.muted", `날씨 시간표 ${kstDay(now).slice(5).replace("-", "/")} (구간 밖은 평상시)`),
+      h("span.tl-legend", ...["storm", "flood", "wind", "rain"].map((k) => h("span", h(`span.tl-dot.k-${k}`), KIND_KO[k])),
+        h("span", h("span.tl-tick"), "일정"))),
+    bar, axis,
+    list.length ? h("ul.tl-list", ...list) : h("p.muted.tl-empty", "시간표 비어 있음 — 지금은 평상시"),
+  );
+}
+
+/** [구간 추가]: 가상 시각 날짜의 시작~끝 (끝이 시작보다 이르면 다음 날). */
+function addSegment() {
+  const sim = S.sim;
+  const a = $("seg-start").value;
+  const b = $("seg-end").value;
+  if (!sim || !a || !b) return;
+  const day = kstDay(simNow());
+  const start = Date.parse(`${day}T${a}:00+09:00`);
+  let end = Date.parse(`${day}T${b}:00+09:00`);
+  if (end <= start) end += DAY_MS;
+  const kind = $("seg-kind").value;
+  setTimeline([...(sim.timeline || []), { kind, start: kstIso(start), end: kstIso(end) }],
+    `구간 추가: ${KIND_KO[kind] || kind} ${a}~${b}${b <= a ? " (다음 날)" : ""}`);
+}
 
 // ---------- ③ 위치 · 여행 ----------
 

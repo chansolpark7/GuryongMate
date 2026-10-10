@@ -77,7 +77,26 @@
         </div>
         <p class="note" id="src-note" hidden></p>
         <div class="chips" id="scenario-chips"></div>
+        <div class="row" id="until-row">
+          <span class="muted">끝:</span>
+          <div class="seg" role="group" aria-label="시나리오가 끝나는 시각" id="until-seg">
+            <button data-until="none" class="on">계속</button>
+            <button data-until="60">1시간</button>
+            <button data-until="120">2시간</button>
+            <button data-until="at">시각 지정</button>
+          </div>
+          <input type="time" id="until-time" aria-label="끝나는 시각 (가상 시각의 날짜)" hidden>
+        </div>
         <p class="desc" id="scenario-desc"></p>
+        <div id="sim-timeline" aria-label="가상 날씨 시간표"></div>
+        <form class="row" id="seg-add" autocomplete="off">
+          <select id="seg-kind" aria-label="구간 종류"></select>
+          <input type="time" id="seg-start" aria-label="시작" required>
+          <span class="muted">~</span>
+          <input type="time" id="seg-end" aria-label="끝 (포함 안 함)" required>
+          <button type="submit" id="seg-add-btn" title="PUT /safety/sim {timeline}">구간 추가</button>
+        </form>
+        <p class="note" id="timeline-note" hidden></p>
         <div id="safety-summary"></div>
         <div class="row">
           <button class="primary" id="btn-scan" title="POST /planner/safety/scan → POST /trip/plans/{id}/tick?now=">안전 점검 지금 + 틱</button>
