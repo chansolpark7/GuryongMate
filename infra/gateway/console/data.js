@@ -10,6 +10,7 @@ export async function loadConn() {
   ]);
   S.health = health.status === "fulfilled";
   S.agentInfo = info.status === "fulfilled" ? info.value : null;
+  S.agentInfoOk = info.status === "fulfilled";
   S.routing = routing.status === "fulfilled" ? routing.value : null;
   emit("conn");
 }
