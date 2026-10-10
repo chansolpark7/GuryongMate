@@ -74,10 +74,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
     try {
       _sim = await api.sim();
+      _s.setServerTime(_sim!.now);
       _simDisabled = false;
     } on ApiException catch (e) {
       _sim = null;
       _simDisabled = e.status == 404;
+      if (_simDisabled) _s.serverOffset = Duration.zero;
     } catch (_) {
       _sim = null;
     }
@@ -87,6 +89,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _setSim(Map<String, dynamic> body, String toast) async {
     try {
       final s = await _s.api.setSim(body);
+      _s.setServerTime(s.now); // 계획 목록의 오늘도 바로 따라가게
       if (!mounted) return;
       setState(() => _sim = s);
       showInfo(context, toast);

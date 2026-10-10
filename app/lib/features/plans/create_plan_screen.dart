@@ -54,7 +54,7 @@ class _CreatePlanScreenState extends State<CreatePlanScreen> {
   String _hhmm(TimeOfDay t) => '${two(t.hour)}:${two(t.minute)}';
 
   Future<void> _pickDates() async {
-    final now = dateOnly(DateTime.now());
+    final now = context.read<AppSession>().serverToday(); // 데모 가상 시각 기준 오늘
     final r = await showDateRangePicker(
       context: context,
       firstDate: now.subtract(const Duration(days: 365)),

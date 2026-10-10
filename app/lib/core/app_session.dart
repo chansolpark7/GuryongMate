@@ -68,6 +68,30 @@ class AppSession extends ChangeNotifier implements AuthHandler {
   late GuryongApi api;
   Future<bool>? _refreshing;
 
+  /// 서비스 시각 - 기기 시계 (데모 가상 시각, `GET /safety/sim`). 404 sim_disabled(실제 데이터)면 0.
+  Duration serverOffset = Duration.zero;
+
+  /// 서비스 기준 지금. 여행 날짜 판단(계획 목록 분류·D-n·새 계획 기본 날짜)은 이걸 쓴다.
+  /// 서버가 실제 시각으로 남긴 값(created_at·decided_at 등)과 비교할 때는 그대로 DateTime.now().
+  DateTime serverNow() => DateTime.now().add(serverOffset);
+
+  /// 서비스 기준 오늘 (KST 날짜).
+  DateTime serverToday() {
+    final k = serverNow().toUtc().add(const Duration(hours: 9));
+    return DateTime(k.year, k.month, k.day);
+  }
+
+  void setServerTime(DateTime now) => serverOffset = now.difference(DateTime.now());
+
+  /// 서비스 시각을 다시 맞춘다 (계획 목록을 불러올 때마다 — 관제 화면에서 가상 시각을 바꿨을 수 있다). 네트워크 오류면 이전 값 그대로.
+  Future<void> syncClock() async {
+    try {
+      setServerTime((await api.sim()).now);
+    } on ApiException catch (e) {
+      if (e.status == 404) serverOffset = Duration.zero;
+    } catch (_) {}
+  }
+
   String get baseUrl => _baseUrl;
   bool get signedIn => status == AuthStatus.signedIn;
   @override

@@ -28,7 +28,8 @@ class PlanListScreen extends StatefulWidget {
   const PlanListScreen({super.key});
 
   /// 오늘 (테스트·데모에서 바꿀 수 있다).
-  static DateTime Function() today = () => dateOnly(DateTime.now());
+  /// 테스트에서 오늘을 고정할 때. null 이면 서비스 기준 오늘 ([AppSession.serverToday], 데모 가상 시각을 따른다).
+  static DateTime Function()? today;
 
   @override
   State<PlanListScreen> createState() => _PlanListScreenState();
@@ -45,10 +46,12 @@ class _PlanListScreenState extends State<PlanListScreen> {
   }
 
   Future<void> _load() async {
-    final api = context.read<AppSession>().api;
-    final today = PlanListScreen.today();
+    final session = context.read<AppSession>();
+    final api = session.api;
     try {
-      final plans = await api.plans();
+      final (plans, _) = await (api.plans(), session.syncClock()).wait;
+      if (!mounted) return;
+      final today = _today();
       final rows = await Future.wait(plans.map((p) async {
         int pending = 0;
         try {
@@ -165,10 +168,12 @@ class _PlanListScreenState extends State<PlanListScreen> {
     }
   }
 
+  DateTime _today() => PlanListScreen.today?.call() ?? context.read<AppSession>().serverToday();
+
   @override
   Widget build(BuildContext context) {
     final rows = _rows;
-    final today = PlanListScreen.today();
+    final today = _today();
     final traveling = (rows ?? []).where((r) => r.trip?.active == true).toList()
       ..sort((a, b) => (b.trip!.startedAt ?? DateTime(0)).compareTo(a.trip!.startedAt ?? DateTime(0)));
     final current = traveling.firstOrNull;

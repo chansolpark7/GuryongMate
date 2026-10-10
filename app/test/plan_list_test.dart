@@ -73,4 +73,22 @@ void main() {
     }
     expect(find.text('Planner'), findsOneWidget, reason: '삭제 후 원본 카드 탭');
   });
+  testWidgets('데모 가상 시각: 기기 시계가 아니라 서비스 기준 오늘로 나눈다 (가상 시각의 오늘 일정은 지난 여행이 아니다)', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(390, 844));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final fake = ListGateway();
+    // 서비스 시각은 기기보다 40일 전. 그날 하루 일정은 기기 기준으론 지난 여행이지만 서비스 기준으론 오늘 여행
+    final sim = DateTime.now().toUtc().add(const Duration(hours: 9)).subtract(const Duration(days: 40));
+    String ymd(DateTime d) => '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+    fake.plans[1] = planJson([itemJson(1, 1, '구룡포 시장', '10:00', '11:00')], title: '엄마랑 구룡포', start: ymd(sim), end: ymd(sim));
+    fake.gw.on('GET /safety/sim', (_) => Res.json(200, {'mode': 'sim', 'scenario': 'calm', 'now': '${ymd(sim)}T14:43:00+09:00', 'scenarios': {}}));
+    final session = await signedInSession(fake.gw);
+    await tester.pumpWidget(ChangeNotifierProvider.value(value: session, child: const GuryongApp()));
+    await tester.pumpAndSettle();
+
+    expect(find.text('엄마랑 구룡포'), findsOneWidget);
+    expect(find.text('지난 여행'), findsNothing);
+    expect(find.text('오늘 여행'), findsOneWidget);
+    expect(session.serverToday(), DateTime(sim.year, sim.month, sim.day));
+  });
 }

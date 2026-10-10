@@ -135,7 +135,7 @@ void main() {
   testWidgets('29: 지금 여행 중 카드 · 안전 배지(오늘~3일) · 먼 여행 "날씨는 MM/DD부터" · 새 경고 점', (tester) async {
     await phone(tester);
     PlanListScreen.today = () => DateTime(2026, 10, 10);
-    addTearDown(() => PlanListScreen.today = () => DateUtils.dateOnly(DateTime.now()));
+    addTearDown(() => PlanListScreen.today = null);
     final gw = FixtureGateway(['f5_delay.json', 'f6_safety.json']);
     final plans = [
       planJson([itemJson(1, 1, '구룡포 일본인 가옥거리', '12:30', '13:30')], id: 1, title: '엄마랑 구룡포', start: '2026-10-10', end: '2026-10-10'),
