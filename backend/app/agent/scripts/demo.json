@@ -100,6 +100,17 @@
    ]
   },
   {
+   "id": "behind_schedule",
+   "when": {"event": "delay", "reason": "behind_schedule"},
+   "steps": [
+    {"thinking": "새 위반은 없지만 다음 일정에 30분 넘게 늦는다. 지난 일은 바꾸지 않고, trip 이 계산한 추천 변경(머무는 곳 체류 늘리기 또는 다음 장소 시작 미루기)으로 남은 일정을 미룬다.",
+     "tools": [{"name": "view_plan"}]},
+    {"tools": [{"name": "update_item", "args": {"item_id": "$event:suggest.item_id", "stay_minutes": "$event:suggest.stay_minutes", "start_time": "$event:suggest.start_time"}}]},
+    {"tools": [{"name": "review_plan"}]},
+    {"text": "{{event:next.title}} 도착이 {{event:next.planned_start}} 예정에서 {{event:next.eta}}으로 {{event:delay_minutes}}분쯤 늦어질 것 같아요. 남은 일정을 그만큼 뒤로 미루는 안을 준비했어요, 그러면 오늘 일정은 {{end:1}}에 끝나요. 다른 방법으로 뒤 장소 체류를 줄이거나 한 곳을 빼서 원래 시간에 맞출 수도 있어요."}
+   ]
+  },
+  {
    "id": "scene3_delay",
    "when": {"event": "delay"},
    "steps": [

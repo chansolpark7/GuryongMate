@@ -419,14 +419,14 @@ Sonnet 5.5 의 thinking 블록도 읽지 못한다. Haiku 5.5 에는 서버측 f
 - **스트리밍**: 텍스트·추론을 6자 조각으로 나눠 `AGENT_SCRIPTED_DELAY_MS`(30ms) 간격, 호출마다 `AGENT_SCRIPTED_LATENCY_MS`(300ms) 뒤에 보낸다.
   가이드 노트 JSON 은 화면에 흐르지 않으니 400자 조각으로 보낸다.
 - **상태가 없다**: 호출마다 메시지 목록에서 지금 상황을 읽는다 — 턴의 사용자 메시지(하네스 안내 `[시스템] …` 제외), 그 뒤 assistant 메시지 수(각본의 몇 번째 단계),
-  선제 턴(`[이벤트] 일정 지연: …` → `delay`), 가이드 준비(시스템 프롬프트·`## 장소 (place_id …)`), 동행 모드(`## 현재 상황 (여행 중)`), 대기 제안(`## 승인 대기 중인 제안`),
+  선제 턴(`[이벤트] 일정 지연: …` → `delay`, `일정 밀림` → `delay` + reason `behind_schedule`), 가이드 준비(시스템 프롬프트·`## 장소 (place_id …)`), 동행 모드(`## 현재 상황 (여행 중)`), 대기 제안(`## 승인 대기 중인 제안`),
   검토 관문이 되돌린 호출(마지막 메시지가 검토 안내).
 - **각본 파일** `backend/app/agent/scripts/*.json` (이름순으로 이어 붙이고, 위에서부터 처음 맞는 턴을 쓴다. 파일을 고치면 다음 호출부터 다시 읽는다):
 
   ```jsonc
   {"fallback": "맞는 각본이 없을 때 답 (기본: 데모 문장으로 말해 달라는 안내)",
    "turns": [{"id": "scene3_keep_museum",
-              "when": {"user": "과메기\s*문화관.*유지", "pending": true},   // user(정규식) | event(delay·safety_raised) | guide_place(정규식)
+              "when": {"user": "과메기\s*문화관.*유지", "pending": true},   // user(정규식) | event(delay·safety_raised) | reason(behind_schedule, 없으면 모든 이유) | guide_place(정규식)
                                                                            // | mode(plan·guide) | pending | system(정규식). 모두 맞아야 함
               "steps": [{"thinking": "…", "tools": [{"name": "discard_changes"}]},
                         {"tools": [{"name": "add_rule", "args": {"type": "must_include", "place_id": "kto-2660046"}}]},
@@ -438,7 +438,8 @@ Sonnet 5.5 의 thinking 블록도 읽지 못한다. Haiku 5.5 에는 서버측 f
 - **참조** (도구 결과에 따라 달라지는 값): 인자 값 전체가 `"$…"` 이거나 텍스트 안의 `{{…}}`.
   `item:<place_id>` 지금 일정(가장 최근 도구 결과의 일정, 없으면 시스템 프롬프트의 현재 일정)의 항목 id — 이번 턴에 넣은 항목은 음수 임시 id /
   `order:<place_id>` 순서 / `start:<place_id>` 시작 시각 / `end:<n>` n일차 종료 시각 / `last:<도구>.<경로>` 이번 턴 그 도구의 최근 결과
-  (예: `last:search_places.items[0].place_id`) / `memory:<분류>` view_memory·remember 결과의 항목 id. 못 찾으면 인자는 빠지고 텍스트는 빈 문자열.
+  (예: `last:search_places.items[0].place_id`) / `memory:<분류>` view_memory·remember 결과의 항목 id /
+  `event:<경로>` 선제 턴 이벤트 payload 의 값 (숨김 메시지의 `근거:` JSON 과 `예상 지연`, 예: `event:suggest.stay_minutes`). 못 찾으면 인자는 빠지고 텍스트는 빈 문자열.
 - 그 호출에 주지 않은 도구는 부르지 않는다 (예: 선제 턴의 `recommend_places`) — 실제 모델과 같게.
 
 **데모 각본** (`scripts/demo.json`, `scripts/guide_notes.json`, 데모 데이터 docs/app/README.md §6.1)
@@ -451,6 +452,7 @@ Sonnet 5.5 의 thinking 블록도 읽지 못한다. Haiku 5.5 에는 서버측 f
 | `repropose_default` | 그 밖의 다시 제안 | 일정 확인 후 "바꿀 것 없음" |
 | `scene2_house_built` · `scene2_name` | "언제 지어진 집들이에요?" · "왜 이름이 구룡포야?" | 가이드 노트 확인 → 자료 찾기 → 해설 |
 | `scene2_shorter` | "더 짧게" | `remember(style, "해설은 핵심만 짧게", user)` → `style_length: short` |
+| `behind_schedule` | 선제 턴 `delay` + reason `behind_schedule` (`scene3_delay` 보다 위) | 일정 확인 → `update_item`(trip 의 추천 변경 `event:suggest.*` 그대로) → 검토 → "○○ 도착이 … 늦어질 것 같아요. 남은 일정을 그만큼 뒤로 미루는 안 … 다른 방법으로 …" |
 | `scene3_delay` | 선제 턴 `delay` | 일정 확인 → 과메기문화관 빼기 → 검토 → 세 문장 답변 |
 | `scene3_keep_museum` | "과메기문화관은 유지해줘" (대기 제안 있을 때) | 초안 비우기 → `must_include` → 구룡포항 30분 → 새 제안이 이전 제안 대체 |
 | `scene4_safety` | 선제 턴 `safety_raised` | 안전 확인 → 실내 찾기 → 북방파제를 근대문화역사관으로 교체. 관문이 차량 구간(침수 감시 구역)을 되돌리면 이유를 덧붙인 답 |
@@ -541,6 +543,7 @@ trip 이 단계 3 이벤트(`delay`, `safety_raised`)에서 부른다. 앱은 �
   | type | 할 일 (LLM 에 주는 지시) |
   |---|---|
   | `delay` | 오늘 남은 일정을 고친 **추천안 하나**를 만든다 (체류 줄이기·순서 바꾸기·영향받는 곳 빼기/다른 날로·가까운 대체 장소). 완료·지난 시간은 바꾸지 않는다. + 답변 형식 |
+  | `delay` + `payload.reason: behind_schedule` (일정 밀림, docs/trip/README.md §3.2) | 숨김 메시지는 `[이벤트] 일정 밀림: …` 이고 `오늘 예상 종료`·`추천 변경` 줄이 붙는다. "남은 일정을 미룰까요?" 상황: **추천 변경을 그대로** 도구로 만든다 (머무는 중이면 지금 장소 `stay_minutes` 늘리기, 이동 중이면 다음 장소 `start_time` 을 예상 도착으로). 미뤄서 새 문제가 생기면 함께 고친다. 답변: ① 늦어진 정도·영향(다음 일정·오늘 종료) ② 미루는 추천안 ③ "다른 방법으로 …" 한 줄 (체류 줄이기·한 곳 빼기로 원래 시간 맞추기) |
   | `safety_raised` | `check_safety`로 근거를 확인하고, 신호 없는 시간대로 이동·실내 대체·이동 수단 변경 **추천안 하나**를 만든다. + 답변 형식. 못 바꾸면 이유와 조심할 점만 |
   | 그 밖 | 짧게 알리고, 바꿔야 하면 변경안을 만든다 |
 
