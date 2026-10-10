@@ -164,8 +164,9 @@ def plan_places(plan: dict) -> list[dict]:
     return [{"place_id": p, "title": t} for p, t in out.items()]
 
 
-def start(plan_id: int, user_id: str, places: list[dict], llm: LLMProvider, api: ServiceApi) -> GuideJob:
-    """작업을 등록하고 백그라운드로 돌린다. places: [{"place_id", "title"}] (노트는 이미 pending 으로 저장돼 있다)."""
+def register(plan_id: int, user_id: str, places: list[dict]) -> GuideJob:
+    """작업을 등록만 한다 (돌리기 전). 등록과 같은 틱에서 running_job·busy_places 에 보이므로, 확인 뒤 await 없이 부르면
+    동시에 들어온 요청(자동 준비·버튼)이 작업을 하나 더 만들지 않는다. places 가 없으면 바로 끝난 작업."""
     _prune()
     job = GuideJob(id=uuid.uuid4().hex, plan_id=plan_id, user_id=user_id,
                    places=[{"place_id": p["place_id"], "title": p["title"], "status": "pending", "error": "",
@@ -173,9 +174,19 @@ def start(plan_id: int, user_id: str, places: list[dict], llm: LLMProvider, api:
     _jobs[job.id] = job
     if not places:
         job.status, job.finished_at = "done", datetime.now(UTC)
-        return job
-    job.task = asyncio.create_task(_run(job, llm, api))
     return job
+
+
+def launch(job: GuideJob, llm: LLMProvider, api: ServiceApi) -> GuideJob:
+    """등록한 작업을 백그라운드로 돌린다."""
+    if job.status == "running" and job.task is None:
+        job.task = asyncio.create_task(_run(job, llm, api))
+    return job
+
+
+def start(plan_id: int, user_id: str, places: list[dict], llm: LLMProvider, api: ServiceApi) -> GuideJob:
+    """작업을 등록하고 바로 돌린다. places: [{"place_id", "title"}] (노트는 이미 pending 으로 저장돼 있다)."""
+    return launch(register(plan_id, user_id, places), llm, api)
 
 
 async def _run(job: GuideJob, llm: LLMProvider, api: ServiceApi) -> None:

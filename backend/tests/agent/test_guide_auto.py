@@ -140,6 +140,29 @@ def test_accept_while_job_running_follows_up_after_it(client, up, user):  # noqa
     assert wait_job(client, user, pid, first["job_id"])["queued"] == []
 
 
+def test_accept_then_button_at_once_makes_one_job(client, up, user, monkeypatch):  # noqa: F811
+    """승인 직후 [가이드 준비]가 바로 와도 (run_demo s1_accept) 작업은 하나. 노트 목록 조회 중에 둘이 겹치게 늦춘다."""
+    from app.agent.api import ServiceApi
+    slow = ServiceApi.list_notes
+
+    async def list_notes(self, plan_id):
+        import anyio
+        await anyio.sleep(0.3)
+        return await slow(self, plan_id)
+
+    sid, pid = new_session(client, user, ("p-house",))
+    p = propose_add(client, user, sid, "p-food")
+    monkeypatch.setattr(ServiceApi, "list_notes", list_notes)
+    th.llm.script = [note_json(), note_json(), note_json(), note_json()]
+    accept(client, user, sid, p)  # 자동 준비가 노트 목록을 기다리는 중에
+    manual = prepare(client, user, pid)  # 버튼
+    wait_idle(pid)
+    jobs = jobs_of(pid)
+    assert len(jobs) == 1 and sorted(x["place_id"] for x in jobs[0].places) == ["p-food", "p-house"]
+    assert manual["job_id"] == jobs[0].id or manual["total"] == 0
+    assert len(th.llm.calls) == 2 + 2  # 대화 2번 + 장소 2곳 (같은 장소를 두 번 만들지 않음)
+
+
 def test_recommendation_add_prepares_that_place(client, up, user):  # noqa: F811
     sid, pid = new_session(client, user, ("p-house",))
     th.llm.script = [note_json()]

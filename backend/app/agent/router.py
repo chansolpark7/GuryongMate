@@ -418,26 +418,33 @@ async def _prepare(plan_id: int, user_id: str, auth: dict[str, str], http: httpx
         if missing and not auto:
             raise AgentError(422, "place_not_in_plan", "일정에 없는 장소입니다.", place_ids=missing)
         places = [p for p in places if p["place_id"] in set(place_ids)]
-    busy = guide.busy_places(plan_id)
-    places = [p for p in places if p["place_id"] not in busy]
     if places and not force:
         skip = AUTO_SKIP if auto else ("ready",)
         status = {n["place_id"]: n["status"] for n in await api.list_notes(plan_id)}
         places = [p for p in places if status.get(p["place_id"]) not in skip]
+    # 여기부터 작업 등록·이어서 할 장소 등록까지는 await 없이 (동시에 온 승인 뒤 자동 준비·버튼이 작업을 둘 만들지 않게)
+    running = guide.running_job(plan_id)
+    busy = guide.busy_places(plan_id)
+    places = [p for p in places if p["place_id"] not in busy]
     if not places:
         return running or guide.start(plan_id, user_id, [], llm, api)  # 진행 중인 작업, 없으면 바로 끝난 빈 작업
     consume()  # 새 작업(또는 이어서 할 장소)만 센다 (AGENT_LIMIT_GUIDE_*). 넘으면 429
-    for p in places:  # 앱이 바로 '대기'로 보이게 먼저 표시 (이전 본문은 docent 가 남긴다)
-        await api.put_note(plan_id, p["place_id"], {"status": "pending"})
     job_auth = {"Authorization": f"Bearer {issue_token(user_id, GUIDE_TOKEN_TTL)}"} if "Authorization" in auth else auth
     job_api = ServiceApi(http, job_auth)
     if running is not None:
         guide.enqueue(plan_id, user_id, places, llm, job_api)
+        job = running
         log.info("guide plan=%s job=%s 진행 중 -> 끝난 뒤 이어서 %d곳%s", plan_id, running.id[:8], len(places),
                  " (자동)" if auto else "")
-        return running
-    job = guide.start(plan_id, user_id, places, llm, job_api)
-    log.info("guide plan=%s job=%s 시작: %d곳%s", plan_id, job.id[:8], len(places), " (자동)" if auto else "")
+    else:
+        job = guide.register(plan_id, user_id, places)
+        log.info("guide plan=%s job=%s 시작: %d곳%s", plan_id, job.id[:8], len(places), " (자동)" if auto else "")
+    try:
+        for p in places:  # 앱이 바로 '대기'로 보이게 먼저 표시 (이전 본문은 docent 가 남긴다)
+            await api.put_note(plan_id, p["place_id"], {"status": "pending"})
+    finally:  # 표시에 실패해도 등록한 작업은 돌린다 (장소마다 preparing 부터 다시 저장한다)
+        if job is not running:
+            guide.launch(job, llm, job_api)
     return job
 
 
