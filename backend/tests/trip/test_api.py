@@ -4,6 +4,8 @@
     짬홍 12:30~13:30 -> 구룡포항 13:37~14:07 -> 가옥거리 14:16~15:16 -> 과메기문화관 15:21~16:21 -> 근대문화역사관 16:26~17:06(17:30 마감)
 가옥거리에 머물면: 15:40 이후 역사관이 17:30 을 넘고(outside_open_hours), 16:10 이후 18:00 을 넘는다(day_overflow).
 """
+from datetime import datetime, timedelta
+
 from app.db import SessionLocal
 from app.trip import service
 
@@ -468,3 +470,26 @@ def test_delete_me(env):
 def _trip_id(env) -> int:
     with SessionLocal() as db:
         return service.latest_trip(db, "test-trip-user", env.plan_id).id
+
+
+def test_near_places_progress_order(env):
+    """가옥거리 -> 104m 떨어진 역사관: 같은 요청에서 planner 진행 상태는 가옥거리 done 다음 역사관 visiting, 이벤트도 departed 다음 arrived."""
+    visited_until_port(env)
+    env.start("14:10")
+    env.stay(HOUSE, "14:10", 3)
+    (hlat, hlng), (mlat, mlng) = env.coords(HOUSE), env.coords(HISTORY)
+    t0, pts = at("14:30"), []
+    for i in range(5):  # 25m 간격 걷기 (70m/분)
+        f = min(i * 25 / 104, 1)
+        pts.append((hlat + (mlat - hlat) * f, hlng + (mlng - hlng) * f, t0 + timedelta(seconds=i * 21.4)))
+    pts += [(mlat, mlng, t0 + timedelta(seconds=86 + s)) for s in range(30, 181, 30)]
+    env.clock.when = pts[-1][2]
+    before = len(progress_calls(env))
+    r = ok(env.c.post(env.url("/location"), headers=H, json={"points": [
+        {"lat": la, "lng": ln, "accuracy": 10, "recorded_at": t.isoformat()} for la, ln, t in pts]}))
+    assert [e["type"] for e in r["events"]] == ["departed", "arrived"]
+    assert r["events"][0]["message"] == "구룡포 일본인 가옥거리을(를) 떠났어요."  # 다음 일정·도착 예정은 이미 지난 이야기
+    arr = r["events"][1]
+    assert arr["payload"]["place_id"] == HISTORY and datetime.fromisoformat(arr["now"]) == t0 + timedelta(seconds=3 * 21.4)
+    assert [(c[0], c[1]) for c in progress_calls(env)[before:]] == [(item_id(env, 3), "done"), (item_id(env, 5), "visiting")]
+    assert r["state"]["current"]["item_id"] == item_id(env, 5)

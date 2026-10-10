@@ -1,4 +1,4 @@
-"""trip 처리 흐름: 여행일 시작·종료, 위치 → 판정 → 이벤트, 백그라운드 틱, 단계 3 큐 전송.
+"""trip 처리 흐름: 여행일 시작·종료, 위치 → 판정 → 이벤트, 백그라운드 틱, 단계 3 큐 전송, 앱 활동(보류·재개).
 판정은 judge.py, 이벤트 정책은 policy.py (순수 함수). 여기서는 DB·다른 서비스 호출만 엮는다.
 """
 import logging
@@ -133,11 +133,14 @@ def _known(db: Session, td: TripDay) -> set[str]:
     return policy.known_causes(list(db.scalars(select(TripEvent.cause_key).where(TripEvent.trip_day_id == td.id))))
 
 
-def _last_delay(db: Session, td: TripDay) -> tuple[int, float | None] | None:
+def _last_delay(db: Session, td: TripDay, not_queued: bool = False) -> tuple[int, float | None] | None:
     """이 여행일의 마지막 delay 이벤트 (id, 그때 delay_minutes). 일정 밀림을 다시 물을 기준 (judge.behind_ref).
-    전송에 실패(failed)했거나 큐에서 대체된(suppressed) 것도 센다 — 원인 키와 같이, 같은 상황을 다시 만들지 않는다."""
-    row = db.execute(select(TripEvent.id, TripEvent.payload).where(
-        TripEvent.trip_day_id == td.id, TripEvent.type == "delay").order_by(TripEvent.id.desc()).limit(1)).first()
+    전송에 실패(failed)했거나 큐에서 대체된(suppressed) 것도 센다 — 원인 키와 같이, 같은 상황을 다시 만들지 않는다.
+    not_queued: 아직 큐에 있는 것은 빼고 (보류된 delay 가 지금도 유효한지 볼 때, _revalidate)."""
+    q = select(TripEvent.id, TripEvent.payload).where(TripEvent.trip_day_id == td.id, TripEvent.type == "delay")
+    if not_queued:
+        q = q.where(TripEvent.status != "queued")
+    row = db.execute(q.order_by(TripEvent.id.desc()).limit(1)).first()
     return (row[0], (row[1] or {}).get("delay_minutes")) if row else None
 
 
@@ -153,18 +156,68 @@ def _record(db: Session, td: TripDay, dets: list[judge.Detection], known: set[st
     return out
 
 
-def _mark(td: TripDay, kind: str, now: datetime) -> judge.Detection:
+def _mark(td: TripDay, kind: str, now: datetime, detail: str | None = None) -> judge.Detection:
     text = {"day_started": f"{td.day}일차 여행을 시작했어요.", "day_ended": f"{td.day}일차 여행을 마쳤어요."}[kind]
-    return judge.Detection(kind, now, message=text, cause_key=f"{kind}:{now.isoformat()}",
-                           payload={"reason": td.ended_reason} if kind == "day_ended" else {})
+    payload = {}
+    if kind == "day_ended":
+        payload = {"reason": td.ended_reason} | ({"detail": detail} if detail else {})
+    return judge.Detection(kind, now, message=text, cause_key=f"{kind}:{now.isoformat()}", payload=payload)
 
 
-def _finish(db: Session, td: TripDay, reason: str, now: datetime) -> list[TripEvent]:
-    """여행일 종료. 아직 못 보낸 단계 3은 더 이상 의미가 없어 suppressed (단계 1~3은 여행 중에만)."""
+def _finish(db: Session, td: TripDay, reason: str, now: datetime, clients: Clients, auth: dict,
+            detail: str | None = None) -> list[TripEvent]:
+    """여행일 종료. 아직 못 보낸 단계 3은 더 이상 의미가 없어 suppressed (단계 1~3은 여행 중에만).
+    그날 머무는 중(visiting)인 planner 항목은 done 으로 정리한다 (_close_visiting).
+    detail: 자동 종료의 세부 사유 (midnight | plan_end | new_day, day_ended payload.detail)."""
     td.ended_at, td.ended_reason = now, reason
     db.execute(update(TripEvent).where(TripEvent.trip_day_id == td.id, TripEvent.status == "queued")
                .values(status="suppressed"))
-    return _record(db, td, [_mark(td, "day_ended", now)], set())
+    _close_visiting(clients, td, now, auth)
+    return _record(db, td, [_mark(td, "day_ended", now, detail)], set())
+
+
+def _close_at(td: TripDay, now: datetime) -> str:
+    """종료로 정리하는 완료 시각 (HH:MM): 종료 시각. 자정이 지나 끝났거나 다른 날 시작으로 끝나면 그날 23:59."""
+    return judge.hhmm(now) if now.date() == td.date else "23:59"
+
+
+def _close_visiting(clients: Clients, td: TripDay, now: datetime, auth: dict) -> None:
+    """여행일이 끝날 때 그날 visiting 항목을 planner 진행 상태 done 으로 (at = 종료 시각, version 은 그대로).
+    그대로 두면 앱 플랜 탭에 '지금 여기'가 계속 보인다. planner 에 접근할 수 없으면 종료는 그대로 하고 로그만 남긴다."""
+    try:
+        spots = judge.spots_from_plan(clients.planner.get_plan(td.plan_id, auth), td.day)
+    except UpstreamError as e:
+        log.warning("trip: 종료 때 머무는 항목을 정리하지 못함 (계획 %s): %s", td.plan_id, e)
+        return
+    for s in spots:
+        if s.status != "visiting":
+            continue
+        try:
+            clients.planner.progress(td.plan_id, s.item_id, "done", _close_at(td, now), auth)
+        except UpstreamError as e:
+            log.warning("trip: 종료 때 항목 %s 을 done 으로 바꾸지 못함 (계획 %s): %s", s.item_id, td.plan_id, e)
+
+
+def _reopen_track(clients: Clients, td: TripDay, plan: dict, now: datetime, auth: dict) -> None:
+    """같은 날 여행일을 다시 열 때 판정 상태. 끝날 때 머무는 곳을 done 으로 정리했으므로:
+    - 끝낸 지 TRIP_ACTIVE_MIN 안이고 그 항목이 정리한 그대로(done, 완료 시각 = 종료 시각)면 실수로 끝낸 것으로 보고 다시 머무는 중으로 되돌린다
+      (planner 진행 상태 visiting, 처음 도착 시각).
+    - 아니면 머무는 곳 없이(idle) 시작한다. 그 장소에 다시 가도 이미 다녀온(done) 항목이라 도착이 나지 않는다 — 이미 들른 곳이므로 괜찮다."""
+    ended = _kst(td.ended_at)
+    if td.current_state == "visiting" and td.current_item_id is not None and ended is not None:
+        item = next((i for d in plan.get("days") or [] for i in d["items"] if i["id"] == td.current_item_id), None)
+        recent = settings.active_min and timedelta(0) <= now - ended <= timedelta(minutes=settings.active_min)
+        if (recent and item is not None and item.get("status") == "done"
+                and (item.get("done_at") or "")[:5] == _close_at(td, ended)):
+            since = _kst(td.current_since)
+            try:
+                clients.planner.progress(td.plan_id, td.current_item_id, "visiting",
+                                         judge.hhmm(since) if since else None, auth)
+                return  # 판정 상태(visiting)는 그대로 둔다
+            except UpstreamError as e:
+                log.warning("trip: 다시 열 때 항목 %s 을 되돌리지 못함 (계획 %s): %s", td.current_item_id, td.plan_id, e)
+    if td.current_state == "visiting":
+        _save_track(td, judge.Track())
 
 
 # ---------- 시작·종료 ----------
@@ -196,7 +249,7 @@ def start(db: Session, user_id: str, plan_id: int, session_id: str | None, auth:
                 current.session_id = session_id
                 db.commit()
             return state_view(current, plan_id, clock)
-        _finish(db, current, "auto", now)  # 다른 날 여행일이 진행 중 -> 끝내고 새로 시작
+        _finish(db, current, "auto", now, clients, auth, "new_day")  # 다른 날 여행일이 진행 중 -> 끝내고 새로 시작
 
     td = db.scalars(select(TripDay).where(TripDay.user_id == user_id, TripDay.plan_id == plan_id,
                                           TripDay.date == today).order_by(TripDay.id.desc())).first()
@@ -210,8 +263,10 @@ def start(db: Session, user_id: str, plan_id: int, session_id: str | None, auth:
                    for s in spots if items[s.item_id].get("arrived_at")}
         _save_track(td, judge.track_from_spots(spots, arrived))
     else:  # 같은 날 종료했던 여행일을 다시 연다 (이미 알린 원인은 그대로 기억)
+        _reopen_track(clients, td, plan, now, auth)
         td.ended_at, td.ended_reason, td.started_at = None, None, now
     td.session_id = session_id or td.session_id or _resolve_session(clients, plan_id, auth)
+    td.active_at = now  # 시작도 앱 활동이다 (§4.1)
     db.flush()
     _record(db, td, [_mark(td, "day_started", now)], set())
     db.commit()
@@ -224,7 +279,7 @@ def end(db: Session, user_id: str, plan_id: int, auth: dict, clients: Clients, c
         _ensure_plan(clients, plan_id, auth)
         return state_view(None, plan_id, clock)
     if td.ended_at is None:
-        _finish(db, td, "user", clock.now())
+        _finish(db, td, "user", clock.now(), clients, auth)
         db.commit()
     return state_view(td, plan_id, clock)
 
@@ -233,6 +288,41 @@ def delete_user(db: Session, user_id: str) -> None:
     for td in db.scalars(select(TripDay).where(TripDay.user_id == user_id)):
         db.delete(td)  # 이벤트는 ON DELETE CASCADE
     db.commit()
+
+
+# ---------- 앱 활동 (§4.1 보류) ----------
+
+HELD = "보류: 앱 활동 없음"  # 활동이 없어 보내지 않은 단계 3 의 last_error (활동이 돌아오면 _revalidate 가 지운다)
+
+
+def _is_active(td: TripDay, now: datetime) -> bool:
+    return judge.is_active(_kst(td.active_at), now, settings.active_min)
+
+
+def _held(db: Session, td: TripDay) -> bool:
+    return db.scalars(select(TripEvent.id).where(TripEvent.trip_day_id == td.id, TripEvent.status == "queued",
+                                                 TripEvent.level == 3, TripEvent.last_error == HELD)
+                      .limit(1)).first() is not None
+
+
+def _activity(db: Session, td: TripDay, at: datetime, located: bool = False) -> bool:
+    """앱 활동(위치 전송·이벤트 조회)을 기록한다. 활동 시각은 trip 의 지금 기준이다 (위치는 recorded_at 과 큰 쪽).
+    -> 활동이 돌아왔으면(이전 활동이 TRIP_ACTIVE_MIN 보다 오래됐거나 보류된 단계 3 이 있음) True: 응답 뒤 resume."""
+    back = not _is_active(td, at) or _held(db, td)
+    td.active_at = judge.bump_active(_kst(td.active_at), at)
+    if located:
+        td.located_at = judge.bump_active(_kst(td.located_at), at)
+    return back
+
+
+def touch(db: Session, user_id: str, plan_id: int, clock: Clock) -> int | None:
+    """이벤트 조회(GET events)를 앱 활동으로 기록. 활동이 돌아왔으면 그 여행일 id (응답 뒤 resume), 아니면 None."""
+    td = latest_trip(db, user_id, plan_id)
+    if td is None or td.ended_at is not None:
+        return None
+    back = _activity(db, td, clock.now())
+    db.commit()
+    return td.id if back else None
 
 
 # ---------- 판정 상태 저장 ----------
@@ -284,6 +374,7 @@ class HazardCache:
         self.ttl = ttl_sec
         self._fp: str | None = None
         self._zones: list[dict] = []
+        self._sit: dict | None = None  # 마지막으로 받은 상황 (받지 못했으면 None)
         self._until = 0.0
         self._lock = threading.Lock()
 
@@ -292,7 +383,9 @@ class HazardCache:
             if _time.monotonic() < self._until:
                 return self._zones
             try:
-                fp = clients.safety.situation().get("fingerprint")
+                self._sit = None
+                self._sit = clients.safety.situation()
+                fp = self._sit.get("fingerprint")
                 if fp != self._fp or fp is None:
                     self._zones = clients.safety.avoid().get("zones", [])
                     self._fp = fp
@@ -301,9 +394,14 @@ class HazardCache:
             self._until = _time.monotonic() + self.ttl
             return self._zones
 
+    def situation(self, clients: Clients) -> dict | None:
+        """safety 상황 (GET /safety/situation, 구역과 같은 캐시). 받지 못했으면 None."""
+        self.zones(clients)
+        return self._sit
+
     def reset(self) -> None:
         with self._lock:
-            self._fp, self._zones, self._until = None, [], 0.0
+            self._fp, self._zones, self._sit, self._until = None, [], None, 0.0
 
 
 hazards = HazardCache(settings.hazard_cache_sec)
@@ -312,7 +410,8 @@ hazards = HazardCache(settings.hazard_cache_sec)
 # ---------- 위치 ----------
 
 def record_location(db: Session, user_id: str, plan_id: int, points: list[LocationIn], auth: dict, clients: Clients,
-                    clock: Clock) -> LocationResult:
+                    clock: Clock) -> tuple[LocationResult, bool]:
+    """-> (결과, 앱 활동이 돌아왔는지: True 면 응답 뒤 resume)."""
     td = active_trip(db, user_id, plan_id)
     plan = _ensure_plan(clients, plan_id, auth)
     spots = judge.spots_from_plan(plan, td.day)
@@ -344,6 +443,8 @@ def record_location(db: Session, user_id: str, plan_id: int, points: list[Locati
         last = pt
 
     _save_track(td, track)
+    now = clock.now()
+    back = _activity(db, td, max(now, last.recorded_at) if last is not None else now, located=last is not None)
     known = _known(db, td)
     if last is not None:
         td.lat, td.lng, td.accuracy, td.recorded_at, td.source = (last.lat, last.lng, last.accuracy,
@@ -356,9 +457,10 @@ def record_location(db: Session, user_id: str, plan_id: int, points: list[Locati
             if d:
                 dets.append(d)
         by_id = {s.item_id: s for s in spots}
-        for d in dets:
+        for i, d in enumerate(dets):
             if d.type == "departed":
-                nxt = td.next
+                # 같은 요청에서 다음 장소 도착까지 났으면(가까운 장소 전환 등) 다음 일정·예상 도착은 이미 지난 이야기라 빼고 떠남만
+                nxt = None if any(x.type == "arrived" for x in dets[i + 1:]) else td.next
                 target = by_id.get(nxt["item_id"]) if nxt else None
                 d.message = judge.departed_message(d.payload["title"], nxt, target.title if target else None,
                                                    target.leg_mode if target else None, d.at)
@@ -369,14 +471,16 @@ def record_location(db: Session, user_id: str, plan_id: int, points: list[Locati
     events = _record(db, td, dets, known)
     views = [event_view(e) for e in events]
     db.commit()
-    return LocationResult(state=state_view(td, plan_id, clock), events=views, accepted=accepted, ignored=ignored)
+    return LocationResult(state=state_view(td, plan_id, clock), events=views, accepted=accepted, ignored=ignored), back
 
 
 # ---------- 백그라운드 틱 (§4.3) ----------
 
-def tick_trip(db: Session, td: TripDay, clients: Clients, clock: Clock, now: datetime | None = None) -> list[EventView]:
-    """진행 중인 여행일 하나: 지연 재판정 → 안전 경고 수집 → 자동 종료. (큐 전송은 dispatch)
-    now: 판정 시각 (생략하면 trip 의 지금. 재생기는 재생 시각을 넘긴다)."""
+def tick_trip(db: Session, td: TripDay, clients: Clients, clock: Clock, now: datetime | None = None,
+              revalidate: bool = False) -> list[EventView]:
+    """진행 중인 여행일 하나: 지연 재판정 → 안전 경고 수집 → 상황 해제 → 자동 종료. (큐 전송은 dispatch)
+    now: 판정 시각 (생략하면 trip 의 지금. 재생기는 재생 시각을 넘긴다).
+    revalidate: 앱 활동이 돌아왔을 때(resume) — 큐의 단계 3 중 지금도 유효한 최신 한 건만 남긴다 (_revalidate)."""
     if td.ended_at is not None:
         return []
     hazards.reset()  # 틱마다 위험 구역도 새로 본다 (상황이 바뀐 직후 재생에서도 바로 반영)
@@ -394,8 +498,13 @@ def tick_trip(db: Session, td: TripDay, clients: Clients, clock: Clock, now: dat
     # 1. 위치가 안 들어와도 시간이 흐르면 지연이 생긴다
     track = _load_track(td)
     proj = _project(clients, td, track, now, auth)
+    delay_valid: bool | None = None  # 큐의 delay 가 지금도 유효한지 (revalidate). None: 재계산 실패 -> 모름
     if proj is not None:
         _apply_projection(td, proj)
+        if revalidate:  # 큐에 있는 것을 빼고 본 기준으로: 지금도 위반이나 밀림이 있나
+            delay_valid = judge.judge_delay(proj, now, frozenset(), behind_min=settings.behind_min, plan=plan,
+                                            day=td.day, track=track,
+                                            notice=_last_delay(db, td, not_queued=True)) is not None
         d = judge.judge_delay(proj, now, known, behind_min=settings.behind_min, plan=plan, day=td.day,
                               track=track, notice=_last_delay(db, td))
         if d:
@@ -418,14 +527,75 @@ def tick_trip(db: Session, td: TripDay, clients: Clients, clock: Clock, now: dat
         except UpstreamError as e:
             log.warning("trip 틱: 경고 %s seen 처리 실패: %s", a["id"], e)  # 원인 키(경고 id)로 다시 알리지는 않는다
 
-    events = _record(db, td, dets, known)
+    # 3. 상황 해제: 이 여행일에 주의·위험이던 safety 상황이 모두 평상시로 -> safety_eased (situation_cleared).
+    #    같은 틱에 planner 경고 완화(safety_eased)가 있으면 그것 하나만 (원인 키를 합쳐 같은 해제를 다시 알리지 않는다)
+    sit = hazards.situation(clients)
+    if sit is not None:
+        td.situation, cleared = judge.judge_situation(sit, td.situation, now, td.day)
+        if cleared:
+            eased = next((x for x in dets if x.type == "safety_eased"), None)
+            if eased is not None:
+                eased.cause_key += "|" + cleared.cause_key
+                eased.payload["situation_cleared"] = True
+            else:
+                dets.append(cleared)
 
-    # 3. 자동 종료 (그날 마지막 일정 종료 + TRIP_AUTO_END_MIN, 또는 자정)
-    if judge.should_auto_end(now, td.date, judge.day_end_at(plan, td.day), settings.auto_end_min):
-        events += _finish(db, td, "auto", now)
+    events = _record(db, td, dets, known)
+    if revalidate:
+        _revalidate(db, td, delay_valid)
+
+    # 4. 자동 종료 (그날 마지막 일정 종료 + TRIP_AUTO_END_MIN 이 지나고 최근 위치가 없음, 또는 자정)
+    reason = judge.auto_end_reason(now, td.date, judge.day_end_at(plan, td.day), settings.auto_end_min,
+                                   _kst(td.located_at), settings.active_min)
+    if reason:
+        events += _finish(db, td, "auto", now, clients, auth, reason)
     views = [event_view(e) for e in events]
     db.commit()
     return views
+
+
+def _revalidate(db: Session, td: TripDay, delay_valid: bool | None) -> None:
+    """앱 활동이 돌아왔을 때: 큐의 단계 3 중 지금도 유효한 것에서 최신 한 건만 남기고 (안전 > 지연) 나머지는 suppressed.
+    - delay: 지금 재계산으로도 위반이나 밀림이 있음 (delay_valid. 재계산 실패면 유효로 본다)
+    - safety_raised: 그 뒤에 상황 해제(situation_cleared)나, 그 항목들이 모두 safe 로 내려간 경고 완화가 없음"""
+    db.flush()
+    rows = list(db.scalars(select(TripEvent).where(TripEvent.trip_day_id == td.id, TripEvent.status == "queued",
+                                                   TripEvent.level == 3)))
+    if not rows:
+        return
+    eased = list(db.scalars(select(TripEvent).where(TripEvent.trip_day_id == td.id, TripEvent.type == "safety_eased")))
+
+    def lifted(e: TripEvent) -> bool:
+        for x in eased:
+            p = x.payload or {}
+            if x.id < e.id:
+                continue
+            if p.get("reason") == "situation_cleared" or p.get("situation_cleared"):
+                return True
+            safe = {c["item"]["item_id"] for c in p.get("changes") or [] if c.get("to_risk") == "safe"}
+            if e.item_ids and set(e.item_ids) <= safe:
+                return True
+        return False
+
+    valid = {e.id for e in rows if (delay_valid is not False if e.type == "delay" else not lifted(e))}
+    keep, suppress = policy.pick_resume([policy.Queued(e.id, e.type, tuple(e.item_ids)) for e in rows], valid)
+    for e in rows:
+        if e.id in suppress:
+            e.status = "suppressed"
+        elif e.last_error == HELD:
+            e.last_error = None
+    if suppress:
+        log.info("trip: 활동 복귀 (여행일 %s) — 보낼 것 %s, 억제 %s", td.id, keep, suppress)
+
+
+def resume(trip_id: int, clients: Clients, clock: Clock) -> None:
+    """앱 활동이 돌아옴 (응답 뒤 백그라운드): 틱과 같은 지연·안전 재판정을 한 번 하고, 큐의 단계 3 중 지금도 유효한 최신 한 건만 보낸다."""
+    with SessionLocal() as db:
+        td = db.get(TripDay, trip_id, with_for_update=True, populate_existing=True)
+        if td is None or td.ended_at is not None:
+            return
+        tick_trip(db, td, clients, clock, revalidate=True)
+    dispatch(trip_id, clients, clock)
 
 
 def tick_plan(db: Session, user_id: str, plan_id: int, clients: Clients, clock: Clock,
@@ -488,8 +658,10 @@ def _proposal_id(result: dict) -> int | None:
     return None
 
 
-def dispatch(trip_id: int, clients: Clients, clock: Clock) -> int:
+def dispatch(trip_id: int, clients: Clients, clock: Clock, now: datetime | None = None) -> int:
     """큐에 있는 단계 3 이벤트를 하나씩 Agent 선제 턴으로 보낸다. 보낸 수.
+    앱 활동이 TRIP_ACTIVE_MIN 넘게 없으면 보내지 않고 queued 로 둔다 (last_error=HELD, 시도 수는 세지 않음. §4.1).
+    now: 활동을 볼 기준 시각의 하한 (틱 API 의 판정 시각 — 가상 시각을 옮긴 직후 trip 시계 캐시가 늦어도 맞게).
     한 여행일에 한 번에 하나만 (다른 전송이 진행 중이면 바로 돌아간다 — 그쪽이 끝난 뒤 이어서 보낸다).
     Agent 가 응답 중(409 agent_busy)이면 queued 로 두고 다음 틱에 다시 (실패로 세지 않는다).
     접근할 수 없거나 오류면 간격을 늘려 다시 보내고, TRIP_PROACTIVE_MAX_ATTEMPTS 번 실패하면 failed (_fail_attempt)."""
@@ -515,6 +687,12 @@ def dispatch(trip_id: int, clients: Clients, clock: Clock) -> int:
                 for e in rows:
                     if e.id in suppress:
                         e.status = "suppressed"
+                ref = max(clock.now(), _kst(now)) if now is not None else clock.now()
+                if pick is not None and not _is_active(td, ref):  # 앱이 꺼져 있음 -> 보류 (활동이 돌아오면 resume)
+                    for e in rows:
+                        if e.id not in suppress:
+                            e.last_error = HELD
+                    return sent
                 if pick is None or _waiting_retry(pick.id, clock.now()):
                     return sent
                 ev = next(e for e in rows if e.id == pick.id)

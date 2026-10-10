@@ -321,3 +321,80 @@ def test_day_end_at_uses_plan_or_actual_done():
     assert judge.day_end_at(plan, 1) == "17:06"
     assert judge.day_end_at(plan, 2) is None
     assert judge.day_end_at({"days": [{"end_at": None, "items": []}]}, 1) is None
+
+
+# ---------- 가까운 두 장소 사이 이동 (반경이 겹침, 암묵 전환) ----------
+
+# 가옥거리 -> 근대문화역사관 약 104m (fakes.PLACES 좌표). 반경 70m 가 겹친다
+HOUSE = Spot(11, 1, "가옥거리", "kto-1909659", 35.9906209551, 129.5604550366, "visiting")
+HIST = Spot(12, 2, "근대문화역사관", "kto-2603493", 35.9905, 129.5616, "planned")
+NEAR = [HOUSE, HIST]
+WALK_SEC = 25 / 70 * 60  # 25m 간격, 70m/분
+
+
+def between(f: float) -> tuple[float, float]:
+    """가옥거리(0) -> 역사관(1) 사이 f 지점."""
+    return HOUSE.lat + (HIST.lat - HOUSE.lat) * f, HOUSE.lng + (HIST.lng - HOUSE.lng) * f
+
+
+def staying_house() -> Track:
+    return Track(state="visiting", item_id=11, since=T0 - timedelta(minutes=30), last_at=T0 - timedelta(seconds=30))
+
+
+def near_walk() -> list[Point]:
+    """가옥거리에서 역사관까지 25m 간격으로 걷고, 역사관에 30초 간격으로 3분 머문다."""
+    total = distance_m(*between(0), *between(1))
+    n = int(total // 25)
+    pts = [pt(between(min(i * 25 / total, 1)), i * WALK_SEC) for i in range(n + 1)] + [pt(between(1), n * WALK_SEC + 1)]
+    end = pts[-1].recorded_at
+    return pts + [Point(HIST.lat, HIST.lng, 10, end + timedelta(seconds=s)) for s in range(30, 181, 30)]
+
+
+def test_near_places_switch_after_arrive_dwell():
+    pts = near_walk()
+    # 첫 'B 가 더 가깝고 B 반경 안' 점
+    first = next(p for p in pts if distance_m(p.lat, p.lng, HIST.lat, HIST.lng) < distance_m(p.lat, p.lng, HOUSE.lat, HOUSE.lng)
+                 and distance_m(p.lat, p.lng, HIST.lat, HIST.lng) <= 70)
+    before = [p for p in pts if p.recorded_at < first.recorded_at + timedelta(seconds=90)]
+    track, dets = run(before, staying_house(), NEAR)
+    assert dets == [] and track.state == "visiting" and track.item_id == 11 and track.cand_item_id == 12
+    track, dets = run(pts, staying_house(), NEAR)
+    assert [(d.type, d.item_ids) for d in dets] == [("departed", [11]), ("arrived", [12])]
+    assert dets[1].at == first.recorded_at and dets[0].at <= dets[1].at
+    assert dets[0].payload["stayed_minutes"] == 31 and dets[1].card["place_id"] == "kto-2603493"
+    assert track.state == "visiting" and track.item_id == 12 and track.since == first.recorded_at
+    assert (track.cand_item_id, track.outside_since) == (None, None)
+
+
+def test_overlap_but_house_closer_stays():
+    p = between(0.4)  # 가옥거리 약 42m, 역사관 약 62m: 둘 다 반경 안이지만 가옥거리가 더 가깝다
+    track, dets = run([pt(p, s) for s in range(0, 601, 30)], staying_house(), NEAR)
+    assert dets == [] and (track.state, track.item_id, track.cand_item_id) == ("visiting", 11, None)
+
+
+def test_brief_closer_to_next_then_back_resets_candidate():
+    pts = [pt(between(0.7), s) for s in (0, 30, 60)] + [pt(between(0.2), s) for s in (90, 120, 300)]
+    track, dets = run(pts, staying_house(), NEAR)
+    assert dets == [] and (track.state, track.item_id, track.cand_item_id, track.cand_since) == ("visiting", 11, None, None)
+
+
+def test_no_implicit_switch_to_done_or_skipped():
+    for status in ("done", "skipped"):
+        spots = [HOUSE, judge.replace(HIST, status=status)]
+        pts = [pt(between(1), s) for s in range(0, 181, 30)]  # 가옥거리 반경(70m) 밖, 역사관 위
+        track, dets = run(pts[:4], staying_house(), spots)  # 90초: 암묵 전환 없음
+        assert dets == []
+        track, dets = run(pts, staying_house(), spots)  # 120초 정상 출발만, 도착 없음
+        assert [(d.type, d.at) for d in dets] == [("departed", T0)]
+        assert track.state == "moving"
+
+
+def test_normal_departure_keeps_earlier_entry_to_next():
+    """정상 출발(반경 밖 120초)이 먼저 나도, 그 전에 들어온 B 반경 진입 시각을 이어받아 도착 시각이 된다."""
+    track = Track(state="visiting", item_id=1, since=T0 - timedelta(minutes=30))
+    pts = [pt(north(A, 150), 0), pt(north(B, 0), 60), pt(north(B, 0), 90), pt(north(B, 0), 120)]
+    track, dets = run(pts, track)
+    assert [(d.type, d.at) for d in dets] == [("departed", T0)]
+    assert (track.state, track.cand_item_id, track.cand_since) == ("moving", 2, T0 + timedelta(seconds=60))
+    track, dets = run([pt(north(B, 0), 150)], track)
+    assert [(d.type, d.at) for d in dets] == [("arrived", T0 + timedelta(seconds=60))]  # 출발 점부터 다시 세지 않음

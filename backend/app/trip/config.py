@@ -31,7 +31,11 @@ class TripSettings(BaseSettings):
     # 다시 보내기 전 기다림은 retry_sec 에서 실패마다 두 배 (trip 의 지금 기준). agent_busy(응답 중)는 실패로 세지 않는다
     proactive_max_attempts: int = 3
     proactive_retry_sec: float = 30
+    # 자동 종료 (§1.2): 계획 종료 + 이만큼(분) 지나면. 다만 최근 위치(active_min 안)가 있으면 미룬다
     auto_end_min: float = 120
+    # 앱 활동 (§4.1): 마지막 위치 전송·이벤트 조회가 이보다(분, trip 의 지금 기준) 오래면 단계 3 전송을 보류한다.
+    # 자동 종료를 미루는 '최근 위치'의 기준도 같다. 0 이면 끔 (늘 활동 중으로 본다)
+    active_min: float = 15
 
     # 다른 서비스 (compose 가 게이트웨이 주소를 넣는다). 컨테이너 안에서는 항상 8000 번 포트
     planner_base_url: str = "http://127.0.0.1:8000"

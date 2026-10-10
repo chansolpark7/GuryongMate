@@ -5,6 +5,9 @@ DB·HTTP 를 쓰지 않는다. 같은 입력이면 같은 결과라 pytest 와 �
 - 지연:      judge_delay() planner projection 의 new_violations 중 일정에 영향이 있는 것, 또는 다음 일정이 30분 이상 밀림
 - 위험 구역: judge_hazard() safety /avoid 구역 안이거나 50m 안
 - 안전 경고: judge_alert() planner 경고의 오늘 남은 항목 변화
+- 상황 해제: judge_situation() 이 여행일에 주의·위험이던 safety 상황(구역 단계·특보)이 모두 평상시로
+- 앱 활동:   is_active()   마지막 위치 전송·이벤트 조회가 TRIP_ACTIVE_MIN 안 (아니면 단계 3 전송 보류)
+- 자동 종료: auto_end_reason() 자정, 또는 계획 종료 + 120분이 지나고 최근 위치도 없음
 감지 결과의 중복 억제·전송 순서는 policy.py 가 정한다.
 """
 from dataclasses import dataclass, field, replace
@@ -153,7 +156,10 @@ def ignore_reason(track: Track, point: Point, cfg: TrackConfig) -> str | None:
 def step(track: Track, spots: list[Spot], point: Point, cfg: TrackConfig) -> tuple[Track, list[Detection]]:
     """점 하나를 받아 새 상태와 도착·출발 감지를 돌려준다 (ignore_reason 을 통과한 점만 넣는다).
 
-    - 머무는 중: 반경 밖이 depart_dwell_sec 이상 이어지면 출발 (시각 = 처음 나간 시각). 한 점만 밖이면 다시 들어올 때 초기화.
+    - 머무는 중(A): 반경 밖이 depart_dwell_sec 이상 이어지면 출발 (시각 = 처음 나간 시각). 한 점만 밖이면 다시 들어올 때 초기화.
+      가까운 장소로 옮겨 갈 때(반경이 겹쳐 A 반경 밖 시간이 짧다): 남은 항목 B 의 반경 안이고 A 보다 B 에 더 가까운 점이
+      arrive_dwell_sec 이어지면 A 출발 → B 도착 (암묵 전환). 출발 시각 = A 반경을 이미 벗어났으면 처음 나간 시각, 아니면 B 후보 시작
+      (도착보다 늦지 않게), 도착 시각 = B 후보 시작. 그 전에 정상 출발(반경 밖 depart_dwell_sec)이 나면 B 후보 시작을 이어받는다.
     - 그 밖: 오늘 남은(planned) 항목 중 가장 가까운 것의 반경 안에 arrive_dwell_sec 이상 머물면 도착 (시각 = 처음 들어온 시각).
       예정 순서가 아니어도 도착으로 본다 (out_of_order).
     """
@@ -166,45 +172,69 @@ def step(track: Track, spots: list[Spot], point: Point, cfg: TrackConfig) -> tup
         spot = by_id.get(track.item_id)
         if spot is None or spot.status in ("done", "skipped"):
             track = Track(last_at=track.last_at)  # 일정에서 빠졌거나 다른 곳에서 완료 처리됨 -> 조용히 끝
-        elif spot.lat is not None and distance_m(point.lat, point.lng, spot.lat, spot.lng) <= r:
-            track = replace(track, outside_since=None)
         else:
-            out = track.outside_since or t
-            if (t - out).total_seconds() >= cfg.depart_dwell_sec:
-                stayed = int((out - track.since).total_seconds() // 60) if track.since else None
-                dets.append(Detection("departed", out, [spot.item_id], cause_key=f"departed:{spot.item_id}",
-                                      payload={"item_id": spot.item_id, "title": spot.title, "stayed_minutes": stayed}))
-                track = Track(state="moving", item_id=spot.item_id, since=out)
+            here = distance_m(point.lat, point.lng, spot.lat, spot.lng) if spot.lat is not None else None
+            out = None if here is not None and here <= r else (track.outside_since or t)
+            # 머무는 중에도 다른 남은 항목 B 를 본다: B 반경 안이고 A 보다 B 에 더 가까울 때만 후보 (깨지면 초기화)
+            cand = _nearest(spots, point, r, skip=spot.item_id, closer_than=here)
+            c_since = None
+            if cand is not None:
+                c_since = track.cand_since if track.cand_item_id == cand.item_id and track.cand_since else t
+            if cand is not None and (t - c_since).total_seconds() >= cfg.arrive_dwell_sec:
+                dep = min(out, c_since) if out is not None else c_since
+                dets += [_departed(spot, dep, track.since), _arrived(cand, c_since, spots)]
+                return Track(state="visiting", item_id=cand.item_id, since=c_since, last_at=t), dets
+            if out is not None and (t - out).total_seconds() >= cfg.depart_dwell_sec:
+                dets.append(_departed(spot, out, track.since))
+                # 머무는 중에 이미 B 에 들어와 있었으면 그 시각부터 이어서 센다 (도착 시각 = 실제 진입 시각)
+                track = Track(state="moving", item_id=spot.item_id, since=out,
+                              cand_item_id=cand.item_id if cand else None, cand_since=c_since)
                 left = spot.item_id
             else:
-                track = replace(track, outside_since=out)
+                track = replace(track, outside_since=out, cand_item_id=cand.item_id if cand else None,
+                                cand_since=c_since)
 
     if track.state != "visiting":
-        near = None
-        for s in spots:
-            if s.status != "planned" or s.lat is None or s.item_id == left:
-                continue
-            d = distance_m(point.lat, point.lng, s.lat, s.lng)
-            if d <= r and (near is None or d < near[0]):
-                near = (d, s)
-        if near is None:
+        s = _nearest(spots, point, r, skip=left)
+        if s is None:
             track = replace(track, cand_item_id=None, cand_since=None)
         else:
-            s = near[1]
             since = track.cand_since if track.cand_item_id == s.item_id and track.cand_since else t
             if (t - since).total_seconds() >= cfg.arrive_dwell_sec:
-                first = next((x for x in sorted(spots, key=lambda x: x.order) if x.status == "planned"), None)
-                out_of_order = first is not None and first.item_id != s.item_id
-                dets.append(Detection(
-                    "arrived", since, [s.item_id], message=f"{s.title}에 도착했어요. 이야기 들어볼까요?",
-                    cause_key=f"arrived:{s.item_id}",
-                    payload={"item_id": s.item_id, "place_id": s.place_id, "title": s.title, "out_of_order": out_of_order},
-                    card={"kind": "docent", "place_id": s.place_id, "item_id": s.item_id}))
+                dets.append(_arrived(s, since, spots))
                 track = Track(state="visiting", item_id=s.item_id, since=since)
             else:
                 track = replace(track, cand_item_id=s.item_id, cand_since=since)
 
     return replace(track, last_at=t), dets
+
+
+def _nearest(spots: list[Spot], point: Point, r: float, skip: int | None = None,
+             closer_than: float | None = None) -> Spot | None:
+    """반경 r 안의 남은(planned) 항목 중 가장 가까운 것. closer_than: 그 거리보다 가까울 때만 (머무는 곳보다 더 가까움)."""
+    near = None
+    for s in spots:
+        if s.status != "planned" or s.lat is None or s.item_id == skip:
+            continue
+        d = distance_m(point.lat, point.lng, s.lat, s.lng)
+        if d <= r and (closer_than is None or d < closer_than) and (near is None or d < near[0]):
+            near = (d, s)
+    return near[1] if near else None
+
+
+def _departed(spot: Spot, at: datetime, since: datetime | None) -> Detection:
+    stayed = int((at - since).total_seconds() // 60) if since else None
+    return Detection("departed", at, [spot.item_id], cause_key=f"departed:{spot.item_id}",
+                     payload={"item_id": spot.item_id, "title": spot.title, "stayed_minutes": stayed})
+
+
+def _arrived(s: Spot, since: datetime, spots: list[Spot]) -> Detection:
+    first = next((x for x in sorted(spots, key=lambda x: x.order) if x.status == "planned"), None)
+    out_of_order = first is not None and first.item_id != s.item_id
+    return Detection("arrived", since, [s.item_id], message=f"{s.title}에 도착했어요. 이야기 들어볼까요?",
+                     cause_key=f"arrived:{s.item_id}",
+                     payload={"item_id": s.item_id, "place_id": s.place_id, "title": s.title, "out_of_order": out_of_order},
+                     card={"kind": "docent", "place_id": s.place_id, "item_id": s.item_id})
 
 
 def departed_message(title: str, nxt: dict | None, next_title: str | None, mode: str | None, at: datetime) -> str:
@@ -408,6 +438,55 @@ def judge_alert(alert: dict, trip_date: date, remaining: set[int], at: datetime)
     return out
 
 
+# ---------- 상황 해제 (safety /situation) ----------
+
+SITUATION_CLEARED_MSG = "악천후가 그쳤어요. 지금 구룡포는 특이사항이 없어요."
+
+
+def judge_situation(sit: dict, state: dict | None, at: datetime, day: int) -> tuple[dict, Detection | None]:
+    """safety 상황(GET /safety/situation)을 보고 이 여행일의 상황 기록을 갱신한다 -> (새 기록, 상황 해제 감지 또는 None).
+    - 주의·위험: 구역 단계가 caution·danger 이거나 발효 특보가 있음. 처음이면 상황 번호 n 을 하나 올린다 (그 뒤는 구역·특보를 모은다).
+    - 해제: 주의·위험이던 상황에서 지금은 주의·위험 구역도 특보도 없고, 그때 주의·위험이던 구역이 지금 모두 safe (값이 없으면 모르는 것 -> 기다림).
+      safety_eased (단계 1, payload.reason=situation_cleared). 원인 키 safety_eased:situation:{day}:{n} -> 같은 해제는 한 번만.
+    planner 경고 완화는 남은 일정 항목 단계가 내려갈 때만 나와, 위험했던 일정이 이미 지난 뒤 상황이 풀리면 신호가 없다 (docs/console §7.6)."""
+    st = dict(state or {"abnormal": False, "n": 0, "zones": [], "warnings": []})
+    zones = sit.get("zones") or {}
+    bad = sorted(z for z, v in zones.items() if v in ("caution", "danger"))
+    warns = sorted(sit.get("warnings") or [])
+    if bad or warns:
+        if not st.get("abnormal"):
+            return {"abnormal": True, "n": st.get("n", 0) + 1, "zones": bad, "warnings": warns,
+                    "since": at.isoformat()}, None
+        return st | {"zones": sorted(set(st.get("zones") or []) | set(bad)),
+                     "warnings": sorted(set(st.get("warnings") or []) | set(warns))}, None
+    if not st.get("abnormal") or any(zones.get(z) != "safe" for z in st.get("zones") or []):
+        return st, None
+    n = st.get("n", 1)
+    det = Detection("safety_eased", at, [], SITUATION_CLEARED_MSG, cause_key=f"safety_eased:situation:{day}:{n}",
+                    payload={"reason": "situation_cleared", "alert_id": None, "changes": [],
+                             "zones": st.get("zones") or [], "warnings": st.get("warnings") or [],
+                             "since": st.get("since")})
+    return st | {"abnormal": False}, det
+
+
+# ---------- 앱 활동 ----------
+
+def is_active(active_at: datetime | None, now: datetime, active_min: float) -> bool:
+    """마지막 활동(위치 전송·이벤트 조회)이 active_min 분 안이면 활동 중. 기록이 없거나(이 기능 전 여행일) 0 이면 활동 중으로 본다.
+    활동 시각이 지금보다 늦어도(가상 시각을 되돌림, 시계 캐시) 활동 중이다."""
+    if not active_min or active_at is None:
+        return True
+    return now - active_at <= timedelta(minutes=active_min)
+
+
+def bump_active(old: datetime | None, new: datetime) -> datetime:
+    """활동 시각 갱신: 늦은 쪽을 남긴다 (trip 시계 캐시가 위치 recorded_at 보다 몇 초 늦어도 줄지 않게).
+    다만 가상 시각을 크게(6시간 넘게) 되돌린 것이면 새 값으로."""
+    if old is None or new >= old or old - new > timedelta(hours=6):
+        return new
+    return old
+
+
 # ---------- 자동 종료 ----------
 
 def day_end_at(plan: dict, day: int) -> str | None:
@@ -421,11 +500,24 @@ def day_end_at(plan: dict, day: int) -> str | None:
     return max(ends) if ends else None
 
 
-def should_auto_end(now: datetime, trip_date: date, end_at: str | None, auto_end_min: float) -> bool:
-    """자정이 지났거나, 그날 마지막 일정 종료 + auto_end_min 이 지나면 자동 종료."""
+def auto_end_reason(now: datetime, trip_date: date, end_at: str | None, auto_end_min: float,
+                    located_at: datetime | None = None, active_min: float = 0) -> str | None:
+    """자동 종료할 이유, 아니면 None.
+    - midnight: 자정이 지남 (언제나)
+    - plan_end: 그날 마지막 일정 종료 + auto_end_min 이 지났고, 최근 위치(active_min 분 안)가 없음.
+      많이 늦은 채 아직 다니는 중이면(위치가 들어옴) 미루고, 위치가 끊긴 뒤 active_min 분이 지나면 끝낸다."""
     if now.date() > trip_date:
-        return True
+        return "midnight"
     if not end_at:
-        return False
+        return None
     end = datetime.combine(trip_date, time.fromisoformat(end_at), tzinfo=now.tzinfo)
-    return now >= end + timedelta(minutes=auto_end_min)
+    if now < end + timedelta(minutes=auto_end_min):
+        return None
+    if active_min and located_at is not None and now - located_at <= timedelta(minutes=active_min):
+        return None
+    return "plan_end"
+
+
+def should_auto_end(now: datetime, trip_date: date, end_at: str | None, auto_end_min: float,
+                    located_at: datetime | None = None, active_min: float = 0) -> bool:
+    return auto_end_reason(now, trip_date, end_at, auto_end_min, located_at, active_min) is not None

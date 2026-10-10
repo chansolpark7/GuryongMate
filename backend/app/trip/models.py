@@ -1,7 +1,7 @@
 """trip 테이블 (docs/trip/README.md §7). 전체 이동 기록은 저장하지 않는다: 마지막 위치와 머무름 판정에 필요한 시각만 둔다."""
 from datetime import date, datetime
 
-from sqlalchemy import Date, DateTime, Float, ForeignKey, Integer, String, Text, func
+from sqlalchemy import DDL, Date, DateTime, Float, ForeignKey, Integer, String, Text, event, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -44,6 +44,12 @@ class TripDay(Base):
     delay_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
     next: Mapped[dict | None] = mapped_column(JSONB, nullable=True)  # TripState.next
 
+    # 앱 활동 (§4.1): 마지막 위치 전송·이벤트 조회 시각 / 마지막 위치 전송 시각 (trip 의 지금 기준, 위치는 recorded_at 과 큰 쪽)
+    active_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    located_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # 이 여행일의 안전 상황 (§3.2 상황 해제): {"abnormal": bool, "n": 주의·위험 상황 번호, "zones": [...], "warnings": [...]}
+    situation: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -73,3 +79,13 @@ class TripEvent(Base):
     seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     attempts: Mapped[int] = mapped_column(Integer, default=0)  # 단계 3 전송 시도 수
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+# 이미 만들어진 테이블에 새 컬럼 추가 (planner/models.py 와 같은 방식, Alembic 미사용). create_all 직후 매번, 있으면 건너뛴다
+_UPGRADES = [
+    "ALTER TABLE trip_day ADD COLUMN IF NOT EXISTS active_at TIMESTAMP WITH TIME ZONE",
+    "ALTER TABLE trip_day ADD COLUMN IF NOT EXISTS located_at TIMESTAMP WITH TIME ZONE",
+    "ALTER TABLE trip_day ADD COLUMN IF NOT EXISTS situation JSONB",
+]
+for _sql in _UPGRADES:
+    event.listen(Base.metadata, "after_create", DDL(_sql).execute_if(dialect="postgresql"))

@@ -7,7 +7,7 @@ from datetime import date, datetime, time, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import delete
+from sqlalchemy import delete, select, update
 
 from app.db import SessionLocal, init_db
 from app.main import app
@@ -104,9 +104,24 @@ class Env:
             events += self.loc(place, (t0 + timedelta(seconds=s)).strftime("%H:%M:%S"))["events"]
         return events
 
-    def tick(self, hhmm: str) -> dict:
+    def tick(self, hhmm: str, app: bool = True) -> dict:
+        """hh:mm 에 틱. app: 앱이 켜져 있음 (방금 이벤트를 조회한 것처럼 활동 시각을 그때로 — 보류 없이 지금처럼 보낸다).
+        False 면 활동을 남기지 않는다 (앱이 꺼져 위치·이벤트 조회가 없음, §4.1 보류)."""
         self.clock.when = at(hhmm)
+        if app:
+            self.set_active(hhmm)
         return ok(self.c.post(self.url("/tick"), headers=H))
+
+    def set_active(self, hhmm: str) -> None:
+        """앱 활동 시각을 직접 기록 (재판정·재개 없이)."""
+        with SessionLocal.begin() as s:
+            s.execute(update(TripDay).where(TripDay.user_id == USER, TripDay.plan_id == self.plan_id,
+                                            TripDay.ended_at.is_(None)).values(active_at=at(hhmm)))
+
+    def trip(self) -> TripDay:
+        with SessionLocal() as s:
+            return s.scalars(select(TripDay).where(TripDay.user_id == USER, TripDay.plan_id == self.plan_id)
+                             .order_by(TripDay.id.desc())).first()
 
     def events(self, after: int = 0) -> list[dict]:
         return ok(self.c.get(self.url(f"/events?after={after}&limit=200"), headers=H))
