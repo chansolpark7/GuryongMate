@@ -109,14 +109,16 @@ class _DetourSheetState extends State<_DetourSheet> {
                         Polyline(points: _avoid!.points, strokeWidth: 5, color: AppColors.primary, borderStrokeWidth: 2, borderColor: Colors.white),
                     ]),
                     MarkerLayer(markers: [
-                      Marker(
-                        point: LatLng(loc.lat, loc.lng),
-                        width: 20,
-                        height: 20,
-                        child: Container(decoration: BoxDecoration(color: AppColors.primary, shape: BoxShape.circle, border: Border.all(color: Colors.white, width: 3))),
-                      ),
                       if (next?.place != null) Marker(point: LatLng(next!.place!.lat, next.place!.lng), width: 28, height: 28, child: const MapDot(color: AppColors.primary, icon: Icons.flag, size: 28)),
                     ]),
+                    // 시트를 연 뒤에도 위치가 들어오면 따라 움직인다 (경로는 연 순간 기준 그대로)
+                    ListenableBuilder(
+                      listenable: t,
+                      builder: (context, _) {
+                        final l = t.state?.location ?? loc;
+                        return UserLocationLayer(point: LatLng(l.lat, l.lng), size: 20, duration: t.markerGlide);
+                      },
+                    ),
                   ],
                 ),
               ),

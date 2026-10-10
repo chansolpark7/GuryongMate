@@ -24,6 +24,8 @@ class TripTiming {
     this.waitingFor = const Duration(seconds: 60),
     this.state = const Duration(seconds: 15),
     this.stateDemo = const Duration(seconds: 5),
+    this.stateDemoTrip = const Duration(seconds: 1),
+    this.markerGlide = const Duration(seconds: 1),
     this.zones = const Duration(seconds: 60),
     this.toast = const Duration(seconds: 4),
     this.previewCollapse = const Duration(seconds: 8),
@@ -37,6 +39,12 @@ class TripTiming {
 
   /// 데모 위치 모드: 서버에 들어온 위치(재생기)를 그리므로 state 를 더 자주 읽는다.
   final Duration stateDemo;
+
+  /// 데모 위치 모드 + 여행 중: 재생기·관제 화면이 약 1초마다 보내는 위치를 끊기지 않게 따라 그린다.
+  final Duration stateDemoTrip;
+
+  /// 실제 GPS 모드에서 사용자 마커가 새 위치로 옮겨 가는 시간 (위치는 30m·45초마다 들어와 주기가 일정하지 않다).
+  final Duration markerGlide;
   final Duration zones;
   final Duration toast;
   final Duration previewCollapse;
@@ -312,16 +320,29 @@ class TripController extends ChangeNotifier with WidgetsBindingObserver {
   void _scheduleState() {
     _stateTimer?.cancel();
     if (!_companion) return;
-    _stateTimer = Timer.periodic(demoMode ? timing.stateDemo : timing.state, (_) => refreshState());
+    _stateTimer = Timer.periodic(_stateEvery, (_) {
+      if (!_stateLoading) refreshState(); // 1초 주기에서 응답이 늦으면 쌓지 않는다
+    });
   }
 
+  Duration get _stateEvery => demoMode ? (active ? timing.stateDemoTrip : timing.stateDemo) : timing.state;
+
+  /// 사용자 마커가 이전 위치에서 새 위치로 옮겨 가는 시간 (≈ 위치 갱신 주기).
+  Duration get markerGlide => demoMode ? timing.stateDemoTrip : timing.markerGlide;
+
+  bool _stateLoading = false;
+
   Future<void> refreshState() async {
+    _stateLoading = true;
     try {
       _setState(await api.tripState(planId));
       if (offline) offline = false;
     } on ApiException catch (e) {
       if (e.isNetwork) offline = true;
-    } catch (_) {}
+    } catch (_) {
+    } finally {
+      _stateLoading = false;
+    }
     _notify();
   }
 

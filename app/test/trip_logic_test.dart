@@ -181,7 +181,7 @@ void main() {
       finish();
     });
 
-    testWidgets('state 는 15초마다 (데모 위치 모드는 5초 — 재생기 위치를 따라 그린다)', (tester) async {
+    testWidgets('state 는 15초마다 (데모 위치 모드 + 여행 중은 1초 — 재생기 위치를 끊기지 않게 따라 그린다)', (tester) async {
       final (t, r) = await controller(tester, 'scene2_arrival', demo: false);
       int states() => r.gw.sent('GET', '/trip/plans/{id}/state').length;
       await t.load();
@@ -193,7 +193,8 @@ void main() {
       await t.session.setDemoLocationMode(true);
       final s1 = states();
       await tester.pump(const Duration(seconds: 5));
-      expect(states(), s1 + 1);
+      expect(states(), s1 + 5, reason: '여행 중 데모 위치 모드: 1초마다');
+      expect(t.markerGlide, const Duration(seconds: 1));
       expect(r.gw.sent('POST', '/trip/plans/{id}/location'), isEmpty, reason: '데모 위치 모드는 GPS 를 보내지 않는다');
       await t.session.setDemoLocationMode(false);
       finish();

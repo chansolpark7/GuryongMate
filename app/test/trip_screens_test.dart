@@ -103,11 +103,12 @@ void main() {
     expect(gw.sent('POST', '/trip/plans/{id}/location'), isEmpty, reason: '데모 위치 모드는 GPS 를 보내지 않는다');
 
     // 실수로 시작 → 여행 종료 → 확인 → 30 "기록된 방문이 없어요"
-    state = gw.response('end_by_mistake') as Map<String, dynamic>;
     await tester.drag(find.byType(DraggableScrollableSheet), const Offset(0, -400));
     await settle(tester);
     await tapText(tester, '여행 종료');
     expect(find.text('여행을 마칠까요?'), findsOneWidget);
+    // 서버 상태는 종료 요청부터 바뀐다 (데모 위치 모드는 state 를 1초마다 읽어서, 미리 바꾸면 그 사이 끝나 버린다)
+    state = gw.response('end_by_mistake') as Map<String, dynamic>;
     await tapText(tester, '마치기', frames: 30);
     expect(find.text('오늘 여행을 마쳤어요'), findsOneWidget);
     expect(find.text('기록된 방문이 없어요. 일정은 그대로예요.'), findsOneWidget);

@@ -4,6 +4,7 @@ import 'package:latlong2/latlong.dart';
 
 import '../../core/models/safety.dart';
 import '../../core/theme/app_theme.dart';
+import '../trip/location.dart' show distanceM;
 
 const guryongpo = LatLng(35.9890, 129.5560);
 
@@ -93,5 +94,84 @@ class MapLabel extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
         decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(8), boxShadow: AppShadow.card),
         child: Text(text, style: AppText.caption.copyWith(color: color, fontWeight: FontWeight.w700), overflow: TextOverflow.ellipsis),
+      );
+}
+
+/// 사용자 위치 (점 + 정확도 원). Today·우회 안내 등 사용자 마커를 그리는 곳은 모두 이것으로.
+/// 새 위치를 받으면 지금 그려진 곳에서 [duration](≈ 위치 갱신 주기) 동안 ease-out 으로 옮겨 간다 — 데모 재생기가 1초에 25m 씩 보내도
+/// 뚝뚝 끊기지 않게. [jumpMeters] 이상 떨어진 곳(순간이동)은 애니메이션 없이 바로.
+class UserLocationLayer extends StatefulWidget {
+  const UserLocationLayer({super.key, required this.point, this.accuracy, this.duration = const Duration(seconds: 1), this.size = 22, this.dotKey});
+  final LatLng point;
+
+  /// 정확도 원 반지름(m). null 이면 원 없이 점만.
+  final double? accuracy;
+  final Duration duration;
+  final double size;
+  final Key? dotKey;
+
+  static const jumpMeters = 300.0;
+
+  @override
+  State<UserLocationLayer> createState() => _UserLocationLayerState();
+}
+
+class _UserLocationLayerState extends State<UserLocationLayer> with SingleTickerProviderStateMixin {
+  late final _anim = AnimationController(vsync: this, value: 1);
+  late LatLng _from = widget.point, _to = widget.point;
+
+  /// 지금 그려진 위치.
+  LatLng get _shown {
+    final t = Curves.easeOut.transform(_anim.value);
+    return LatLng(_from.latitude + (_to.latitude - _from.latitude) * t, _from.longitude + (_to.longitude - _from.longitude) * t);
+  }
+
+  @override
+  void didUpdateWidget(UserLocationLayer old) {
+    super.didUpdateWidget(old);
+    final p = widget.point;
+    if (p == old.point) return;
+    final cur = _shown;
+    if (widget.duration == Duration.zero || distanceM(cur.latitude, cur.longitude, p.latitude, p.longitude) >= UserLocationLayer.jumpMeters) {
+      _anim.stop();
+      _from = _to = p;
+      _anim.value = 1;
+      return;
+    }
+    _from = cur;
+    _to = p;
+    _anim.duration = widget.duration;
+    _anim.forward(from: 0);
+  }
+
+  @override
+  void dispose() {
+    _anim.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => AnimatedBuilder(
+        animation: _anim,
+        builder: (context, _) {
+          final at = _shown, acc = widget.accuracy;
+          return Stack(children: [
+            if (acc != null)
+              CircleLayer(circles: [
+                CircleMarker(point: at, radius: acc, useRadiusInMeter: true, color: AppColors.primary.withValues(alpha: 0.15), borderColor: AppColors.primary.withValues(alpha: 0.3), borderStrokeWidth: 1),
+              ]),
+            MarkerLayer(markers: [
+              Marker(
+                point: at,
+                width: widget.size,
+                height: widget.size,
+                child: Container(
+                  key: widget.dotKey,
+                  decoration: BoxDecoration(color: AppColors.primary, shape: BoxShape.circle, border: Border.all(color: Colors.white, width: 3), boxShadow: AppShadow.card),
+                ),
+              ),
+            ]),
+          ]);
+        },
       );
 }

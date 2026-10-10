@@ -331,10 +331,6 @@ class _TodayScreenState extends State<TodayScreen> {
         ZoneLayer(zones: t.zones, labels: false),
         if (t.hazard != null) ZoneLayer(zones: t.zones.where((z) => t.hazard!.zones.any((h) => h.id == z.id)).toList()),
         PolylineLayer(polylines: lines),
-        if (loc != null && acc != null)
-          CircleLayer(circles: [
-            CircleMarker(point: loc, radius: acc, useRadiusInMeter: true, color: AppColors.primary.withValues(alpha: 0.15), borderColor: AppColors.primary.withValues(alpha: 0.3), borderStrokeWidth: 1),
-          ]),
         MarkerLayer(markers: [
           for (final (n, i) in items.indexed)
             Marker(
@@ -348,17 +344,9 @@ class _TodayScreenState extends State<TodayScreen> {
                     : MapDot(color: AppColors.primary, label: '${n + 1}', size: i.id == current?.id ? 36 : 28),
               ),
             ),
-          if (loc != null)
-            Marker(
-              point: loc,
-              width: 22,
-              height: 22,
-              child: Container(
-                key: const ValueKey('today-location'),
-                decoration: BoxDecoration(color: AppColors.primary, shape: BoxShape.circle, border: Border.all(color: Colors.white, width: 3), boxShadow: AppShadow.card),
-              ),
-            ),
         ]),
+        // 사용자 위치는 장소 Pin 위에 (새 위치로 부드럽게 옮겨 간다)
+        if (loc != null) UserLocationLayer(point: loc, accuracy: acc, duration: t.markerGlide, dotKey: const ValueKey('today-location')),
       ],
     );
   }
