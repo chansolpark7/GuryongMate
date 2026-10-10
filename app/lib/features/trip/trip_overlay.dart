@@ -76,7 +76,8 @@ class _Overlays extends StatelessWidget {
     final cardTop = todayTab && onShell ? mq.padding.top + 226 : null;
     final hazard = c.hazard, arrival = c.arrival, preview = c.preview, toast = c.toast;
     final showArrival = arrival != null && !c.sheetOpen && onShell;
-    final showPreview = preview != null && !c.previewCollapsed && !c.sheetOpen;
+    // 펼친 도착 카드와 미리보기가 같은 자리에 겹치지 않게, 카드를 펼친 동안은 미리보기를 쉰다 (FAB 점은 그대로, 카드를 닫거나 접으면 다시)
+    final showPreview = preview != null && !c.previewCollapsed && !c.sheetOpen && !(showArrival && !c.arrivalCollapsed);
     return Material(
       type: MaterialType.transparency,
       child: Stack(children: [
@@ -84,11 +85,12 @@ class _Overlays extends StatelessWidget {
         if (toast != null)
           todayTab && onShell
               ? Positioned(left: 16, right: 16, top: mq.padding.top + 328, child: EventToast(event: toast, c: c))
-              : Positioned(left: 16, right: 16, bottom: navBottom + (showArrival && !c.arrivalCollapsed ? 180 : 0), child: EventToast(event: toast, c: c)),
+              : Positioned(left: 16, right: 16, bottom: navBottom + (showArrival && !c.arrivalCollapsed ? 84 : 0), child: EventToast(event: toast, c: c)),
         if (showArrival)
           Positioned(
             left: 16,
-            right: c.arrivalCollapsed ? null : 16,
+            // Today 는 오른쪽 AI·현재 위치 버튼(56 + 여백) 칸을 비운다 (2026-10-11, 카드가 FAB 를 가리지 않게)
+            right: c.arrivalCollapsed ? null : (cardTop != null ? 16 + 56 + 12 : 16),
             top: cardTop,
             bottom: cardTop == null ? navBottom : null,
             child: c.arrivalCollapsed ? _ArrivalChip(onTap: c.expandArrival) : ArrivalCard(key: ValueKey('arrival-${arrival.id}'), event: arrival, c: c),
@@ -267,8 +269,7 @@ class ArrivalCard extends StatefulWidget {
 
 class _ArrivalCardState extends State<ArrivalCard> {
   String? _status; // 노트 status, 없으면 'missing'
-  String? _style; // short | long | null
-  bool _loading = true;
+  String? _style; // short | long | null (메모리 길이 선호 → 17 처음 탭)
 
   String? get _placeId => widget.event.card?.placeId ?? widget.event.payload['place_id'] as String?;
 
@@ -288,102 +289,61 @@ class _ArrivalCardState extends State<ArrivalCard> {
       try {
         _status = (await c.api.guideNoteDetail(c.planId, pid)).status;
       } catch (_) {
-        _status = 'missing'; // 404 = 노트 없음 → 16-S1, 조회 실패도 버튼은 그대로 (17 이 오류 처리)
+        _status = 'missing'; // 404 = 노트 없음 → 눌러도 17 이 "준비된 해설이 없어요" + [지금 설명 듣기] (16-S1)
       }
     }
-    if (mounted) setState(() => _loading = false);
+    if (mounted) setState(() {});
   }
+
+  /// 패널 "지금"의 [이야기 듣기]와 같은 동작 — 17 가이드 노트 (길이는 메모리 선호, 없으면 17 기본값).
+  void _open() => widget.c.openArrivalGuide(widget.event, _style);
 
   @override
   Widget build(BuildContext context) {
     final e = widget.event;
     final title = (e.payload['title'] as String?) ?? widget.c.item(e.card?.itemId)?.title ?? '';
-    final ready = _status == 'ready' || _status == 'stale';
     final preparing = _status == 'pending' || _status == 'preparing';
-    final caption = _loading ? '도착했어요' : (ready ? '도착했어요 · 가이드 준비됨' : (preparing ? '도착했어요 · 가이드를 준비하고 있어요' : '도착했어요 · 가이드 없음'));
-    final shortFirst = _style == 'short';
-    return Container(
+    // 한두 줄 알림 (2026-10-11): 큰 버튼은 패널의 [이야기 듣기] 하나만. 카드 전체 = 같은 동작.
+    return Material(
       key: const ValueKey('arrival-card'),
-      padding: const EdgeInsets.fromLTRB(16, 12, 8, 16),
-      decoration: BoxDecoration(
-        color: AppColors.surface,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: AppColors.aiLine),
-        boxShadow: const [BoxShadow(color: Color(0x2E6E59FF), blurRadius: 24, offset: Offset(0, 8))],
-      ),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, mainAxisSize: MainAxisSize.min, children: [
-        Row(children: [
-          const Icon(Icons.auto_awesome, size: 16, color: AppColors.ai),
-          const SizedBox(width: 6),
-          Expanded(child: Text(caption, style: AppText.caption.copyWith(color: AppColors.ai, fontWeight: FontWeight.w700))),
-          if (!widget.inChat)
-            IconButton(
-              tooltip: '닫기',
-              visualDensity: VisualDensity.compact,
-              icon: const Icon(Icons.close, size: 18, color: AppColors.text3),
-              onPressed: () {
-                widget.c.markSeen(e);
-                widget.c.dismissArrival();
-              },
+      color: AppColors.surface,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16), side: const BorderSide(color: AppColors.aiLine)),
+      shadowColor: const Color(0x2E6E59FF),
+      elevation: widget.inChat ? 0 : 6,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(16),
+        onTap: _open,
+        child: Padding(
+          padding: EdgeInsets.fromLTRB(14, 10, widget.inChat ? 10 : 2, 10),
+          child: Row(children: [
+            const Icon(Icons.auto_awesome, size: 18, color: AppColors.ai),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+                // 1줄 장소명 · 2줄 "도착했어요 · 이야기 들어볼까요?" (좁은 폭에서 장소명이 글자 단위로 끊기지 않게)
+                Text(title, style: AppText.label.copyWith(fontWeight: FontWeight.w700), maxLines: 1, overflow: TextOverflow.ellipsis),
+                const SizedBox(height: 2),
+                Text.rich(
+                  TextSpan(children: [
+                    TextSpan(text: '도착했어요 · ', style: AppText.caption.copyWith(color: AppColors.ai, fontWeight: FontWeight.w700)),
+                    TextSpan(text: preparing ? '가이드를 준비하고 있어요' : '이야기 들어볼까요?', style: AppText.meta.copyWith(color: AppColors.text2)),
+                  ]),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ]),
             ),
-        ]),
-        Padding(
-          padding: const EdgeInsets.only(right: 8),
-          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-            Text(title, style: AppText.headline),
-            const SizedBox(height: 2),
-            Text('이야기 들어볼까요?', style: AppText.body.copyWith(color: AppColors.text2)),
-            const SizedBox(height: 14),
-            if (_loading)
-              const SizedBox(height: 52, child: Center(child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.ai))))
-            else if (ready)
-              Row(children: [
-                Expanded(child: _LengthButton(label: '짧게', sub: shortFirst ? '30초 · 평소 선호' : '30초', filled: shortFirst, onTap: () => widget.c.openArrivalGuide(e, 'short'))),
-                const SizedBox(width: 8),
-                Expanded(child: _LengthButton(label: '자세히', sub: _style == 'long' ? '2~3분 · 평소 선호' : '2~3분', filled: !shortFirst, onTap: () => widget.c.openArrivalGuide(e, 'long'))),
-              ])
-            else ...[
-              AppButton(
-                label: '지금 설명 듣기',
-                icon: Icons.auto_awesome,
-                kind: ButtonKind.aiSoft,
+            const Icon(Icons.chevron_right, size: 22, color: AppColors.ai),
+            if (!widget.inChat)
+              IconButton(
+                tooltip: '닫기',
+                visualDensity: VisualDensity.compact,
+                icon: const Icon(Icons.close, size: 18, color: AppColors.text3),
                 onPressed: () {
                   widget.c.markSeen(e);
                   widget.c.dismissArrival();
-                  widget.c.onOpenAi?.call(prefill: '$title 짧게 설명해줘', send: true, placeTitle: title);
                 },
               ),
-              const SizedBox(height: 6),
-              Text(preparing ? '가이드를 준비하고 있어요. 지금 바로 들으려면 눌러 주세요' : '준비된 해설이 없어 10초쯤 걸려요', style: AppText.caption),
-            ],
-          ]),
-        ),
-      ]),
-    );
-  }
-}
-
-class _LengthButton extends StatelessWidget {
-  const _LengthButton({required this.label, required this.sub, required this.filled, required this.onTap});
-  final String label;
-  final String sub;
-  final bool filled;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final fg = filled ? Colors.white : AppColors.ai;
-    return Material(
-      color: filled ? AppColors.ai : AppColors.surface,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12), side: filled ? BorderSide.none : const BorderSide(color: AppColors.aiLine)),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(12),
-        onTap: onTap,
-        child: SizedBox(
-          height: 52,
-          child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-            Text(label, style: AppText.section.copyWith(color: fg, fontSize: 15)),
-            Text(sub, style: AppText.caption.copyWith(color: filled ? const Color(0xE6FFFFFF) : AppColors.ai, fontSize: 11)),
           ]),
         ),
       ),

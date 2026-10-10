@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:provider/provider.dart';
@@ -52,6 +53,12 @@ class _MapScreenState extends State<MapScreen> {
 
   /// 내용이 바뀐 첫 프레임: 시트가 아직 이전 높이라 펼침으로 보지 않는다 (접기 전에 상세를 부르지 않게).
   bool _settling = false;
+
+  /// 접힘 내용(손잡이 + 카드/요약)을 잰 높이(px), 내용별("item:12"). 칩이 여러 줄이어도 버튼까지 보이게 (2026-10-11).
+  final _headH = <String, double>{};
+
+  /// 펼친 일정 장소의 분류 줄 ("항구/포구 · 구룡포읍") — 상세를 받아 오면 카드에 한 줄로 (상세의 제목 줄은 숨김).
+  final _category = <String, String>{};
 
   /// 구간 경로선: "fromId>toId:mode" → (점 목록, 직선 근사인지).
   final _legs = <String, (List<LatLng>, bool)>{};
@@ -201,8 +208,9 @@ class _MapScreenState extends State<MapScreen> {
     final sel = selected != null && items.any((i) => i.id == selected.id) ? selected : null;
     final detour = sel == null && _place == null && detourItem != null && _detourDismissed != detourItem.id ? detourItem : null;
     final mode = sel != null ? 'item' : _place != null ? 'place' : detour != null ? 'detour' : 'route';
-    // 접힘 높이(px): 고른 장소 카드 · 관광지 요약 + 추가 · 우회 카드 · 경로 한 줄
-    final cardPx = switch (mode) { 'item' => 236.0, 'place' => 214.0, 'detour' => 300.0, _ => 104.0 };
+    // 접힘 높이(px) = 잰 접힘 내용 높이. 재기 전 첫 프레임은 예전 고정값 (장소 카드 · 관광지 요약 + 추가 · 우회 카드 · 경로 한 줄)
+    final headKey = switch (mode) { 'item' => 'item:${sel!.id}', 'place' => 'place:${_place!.id}', 'detour' => 'detour:${detour!.id}', _ => 'route' };
+    final cardPx = _headH[headKey] ?? switch (mode) { 'item' => 236.0, 'place' => 214.0, 'detour' => 300.0, _ => 104.0 };
     return LayoutBuilder(builder: (context, box) {
       final h = box.maxHeight;
       final min = ((_floatH + cardPx) / h).clamp(0.2, 0.55);
@@ -269,25 +277,36 @@ class _MapScreenState extends State<MapScreen> {
                   controller: scroll,
                   padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
                   children: [
-                    const Grabber(),
+                    // 접힘에 보일 머리만 잰다 (펼침에서 더해지는 줄은 재지 않음)
+                    _MeasureHeight(
+                      onHeight: (px) => _onHeadHeight(headKey, px, open, min),
+                      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, mainAxisSize: MainAxisSize.min, children: [
+                        const Grabber(),
+                        ...switch (mode) {
+                          'item' => [_PlaceMapCard(controller: c, items: items, item: sel!, category: open ? _category[sel.placeId] : null)],
+                          'place' => _placeHead(c, _place!),
+                          'detour' => [
+                              _DetourCard(
+                                controller: c,
+                                item: detour!,
+                                previous: _previousOf(items, detour),
+                                on: _detourOn == detour.id,
+                                onOriginal: () => setState(() {
+                                  _detourOn = null;
+                                  _detourDismissed = detour.id;
+                                }),
+                                onUse: () => _useDetour(c, t, detour),
+                              ),
+                            ],
+                          _ => [_RouteSummary(controller: c, items: items, showDelta: showChange)],
+                        },
+                      ]),
+                    ),
                     ...switch (mode) {
-                      'item' => _itemSheet(c, t, items, sel!, open),
-                      'place' => _placeSheet(c, _place!, open),
-                      'detour' => [
-                          _DetourCard(
-                            controller: c,
-                            item: detour!,
-                            previous: _previousOf(items, detour),
-                            on: _detourOn == detour.id,
-                            onOriginal: () => setState(() {
-                              _detourOn = null;
-                              _detourDismissed = detour.id;
-                            }),
-                            onUse: () => _useDetour(c, t, detour),
-                          ),
-                        ],
+                      'item' => _itemDetail(c, t, sel!, open),
+                      'place' => _placeDetail(c, _place!, open),
+                      'detour' => const <Widget>[],
                       _ => [
-                          _RouteSummary(controller: c, items: items, showDelta: showChange),
                           const Divider(height: 24, color: AppColors.line),
                           for (final (n, i) in items.indexed) _DayRow(number: n + 1, item: i, safety: c.safety?.visit(i.id), walked: t.active && i.status == 'done', onTap: () => c.select(i.id)),
                         ],
@@ -302,9 +321,29 @@ class _MapScreenState extends State<MapScreen> {
     });
   }
 
-  /// 고른 일정 장소: 접힘 = 카드(좌우로 넘기기), 펼침 = [설명 듣기](동행 중 오늘 장소) + 일정 추가 화면과 같은 장소 상세.
-  List<Widget> _itemSheet(PlanController c, TripController t, List<PlanItem> items, PlanItem item, bool open) => [
-        _PlaceMapCard(controller: c, items: items, item: item),
+  /// 접힘 머리를 다시 잰 높이 → 접힘 높이. 접혀 있었으면 새 높이로 맞춘다.
+  void _onHeadHeight(String key, double h, bool open, double min) {
+    if (!mounted || open || _settling) return;
+    final px = h + 16; // 아래 여백 (버튼 그림자)
+    final old = _headH[key];
+    if (old != null && (old - px).abs() < 1) return;
+    final wasMin = _sheet.isAttached && _sheet.size <= min + 0.01;
+    setState(() {
+      _headH[key] = px;
+      _settling = wasMin; // 새 접힘 높이로 옮기는 동안 펼침으로 보지 않는다
+    });
+    if (!wasMin) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _settling = false;
+      if (!mounted || !_sheet.isAttached) return;
+      final box = context.findRenderObject() as RenderBox?;
+      if (box == null || !box.hasSize) return;
+      _sheet.jumpTo(((_floatH + px) / box.size.height).clamp(0.2, 0.55));
+    });
+  }
+
+  /// 고른 일정 장소: 접힘 = 카드(좌우로 넘기기), 펼침 = [설명 듣기](동행 중 오늘 장소) + 일정 추가 화면과 같은 장소 상세 (제목·분류는 카드에).
+  List<Widget> _itemDetail(PlanController c, TripController t, PlanItem item, bool open) => [
         if (open) ...[
           const Divider(height: 28, color: AppColors.line),
           if (t.active && t.today?.items.any((i) => i.id == item.id) == true && item.place != null) ...[
@@ -318,12 +357,22 @@ class _MapScreenState extends State<MapScreen> {
             ),
             const SizedBox(height: 16),
           ],
-          if (item.place != null) PlaceDetailContent(key: ValueKey('detail-${item.placeId}'), api: c.api, placeId: item.placeId),
+          if (item.place != null)
+            PlaceDetailContent(
+              key: ValueKey('detail-${item.placeId}'),
+              api: c.api,
+              placeId: item.placeId,
+              showTitle: false,
+              onLoaded: (p) {
+                final line = [p.categoryLabel, if (p.area.isNotEmpty) p.area].join(' · ');
+                if (mounted && _category[item.placeId] != line) setState(() => _category[item.placeId] = line);
+              },
+            ),
         ],
       ];
 
-  /// 관광지 레이어 장소: 접힘 = 이름·분류 + [Day N에 추가], 펼침 = 장소 상세.
-  List<Widget> _placeSheet(PlanController c, PlaceSummary p, bool open) => [
+  /// 관광지 레이어 장소: 접힘 = 이름·분류 + [Day N에 추가], 펼침 = 장소 상세 (제목 줄은 위에).
+  List<Widget> _placeHead(PlanController c, PlaceSummary p) => [
         Row(children: [
           PlaceThumb(contentType: p.contentType, url: p.thumbnailUrl, size: 44),
           const SizedBox(width: 12),
@@ -337,9 +386,12 @@ class _MapScreenState extends State<MapScreen> {
         ]),
         const SizedBox(height: 12),
         AddPlaceFooter(key: ValueKey('add-${p.id}'), day: c.day, onAdd: (stay) => _addPlace(p, stay)),
+      ];
+
+  List<Widget> _placeDetail(PlanController c, PlaceSummary p, bool open) => [
         if (open) ...[
           const Divider(height: 28, color: AppColors.line),
-          PlaceDetailContent(key: ValueKey('detail-${p.id}'), api: c.api, placeId: p.id),
+          PlaceDetailContent(key: ValueKey('detail-${p.id}'), api: c.api, placeId: p.id, showTitle: false),
         ],
       ];
 
@@ -870,10 +922,13 @@ class _Toast extends StatelessWidget {
 }
 
 class _PlaceMapCard extends StatelessWidget {
-  const _PlaceMapCard({required this.controller, required this.items, required this.item});
+  const _PlaceMapCard({required this.controller, required this.items, required this.item, this.category});
   final PlanController controller;
   final List<PlanItem> items;
   final PlanItem item;
+
+  /// 펼쳤을 때 분류 줄 (장소 상세의 제목·분류 줄 대신, 2026-10-11).
+  final String? category;
 
   @override
   Widget build(BuildContext context) {
@@ -906,6 +961,10 @@ class _PlaceMapCard extends StatelessWidget {
             Expanded(child: Text(item.title, style: AppText.headline, overflow: TextOverflow.ellipsis)),
             Text('${idx + 1} / ${items.length}', style: AppText.caption),
           ]),
+          if (category != null) ...[
+            const SizedBox(height: 4),
+            Text(category!, key: const ValueKey('map-card-category'), style: AppText.meta, overflow: TextOverflow.ellipsis),
+          ],
           const SizedBox(height: 6),
           Text('${item.startAt} – ${item.endAt} · ${durationKo(item.stayMinutes)}', style: AppText.meta),
           const SizedBox(height: 10),
@@ -1053,4 +1112,31 @@ class _DayRow extends StatelessWidget {
           ]),
         ),
       );
+}
+
+/// 자식 레이아웃 높이가 바뀌면 알려 준다 (Map 시트 접힘 높이).
+class _MeasureHeight extends SingleChildRenderObjectWidget {
+  const _MeasureHeight({required this.onHeight, required super.child});
+  final ValueChanged<double> onHeight;
+
+  @override
+  RenderObject createRenderObject(BuildContext context) => _RenderMeasureHeight(onHeight);
+
+  @override
+  void updateRenderObject(BuildContext context, _RenderMeasureHeight renderObject) => renderObject.onHeight = onHeight;
+}
+
+class _RenderMeasureHeight extends RenderProxyBox {
+  _RenderMeasureHeight(this.onHeight);
+  ValueChanged<double> onHeight;
+
+
+  @override
+  void performLayout() {
+    super.performLayout();
+    final h = size.height;
+
+
+    WidgetsBinding.instance.addPostFrameCallback((_) => onHeight(h));
+  }
 }

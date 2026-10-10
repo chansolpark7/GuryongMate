@@ -266,10 +266,13 @@ class _AddPlaceFooterState extends State<AddPlaceFooter> {
 /// 장소 상세 본문: 사진 · 이름 · 분류 · 주소 · 운영시간 · 휴무 · 요금 · 주차 · 메뉴 · 전화 · 소개(더 보기) · 현장 해설 이야기.
 /// 스크롤하지 않는 Column 이라 감싸는 쪽(모달의 SingleChildScrollView, Map 시트의 ListView)이 스크롤한다.
 class PlaceDetailContent extends StatefulWidget {
-  const PlaceDetailContent({super.key, required this.api, required this.placeId, this.onLoaded});
+  const PlaceDetailContent({super.key, required this.api, required this.placeId, this.onLoaded, this.showTitle = true});
   final GuryongApi api;
   final String placeId;
   final ValueChanged<PlaceDetail>? onLoaded;
+
+  /// 큰 제목 + 분류 줄. Map 시트는 위 장소 카드에 이름·분류가 있어 끈다 (모달은 그대로, 2026-10-11).
+  final bool showTitle;
 
   @override
   State<PlaceDetailContent> createState() => _PlaceDetailContentState();
@@ -327,10 +330,12 @@ class _PlaceDetailContentState extends State<PlaceDetailContent> {
         _Gallery(urls: p.images.isNotEmpty ? p.images.map((i) => i.url).toList() : [p.imageUrl]),
         const SizedBox(height: 14),
       ],
-      Text(p.title, style: AppText.title),
-      const SizedBox(height: 4),
-      Text([p.categoryLabel, if (p.area.isNotEmpty) p.area].join(' · '), style: AppText.meta),
-      const SizedBox(height: 16),
+      if (widget.showTitle) ...[
+        Text(p.title, style: AppText.title),
+        const SizedBox(height: 4),
+        Text([p.categoryLabel, if (p.area.isNotEmpty) p.area].join(' · '), style: AppText.meta),
+        const SizedBox(height: 16),
+      ],
       _InfoRow(Icons.place_outlined, p.addr),
       _InfoRow(Icons.schedule, p.openHours, label: '운영'),
       _InfoRow(Icons.event_busy_outlined, p.restDate, label: '휴무'),

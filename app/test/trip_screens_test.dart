@@ -155,14 +155,20 @@ void main() {
 
     r.advanceTo('12:33:00'); // 12:31:30 위치 응답에 arrived (단계 2, 해설 카드)
     await poll(tester);
-    expect(find.byKey(const ValueKey('arrival-card')), findsOneWidget);
-    expect(find.text('도착했어요 · 가이드 준비됨'), findsOneWidget);
-    expect(find.text('이야기 들어볼까요?'), findsOneWidget);
-    expect(find.text('평소 선호'), findsNothing, reason: '아직 길이 선호 없음 (style_length null)');
+    // 도착 카드는 한두 줄 알림 (2026-10-11): 큰 버튼은 패널 [이야기 듣기] 하나만, 카드 전체를 누르면 같은 동작 (17)
+    final card = find.byKey(const ValueKey('arrival-card'));
+    expect(card, findsOneWidget);
+    expect(find.descendant(of: card, matching: find.text('구룡포 일본인 가옥거리')), findsOneWidget);
+    expect(find.descendant(of: card, matching: find.text('도착했어요 · 이야기 들어볼까요?', findRichText: true)), findsOneWidget);
+    expect(find.descendant(of: card, matching: find.byType(AppButton)), findsNothing, reason: '큰 버튼 없음');
+    expect(find.text('지금 설명 듣기'), findsNothing);
+    expect(find.text('이야기 듣기'), findsOneWidget, reason: '패널의 큰 버튼 하나만');
     expect(find.textContaining('지금 · 12:30 도착'), findsOneWidget, reason: '패널 지금 = visiting');
     expect(r.events.values.firstWhere((e) => e['type'] == 'arrived')['seen_at'], isNotNull, reason: '카드가 보이면 seen');
 
-    await tapText(tester, '짧게', frames: 20);
+    await tester.tap(card);
+    await settle(tester, 20);
+    expect(card, findsNothing, reason: '누르면 카드 닫힘');
     expect(find.text('현장 가이드'), findsOneWidget);
     expect(find.textContaining('일제강점기 구룡포에 정착한'), findsOneWidget, reason: '노트 short 를 기다림 없이');
     expect(find.text('당신에게'), findsOneWidget);
@@ -190,7 +196,7 @@ void main() {
     expect(r.gw.unmatched, isEmpty);
   });
 
-  testWidgets('16 · 짧게 선호면 [짧게]가 "평소 선호" · 노트가 없으면 16-S1 [지금 설명 듣기]', (tester) async {
+  testWidgets('16 · 짧게 선호면 알림을 눌러 17 짧게 · 노트가 없어도 알림은 한두 줄, 17 에서 16-S1 [지금 설명 듣기]', (tester) async {
     final r = TripReplay('scene3_delay', flows: ['f4_arrival_docent.json']);
     r.gw.on('GET /docent/memory', (_) => Res.json(200, r.flowResponse('memory_after')));
     r.noteOverride = (req) => req.path.endsWith('kto-2610501') ? Res.error(404, 'note_not_found') : Res.json(200, r.flowResponse('note'));
@@ -198,8 +204,13 @@ void main() {
     await openShell(tester, r.gw, r.planId);
     r.advanceTo('12:33:00');
     await poll(tester);
-    expect(find.text('30초 · 평소 선호'), findsOneWidget, reason: '"더 짧게" 다음 장소부터 반영 (18 확인 포인트)');
-    await tester.tap(find.byTooltip('닫기').first);
+    // [짧게]/[자세히] 버튼 대신 카드 누르기 → 메모리 길이 선호(짧게)로 17 (2026-10-11)
+    expect(find.text('도착했어요 · 이야기 들어볼까요?', findRichText: true), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('arrival-card')));
+    await settle(tester, 20);
+    expect(find.text('현장 가이드'), findsOneWidget);
+    expect(find.textContaining('일제강점기 구룡포에 정착한'), findsOneWidget, reason: '"더 짧게" 다음 장소부터 반영 (18 확인 포인트) → short');
+    await tester.tap(find.byType(BackButton));
     await settle(tester);
     expect(find.byKey(const ValueKey('arrival-card')), findsNothing);
 
@@ -210,9 +221,15 @@ void main() {
       await tester.tap(find.byKey(const ValueKey('arrival-chip')));
       await settle(tester);
     }
-    expect(find.text('도착했어요 · 가이드 없음'), findsOneWidget);
+    final card = find.byKey(const ValueKey('arrival-card'));
+    expect(find.descendant(of: card, matching: find.text('구룡포항')), findsOneWidget);
+    expect(find.descendant(of: card, matching: find.text('도착했어요 · 이야기 들어볼까요?', findRichText: true)), findsOneWidget, reason: '노트 없음도 같은 두 줄');
+    expect(find.descendant(of: card, matching: find.byType(AppButton)), findsNothing, reason: '노트가 없어도 큰 버튼 없음');
+    expect(find.byKey(const ValueKey('proactive-peek')), findsNothing, reason: '카드를 펼친 동안 미리보기는 쉰다 (겹침 없음, 2026-10-11)');
+    await tester.tap(card);
+    await settle(tester, 20);
+    expect(find.text('준비된 해설이 없어요'), findsOneWidget, reason: '16-S1 은 17 에서');
     expect(find.text('지금 설명 듣기'), findsOneWidget);
-    expect(find.text('준비된 해설이 없어 10초쯤 걸려요'), findsOneWidget);
   });
 
   testWidgets('장면 ③ 가벼운 지연(Amber) → delay 선제 → 14-S3 미리보기·FAB 점 → 19 → 20 다시 제안 → 21-S1 → 승인', (tester) async {
