@@ -105,6 +105,9 @@ void main() {
     // 실수로 시작 → 여행 종료 → 확인 → 30 "기록된 방문이 없어요"
     await tester.drag(find.byType(DraggableScrollableSheet), const Offset(0, -400));
     await settle(tester);
+    // 첫 장소 전에도 남은 일정 목록이 보여(redesign §2.3) 패널이 길어졌다 → 맨 아래 "여행 종료"까지 스크롤
+    await tester.scrollUntilVisible(find.text('여행 종료'), 200, scrollable: find.descendant(of: find.byType(DraggableScrollableSheet), matching: find.byType(Scrollable)).first);
+    await settle(tester);
     await tapText(tester, '여행 종료');
     expect(find.text('여행을 마칠까요?'), findsOneWidget);
     // 서버 상태는 종료 요청부터 바뀐다 (데모 위치 모드는 state 를 1초마다 읽어서, 미리 바꾸면 그 사이 끝나 버린다)

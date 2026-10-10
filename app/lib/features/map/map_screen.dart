@@ -15,12 +15,15 @@ import '../chat/proposal_card.dart';
 import '../planner/item_actions.dart';
 import '../planner/place_search_sheet.dart';
 import '../planner/plan_controller.dart';
+import '../trip/trip_controller.dart';
 import 'map_layers.dart';
 
 const _guryongpo = guryongpo;
 
 /// 07_Map / 09_Map_After_Apply / 10·28-S1 Layers / 28_Map_Safety. Planner 와 같은 PlanController 를 쓴다.
-/// 경로선은 routing geometry (구간마다 leg_mode, 차량은 점선), 위험 구역은 GET /safety/avoid.
+/// 경로선은 routing geometry (구간마다 leg_mode, 차량은 점선), 위험 구역은 TripController.zones (GET /safety/avoid, Today 와 같은 데이터).
+/// Map 은 "둘러보기·자세히": 아래 시트를 끌어 올리면 그날 일정 목록 · 장소 상세 (docs/app/today-map-redesign.md §3).
+/// 동행 중이면 내 위치 · 지나온 구간 회색 · 지금/다음 강조 (§3.2).
 class MapScreen extends StatefulWidget {
   const MapScreen({super.key});
 
@@ -40,10 +43,15 @@ class _MapScreenState extends State<MapScreen> {
   String? _fittedKey;
   int? _focusedItem;
 
-  /// 위험 구역 (지도가 보일 때 60초마다).
-  List<AvoidZone> _zones = const [];
-  DateTime? _zonesAt;
-  DateTime? _zonesLoadedAt;
+  /// 관광지 레이어에서 고른 장소 (아래 시트에 상세 + [Day N에 추가]).
+  PlaceSummary? _place;
+
+  /// 아래 시트: 접힘(요약) · 반 · 펼침. 내용이 바뀌면(경로 ↔ 장소 ↔ 우회) 접힘으로.
+  final _sheet = DraggableScrollableController();
+  String? _sheetMode;
+
+  /// 내용이 바뀐 첫 프레임: 시트가 아직 이전 높이라 펼침으로 보지 않는다 (접기 전에 상세를 부르지 않게).
+  bool _settling = false;
 
   /// 구간 경로선: "fromId>toId:mode" → (점 목록, 직선 근사인지).
   final _legs = <String, (List<LatLng>, bool)>{};
@@ -102,16 +110,29 @@ class _MapScreenState extends State<MapScreen> {
     }
   }
 
-  Future<void> _openPlace(PlaceSummary p) async {
+  /// 관광지 레이어 장소 → 같은 아래 시트로 (모달 대신, redesign §3.1).
+  void _openPlace(PlaceSummary p) {
+    setState(() => _place = p);
+    if (_c.selectedItemId != null) _c.select(null);
+  }
+
+  Future<void> _addPlace(PlaceSummary p, int stay) async {
     final c = _c;
-    final picked = await showPlaceDetailSheet(context, c, p.id);
-    if (picked == null || !mounted) return;
+    final day = c.day;
     try {
-      await c.addPlace(picked.placeId, day: picked.day, stayMinutes: picked.stayMinutes);
-      if (mounted) showInfo(context, 'Day ${picked.day}에 추가했어요');
+      await c.addPlace(p.id, day: day, stayMinutes: stay);
+      if (!mounted) return;
+      setState(() => _place = null);
+      showInfo(context, 'Day $day에 추가했어요');
     } catch (e) {
       if (mounted) showError(context, e);
     }
+  }
+
+  @override
+  void dispose() {
+    _sheet.dispose();
+    super.dispose();
   }
 
   static String _legKey(PlanItem a, PlanItem b, String mode) => '${a.id}>${b.id}:$mode';
@@ -132,21 +153,7 @@ class _MapScreenState extends State<MapScreen> {
     }
   }
 
-  void _ensureZones(PlanController c) {
-    final at = _zonesAt;
-    if (at != null && DateTime.now().difference(at) < const Duration(seconds: 60)) return;
-    _zonesAt = DateTime.now();
-    c.api.avoid().then((r) {
-      if (mounted) {
-        setState(() {
-          _zones = r.$1;
-          _zonesLoadedAt = r.$2 ?? DateTime.now();
-        });
-      }
-    }).catchError((_) {});
-  }
-
-  void _showZone(AvoidZone z) => showModalBottomSheet<void>(
+  void _showZone(AvoidZone z, DateTime? at) => showModalBottomSheet<void>(
         context: context,
         showDragHandle: true,
         builder: (ctx) => SafeArea(
@@ -162,7 +169,7 @@ class _MapScreenState extends State<MapScreen> {
               const SizedBox(height: 10),
               Text(z.reason.split('; ').join('\n'), style: AppText.meta.copyWith(color: AppColors.text)),
               const SizedBox(height: 8),
-              Text('지금 기준${_zonesLoadedAt == null ? '' : ' ${hhmm(_zonesLoadedAt!)}'}', style: AppText.caption),
+              Text('지금 기준${at == null ? '' : ' ${hhmm(at)}'}', style: AppText.caption),
             ]),
           ),
         ),
@@ -185,15 +192,183 @@ class _MapScreenState extends State<MapScreen> {
     return i > 0 ? items[i - 1] : null;
   }
 
+  static const _walkedGrey = Color(0xFFAEB6C1);
+
+  /// 시트 위 투명 칸 (FAB · 전체 경로 버튼 · 토스트 · 지도 출처). 시트와 함께 움직이고 펼치면 사라진다.
+  static const _floatH = 150.0;
+
+  Widget _buildSheet(PlanController c, TripController t, List<PlanItem> items, PlanItem? selected, PlanItem? detourItem, bool showChange) {
+    final sel = selected != null && items.any((i) => i.id == selected.id) ? selected : null;
+    final detour = sel == null && _place == null && detourItem != null && _detourDismissed != detourItem.id ? detourItem : null;
+    final mode = sel != null ? 'item' : _place != null ? 'place' : detour != null ? 'detour' : 'route';
+    // 접힘 높이(px): 고른 장소 카드 · 관광지 요약 + 추가 · 우회 카드 · 경로 한 줄
+    final cardPx = switch (mode) { 'item' => 236.0, 'place' => 214.0, 'detour' => 300.0, _ => 104.0 };
+    return LayoutBuilder(builder: (context, box) {
+      final h = box.maxHeight;
+      final min = ((_floatH + cardPx) / h).clamp(0.2, 0.55);
+      final half = min + 0.15 > 0.62 ? min + 0.15 : 0.62;
+      const full = 1.0;
+      final request = c.mapDetailRequest;
+      if (mode != _sheetMode || (request != null && request == sel?.id)) {
+        final first = _sheetMode == null;
+        _sheetMode = mode;
+        _settling = true;
+        final to = request != null && request == sel?.id ? full : min;
+        c.mapDetailRequest = null;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          _settling = false;
+          if (!mounted || !_sheet.isAttached || (first && to == min)) return;
+          to == min ? _sheet.jumpTo(min) : _sheet.animateTo(to, duration: const Duration(milliseconds: 220), curve: Curves.easeOut);
+        });
+      }
+      return DraggableScrollableSheet(
+        controller: _sheet,
+        initialChildSize: min,
+        minChildSize: min,
+        maxChildSize: full,
+        snap: true,
+        snapSizes: [min, half, full],
+        builder: (context, scroll) => LayoutBuilder(builder: (context, bc) {
+          final open = !_settling && bc.maxHeight > (_floatH + cardPx) + 40;
+          return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            SizedBox(
+              height: _floatH,
+              child: IgnorePointer(
+                ignoring: open,
+                child: AnimatedOpacity(
+                  opacity: open ? 0 : 1,
+                  duration: const Duration(milliseconds: 150),
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 6),
+                    child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, mainAxisAlignment: MainAxisAlignment.end, children: [
+                      Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
+                        if (showChange && sel == null) const _Toast(text: 'AI 변경이 지도에 반영됐어요'),
+                        const Spacer(),
+                        Column(children: [
+                          _RoundButton(icon: Icons.my_location, onTap: () => _fit(items), tooltip: '전체 경로 보기'),
+                          const SizedBox(height: 10),
+                          AiFab(onTap: () => c.openAi()),
+                        ]),
+                      ]),
+                      const SizedBox(height: 4),
+                      Text('© OpenStreetMap contributors', style: AppText.caption.copyWith(fontSize: 10, color: AppColors.text2)),
+                    ]),
+                  ),
+                ),
+              ),
+            ),
+            Expanded(
+              child: Container(
+                key: const ValueKey('map-sheet'),
+                decoration: const BoxDecoration(
+                  color: AppColors.surface,
+                  borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+                  boxShadow: [BoxShadow(color: Color(0x14111827), blurRadius: 16, offset: Offset(0, -2))],
+                ),
+                child: ListView(
+                  controller: scroll,
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+                  children: [
+                    const Grabber(),
+                    ...switch (mode) {
+                      'item' => _itemSheet(c, t, items, sel!, open),
+                      'place' => _placeSheet(c, _place!, open),
+                      'detour' => [
+                          _DetourCard(
+                            controller: c,
+                            item: detour!,
+                            previous: _previousOf(items, detour),
+                            on: _detourOn == detour.id,
+                            onOriginal: () => setState(() {
+                              _detourOn = null;
+                              _detourDismissed = detour.id;
+                            }),
+                            onUse: () => _useDetour(c, t, detour),
+                          ),
+                        ],
+                      _ => [
+                          _RouteSummary(controller: c, items: items, showDelta: showChange),
+                          const Divider(height: 24, color: AppColors.line),
+                          for (final (n, i) in items.indexed) _DayRow(number: n + 1, item: i, safety: c.safety?.visit(i.id), walked: t.active && i.status == 'done', onTap: () => c.select(i.id)),
+                        ],
+                    },
+                  ],
+                ),
+              ),
+            ),
+          ]);
+        }),
+      );
+    });
+  }
+
+  /// 고른 일정 장소: 접힘 = 카드(좌우로 넘기기), 펼침 = [설명 듣기](동행 중 오늘 장소) + 일정 추가 화면과 같은 장소 상세.
+  List<Widget> _itemSheet(PlanController c, TripController t, List<PlanItem> items, PlanItem item, bool open) => [
+        _PlaceMapCard(controller: c, items: items, item: item),
+        if (open) ...[
+          const Divider(height: 28, color: AppColors.line),
+          if (t.active && t.today?.items.any((i) => i.id == item.id) == true && item.place != null) ...[
+            AppButton(
+              key: const ValueKey('map-listen'),
+              label: '설명 듣기',
+              icon: Icons.auto_awesome,
+              kind: ButtonKind.aiSoft,
+              height: 44,
+              onPressed: () => t.onOpenGuide?.call(item.placeId),
+            ),
+            const SizedBox(height: 16),
+          ],
+          if (item.place != null) PlaceDetailContent(key: ValueKey('detail-${item.placeId}'), api: c.api, placeId: item.placeId),
+        ],
+      ];
+
+  /// 관광지 레이어 장소: 접힘 = 이름·분류 + [Day N에 추가], 펼침 = 장소 상세.
+  List<Widget> _placeSheet(PlanController c, PlaceSummary p, bool open) => [
+        Row(children: [
+          PlaceThumb(contentType: p.contentType, url: p.thumbnailUrl, size: 44),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(p.title, style: AppText.headline, overflow: TextOverflow.ellipsis),
+              Text([p.categoryLabel, if (p.area.isNotEmpty) p.area].join(' · '), style: AppText.meta, overflow: TextOverflow.ellipsis),
+            ]),
+          ),
+          IconButton(tooltip: '닫기', onPressed: () => setState(() => _place = null), icon: const Icon(Icons.close, color: AppColors.text3)),
+        ]),
+        const SizedBox(height: 12),
+        AddPlaceFooter(key: ValueKey('add-${p.id}'), day: c.day, onAdd: (stay) => _addPlace(p, stay)),
+        if (open) ...[
+          const Divider(height: 28, color: AppColors.line),
+          PlaceDetailContent(key: ValueKey('detail-${p.id}'), api: c.api, placeId: p.id),
+        ],
+      ];
+
+  /// 28 [이 길로 안내]: 동행 중이면 Today 로 돌아가 이 장소로 길 안내 (위험 구역을 피하는 길, 15). 아니면 지도에 표시만.
+  void _useDetour(PlanController c, TripController t, PlanItem item) {
+    setState(() => _detourOn = item.id);
+    if (t.active && t.today?.items.any((i) => i.id == item.id) == true && item.status != 'done') {
+      t.setGuide(item.id);
+      c.setTab(2);
+      showInfo(context, '${item.title}까지 위험 구역을 피해 안내해요');
+    } else {
+      showInfo(context, '여행 중에는 이 길로 다음 장소를 안내해요');
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final c = context.watch<PlanController>();
+    final t = context.watch<TripController>();
     final plan = c.plan;
     final items = _visibleItems(c);
     if (c.tab == 1) {
       _ensureLegs(c, items);
-      if (_showZones) _ensureZones(c);
+      if (_showZones) t.loadZones(); // 60초에 한 번 (Today 와 같은 구역)
     }
+    final zones = t.zones;
+    // 동행 중이고 여행 날을 보고 있으면: 내 위치 · 지나온 구간 회색 · 지금/다음 강조
+    final trip = t.active && (t.state?.day ?? c.day) == c.day ? t.state : null;
+    final loc = trip?.location == null ? null : LatLng(trip!.location!.lat, trip.location!.lng);
     final detourItem = _detourCandidate(c);
     final applied = c.lastApplied;
     final ghostDay = applied?.before.dayOf(c.day);
@@ -212,13 +387,14 @@ class _MapScreenState extends State<MapScreen> {
       final leg = _legs[_legKey(a, b, mode)];
       final pts = leg?.$1 ?? [LatLng(a.place!.lat, a.place!.lng), LatLng(b.place!.lat, b.place!.lng)];
       final dashed = mode == 'car' || (leg?.$2 ?? true);
+      final walked = trip != null && b.status != 'planned';
       legLines.add(Polyline(
         points: pts,
-        strokeWidth: 5,
-        color: AppColors.primary,
-        borderStrokeWidth: dashed ? 0 : 3,
+        strokeWidth: walked ? 4 : 5,
+        color: walked ? _walkedGrey : AppColors.primary,
+        borderStrokeWidth: dashed || walked ? 0 : 3,
         borderColor: Colors.white,
-        pattern: dashed ? StrokePattern.dashed(segments: const [10, 8]) : const StrokePattern.solid(),
+        pattern: dashed && !walked ? StrokePattern.dashed(segments: const [10, 8]) : const StrokePattern.solid(),
       ));
     }
     return Scaffold(
@@ -235,6 +411,8 @@ class _MapScreenState extends State<MapScreen> {
             onTap: (_, _) {
               if (_layersOpen) {
                 setState(() => _layersOpen = false);
+              } else if (_place != null) {
+                setState(() => _place = null);
               } else {
                 c.select(null);
               }
@@ -242,7 +420,7 @@ class _MapScreenState extends State<MapScreen> {
           ),
           children: [
             osmTiles(),
-            if (_showZones) ZoneLayer(zones: _zones, onTap: _showZone),
+            if (_showZones) ZoneLayer(zones: zones, onTap: (z) => _showZone(z, t.zonesNow)),
             if (_showRoute)
               PolylineLayer(polylines: [
                 if (showChange && oldRoute.length > 1)
@@ -289,9 +467,20 @@ class _MapScreenState extends State<MapScreen> {
                   if (it.id != selected?.id)
                     Marker(
                       point: LatLng(it.place!.lat, it.place!.lng),
-                      width: 36,
-                      height: 36,
-                      child: _Pin(number: i + 1, ai: c.aiUpdates.containsKey(it.id), onTap: () => c.select(it.id)),
+                      width: 48,
+                      height: 48,
+                      child: _Pin(
+                        key: ValueKey('map-pin-${it.id}'),
+                        number: i + 1,
+                        ai: c.aiUpdates.containsKey(it.id),
+                        done: trip != null && it.status == 'done',
+                        now: trip != null && it.id == trip.currentItemId && trip.visiting,
+                        next: trip != null && it.id == trip.nextItemId,
+                        onTap: () {
+                          if (_place != null) setState(() => _place = null);
+                          c.select(it.id);
+                        },
+                      ),
                     ),
                 if (selected?.place != null && items.any((i) => i.id == selected!.id))
                   Marker(
@@ -305,7 +494,17 @@ class _MapScreenState extends State<MapScreen> {
                       ai: c.aiUpdates.containsKey(selected.id),
                     ),
                   ),
+                if (_place != null)
+                  Marker(
+                    point: LatLng(_place!.lat, _place!.lng),
+                    width: 160,
+                    height: 112,
+                    alignment: const Alignment(0, -0.18),
+                    child: _SelectedPin(label: _place!.title, icon: placeVisual(_place!.contentType).$1, ai: false),
+                  ),
               ]),
+            // 동행 중 내 위치 (Today 와 같은 점)
+            if (loc != null) UserLocationLayer(point: loc, accuracy: trip?.location?.accuracy, duration: t.markerGlide, dotKey: const ValueKey('map-location')),
           ],
         ),
         // Map Top Bar (floating)
@@ -325,10 +524,10 @@ class _MapScreenState extends State<MapScreen> {
                   tooltip: '지도 레이어',
                 ),
               ]),
-              if (_showZones && _zones.isNotEmpty && !_layersOpen)
+              if (_showZones && zones.isNotEmpty && !_layersOpen)
                 Padding(
                   padding: const EdgeInsets.only(top: 8),
-                  child: Align(alignment: Alignment.centerLeft, child: _ZoneLegend(at: _zonesLoadedAt)),
+                  child: Align(alignment: Alignment.centerLeft, child: _ZoneLegend(at: t.zonesNow)),
                 ),
               if (_layersOpen)
                 Padding(
@@ -347,46 +546,8 @@ class _MapScreenState extends State<MapScreen> {
             ]),
           ),
         ),
-        // 하단: AI FAB · (토스트) · Place Map Card 또는 Route Summary
-        Positioned(
-          left: 16,
-          right: 16,
-          bottom: 16,
-          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, mainAxisSize: MainAxisSize.min, children: [
-            Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
-              if (showChange && selected == null) const _Toast(text: 'AI 변경이 지도에 반영됐어요'),
-              const Spacer(),
-              Column(children: [
-                _RoundButton(icon: Icons.my_location, onTap: () => _fit(items), tooltip: '전체 경로 보기'),
-                const SizedBox(height: 10),
-                AiFab(onTap: () => c.openAi()),
-              ]),
-            ]),
-            const SizedBox(height: 6),
-            Text('© OpenStreetMap contributors', style: AppText.caption.copyWith(fontSize: 10, color: AppColors.text2)),
-            const SizedBox(height: 6),
-            if (plan != null)
-              if (selected != null && items.any((i) => i.id == selected.id))
-                _PlaceMapCard(controller: c, items: items, item: selected)
-              else if (detourItem != null && _detourDismissed != detourItem.id)
-                _DetourCard(
-                  controller: c,
-                  item: detourItem,
-                  previous: _previousOf(items, detourItem),
-                  on: _detourOn == detourItem.id,
-                  onOriginal: () => setState(() {
-                    _detourOn = null;
-                    _detourDismissed = detourItem.id;
-                  }),
-                  onUse: () {
-                    setState(() => _detourOn = detourItem.id);
-                    showInfo(context, '여행 중에는 이 길로 다음 장소를 안내해요');
-                  },
-                )
-              else
-                _RouteSummary(controller: c, items: items, showDelta: showChange),
-          ]),
-        ),
+        // 하단: 끄는 시트 (위 투명 칸에 AI FAB · 전체 경로 · 토스트). 지도가 보일 때만 — Today 패널·AI 시트와 찾기가 섞이지 않게.
+        if (plan != null && c.tab == 1) _buildSheet(c, t, items, selected, detourItem, showChange),
       ]),
     );
   }
@@ -477,9 +638,8 @@ class _DetourCard extends StatelessWidget {
               ),
             );
         String dist(int? m) => m == null ? '' : (m >= 1000 ? '${(m / 1000).toStringAsFixed(1)}km' : '${m}m');
-        return Container(
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(20), boxShadow: AppShadow.floating),
+        return Padding(
+          padding: const EdgeInsets.only(top: 4),
           child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, mainAxisSize: MainAxisSize.min, children: [
             Row(children: [
               const Icon(Icons.alt_route, color: AppColors.primary, size: 20),
@@ -619,35 +779,48 @@ class _LayerPanel extends StatelessWidget {
   }
 }
 
+/// 일정 핀. 동행 중이면 다녀온 곳 = 회색 ✓, 지금 머무는 곳 = 크게 + 옅은 원, 다음 장소 = Primary 테두리 고리 (14 와 같은 규칙).
 class _Pin extends StatelessWidget {
-  const _Pin({required this.number, required this.ai, required this.onTap});
+  const _Pin({super.key, required this.number, required this.ai, required this.onTap, this.done = false, this.now = false, this.next = false});
   final int number;
   final bool ai;
   final VoidCallback onTap;
+  final bool done;
+  final bool now;
+  final bool next;
 
   @override
-  Widget build(BuildContext context) => GestureDetector(
-        onTap: onTap,
-        child: Center(
-          child: Container(
-            width: 30,
-            height: 30,
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-              color: ai ? AppColors.ai : AppColors.primary,
-              shape: BoxShape.circle,
-              border: Border.all(color: Colors.white, width: 3),
-              boxShadow: AppShadow.card,
-            ),
-            child: Text('$number', style: AppText.caption.copyWith(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 13)),
-          ),
-        ),
-      );
+  Widget build(BuildContext context) {
+    final color = done ? const Color(0xFFAEB6C1) : (ai ? AppColors.ai : AppColors.primary);
+    final size = now ? 36.0 : 30.0;
+    final dot = Container(
+      width: size,
+      height: size,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(color: color, shape: BoxShape.circle, border: Border.all(color: Colors.white, width: 3), boxShadow: AppShadow.card),
+      child: done
+          ? const Icon(Icons.check, size: 14, color: Colors.white)
+          : Text('$number', style: AppText.caption.copyWith(color: Colors.white, fontWeight: FontWeight.w700, fontSize: now ? 15 : 13)),
+    );
+    return GestureDetector(
+      onTap: onTap,
+      child: Center(
+        child: now
+            ? Container(width: 48, height: 48, alignment: Alignment.center, decoration: BoxDecoration(color: color.withValues(alpha: 0.18), shape: BoxShape.circle), child: dot)
+            : next
+                ? Container(padding: const EdgeInsets.all(2), decoration: BoxDecoration(shape: BoxShape.circle, border: Border.all(color: AppColors.primary, width: 2)), child: dot)
+                : dot,
+      ),
+    );
+  }
 }
 
 class _SelectedPin extends StatelessWidget {
-  const _SelectedPin({required this.number, required this.label, required this.ai});
-  final int number;
+  const _SelectedPin({this.number, this.icon, required this.label, required this.ai});
+  final int? number;
+
+  /// 번호 대신 아이콘 (관광지 레이어 장소).
+  final IconData? icon;
   final String label;
   final bool ai;
 
@@ -672,7 +845,7 @@ class _SelectedPin extends StatelessWidget {
             height: 40,
             alignment: Alignment.center,
             decoration: BoxDecoration(color: color, shape: BoxShape.circle, border: Border.all(color: Colors.white, width: 3), boxShadow: AppShadow.floating),
-            child: Text('$number', style: AppText.section.copyWith(color: Colors.white)),
+            child: icon != null ? Icon(icon, color: Colors.white, size: 20) : Text('$number', style: AppText.section.copyWith(color: Colors.white)),
           ),
         ]),
       ),
@@ -718,11 +891,9 @@ class _PlaceMapCard extends StatelessWidget {
         if (v < -200 && idx + 1 < items.length) c.select(items[idx + 1].id);
         if (v > 200 && idx > 0) c.select(items[idx - 1].id);
       },
-      child: Container(
-        padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-        decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(20), boxShadow: AppShadow.floating),
+      child: Padding(
+        padding: const EdgeInsets.only(top: 4),
         child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, mainAxisSize: MainAxisSize.min, children: [
-          const Grabber(),
           Row(children: [
             Container(
               width: 28,
@@ -801,9 +972,8 @@ class _RouteSummary extends StatelessWidget {
     final total = day?.travelMinutes ?? 0;
     final before = c.lastApplied?.before.dayOf(c.day)?.travelMinutes;
     final delta = showDelta && before != null ? total - before : null;
-    return Container(
-      padding: const EdgeInsets.fromLTRB(16, 14, 12, 14),
-      decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(16), boxShadow: AppShadow.floating),
+    return Padding(
+      padding: const EdgeInsets.only(top: 2),
       child: Row(children: [
         Expanded(
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
@@ -856,4 +1026,31 @@ class _RouteSummary extends StatelessWidget {
       ]),
     );
   }
+}
+
+/// 시트 반·펼침: 그날 일정 한 줄 (누르면 그 장소 선택).
+class _DayRow extends StatelessWidget {
+  const _DayRow({required this.number, required this.item, required this.safety, required this.walked, required this.onTap});
+  final int number;
+  final PlanItem item;
+  final SafetyItem? safety;
+  final bool walked;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) => InkWell(
+        key: ValueKey('map-day-${item.id}'),
+        borderRadius: BorderRadius.circular(10),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 2),
+          child: Row(children: [
+            MapDot(color: walked ? const Color(0xFFAEB6C1) : AppColors.primary, label: '$number', size: 26),
+            const SizedBox(width: 10),
+            SizedBox(width: 46, child: Text(item.startAt ?? '', style: AppText.meta.copyWith(fontWeight: FontWeight.w700, color: AppColors.text2))),
+            Expanded(child: Text(item.title, style: AppText.label.copyWith(color: walked ? AppColors.text3 : AppColors.text), overflow: TextOverflow.ellipsis)),
+            if (safety != null) RiskBadge(item: safety!, compact: true),
+          ]),
+        ),
+      );
 }

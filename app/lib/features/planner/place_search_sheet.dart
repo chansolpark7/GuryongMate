@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../../core/api/guryong_api.dart';
 import '../../core/format.dart';
 import '../../core/models/place.dart';
 import '../../core/theme/app_theme.dart';
@@ -201,30 +202,6 @@ class _PlaceDetail extends StatefulWidget {
 
 class _PlaceDetailState extends State<_PlaceDetail> {
   PlaceDetail? _place;
-  List<Story> _stories = const [];
-  Object? _error;
-  int _stay = 60;
-  bool _overviewOpen = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _load();
-  }
-
-  Future<void> _load() async {
-    final api = widget.controller.api;
-    try {
-      final p = await api.place(widget.placeId);
-      if (mounted) setState(() => _place = p);
-      if (p.storyCount > 0) {
-        final s = await api.placeStories(widget.placeId);
-        if (mounted) setState(() => _stories = s);
-      }
-    } catch (e) {
-      if (mounted) setState(() => _error = e);
-    }
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -233,55 +210,10 @@ class _PlaceDetailState extends State<_PlaceDetail> {
     return Column(children: [
       const Grabber(),
       Expanded(
-        child: _error != null
-            ? StateView(title: '장소 정보를 불러오지 못했어요', message: '$_error')
-            : p == null
-                ? const Center(child: CircularProgressIndicator())
-                : ListView(padding: const EdgeInsets.fromLTRB(20, 4, 20, 24), children: [
-                    if (p.images.isNotEmpty || p.imageUrl.isNotEmpty) _Gallery(urls: p.images.isNotEmpty ? p.images.map((i) => i.url).toList() : [p.imageUrl]),
-                    const SizedBox(height: 14),
-                    Text(p.title, style: AppText.title),
-                    const SizedBox(height: 4),
-                    Text([p.categoryLabel, if (p.area.isNotEmpty) p.area].join(' · '), style: AppText.meta),
-                    const SizedBox(height: 16),
-                    _InfoRow(Icons.place_outlined, p.addr),
-                    _InfoRow(Icons.schedule, p.openHours, label: '운영'),
-                    _InfoRow(Icons.event_busy_outlined, p.restDate, label: '휴무'),
-                    _InfoRow(Icons.payments_outlined, p.fee, label: '요금'),
-                    _InfoRow(Icons.local_parking, p.parking, label: '주차'),
-                    _InfoRow(Icons.restaurant_menu, p.menu, label: '메뉴'),
-                    _InfoRow(Icons.call_outlined, p.tel),
-                    if (p.overview.isNotEmpty) ...[
-                      const SizedBox(height: 12),
-                      Text('소개', style: AppText.section),
-                      const SizedBox(height: 6),
-                      Text(p.overview, style: AppText.body.copyWith(color: AppColors.text2), maxLines: _overviewOpen ? null : 5, overflow: _overviewOpen ? null : TextOverflow.ellipsis),
-                      if (p.overview.length > 150)
-                        TextButton(onPressed: () => setState(() => _overviewOpen = !_overviewOpen), child: Text(_overviewOpen ? '접기' : '더 보기')),
-                    ],
-                    if (_stories.isNotEmpty) ...[
-                      const SizedBox(height: 12),
-                      Row(children: [
-                        const Icon(Icons.headphones, size: 18, color: AppColors.ai),
-                        const SizedBox(width: 6),
-                        Text('현장 해설 이야기 ${_stories.length}', style: AppText.section),
-                      ]),
-                      const SizedBox(height: 6),
-                      for (final s in _stories)
-                        Card(
-                          elevation: 0,
-                          color: AppColors.aiSoft,
-                          margin: const EdgeInsets.only(bottom: 8),
-                          child: ExpansionTile(
-                            shape: const Border(),
-                            title: Text(s.title, style: AppText.label.copyWith(fontWeight: FontWeight.w700)),
-                            subtitle: Text([if (s.themeTitle.isNotEmpty) s.themeTitle, if (s.playTimeSec > 0) '${(s.playTimeSec / 60).ceil()}분'].join(' · '), style: AppText.caption),
-                            childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
-                            children: [Text(s.script, style: AppText.meta.copyWith(color: AppColors.text))],
-                          ),
-                        ),
-                    ],
-                  ]),
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(20, 4, 20, 24),
+          child: PlaceDetailContent(api: c.api, placeId: widget.placeId, onLoaded: (p) => setState(() => _place = p)),
+        ),
       ),
       if (!widget.inPlan && p != null)
         Container(
@@ -289,27 +221,156 @@ class _PlaceDetailState extends State<_PlaceDetail> {
           padding: const EdgeInsets.fromLTRB(20, 10, 20, 12),
           child: SafeArea(
             top: false,
-            child: Column(mainAxisSize: MainAxisSize.min, children: [
-              Row(children: [
-                Text('체류', style: AppText.label),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Wrap(spacing: 6, children: [
-                    for (final m in [30, 60, 90, 120])
-                      ChoiceChip(
-                        label: Text(durationKo(m)),
-                        selected: _stay == m,
-                        visualDensity: VisualDensity.compact,
-                        onSelected: (_) => setState(() => _stay = m),
-                      ),
-                  ]),
-                ),
-              ]),
-              const SizedBox(height: 10),
-              AppButton(label: 'Day ${c.day}에 추가', icon: Icons.add, onPressed: () => Navigator.pop(context, PickedPlace(p.id, c.day, _stay))),
-            ]),
+            child: AddPlaceFooter(day: c.day, onAdd: (stay) => Navigator.pop(context, PickedPlace(p.id, c.day, stay))),
           ),
         ),
+    ]);
+  }
+}
+
+/// "체류 30분·1시간·…" + [Day N에 추가]. 장소 상세 모달과 Map 시트(관광지 레이어)가 같이 쓴다.
+class AddPlaceFooter extends StatefulWidget {
+  const AddPlaceFooter({super.key, required this.day, required this.onAdd});
+  final int day;
+  final ValueChanged<int> onAdd;
+
+  @override
+  State<AddPlaceFooter> createState() => _AddPlaceFooterState();
+}
+
+class _AddPlaceFooterState extends State<AddPlaceFooter> {
+  int _stay = 60;
+
+  @override
+  Widget build(BuildContext context) => Column(mainAxisSize: MainAxisSize.min, children: [
+        Row(children: [
+          Text('체류', style: AppText.label),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Wrap(spacing: 6, children: [
+              for (final m in [30, 60, 90, 120])
+                ChoiceChip(
+                  label: Text(durationKo(m)),
+                  selected: _stay == m,
+                  visualDensity: VisualDensity.compact,
+                  onSelected: (_) => setState(() => _stay = m),
+                ),
+            ]),
+          ),
+        ]),
+        const SizedBox(height: 10),
+        AppButton(label: 'Day ${widget.day}에 추가', icon: Icons.add, onPressed: () => widget.onAdd(_stay)),
+      ]);
+}
+
+/// 장소 상세 본문: 사진 · 이름 · 분류 · 주소 · 운영시간 · 휴무 · 요금 · 주차 · 메뉴 · 전화 · 소개(더 보기) · 현장 해설 이야기.
+/// 스크롤하지 않는 Column 이라 감싸는 쪽(모달의 SingleChildScrollView, Map 시트의 ListView)이 스크롤한다.
+class PlaceDetailContent extends StatefulWidget {
+  const PlaceDetailContent({super.key, required this.api, required this.placeId, this.onLoaded});
+  final GuryongApi api;
+  final String placeId;
+  final ValueChanged<PlaceDetail>? onLoaded;
+
+  @override
+  State<PlaceDetailContent> createState() => _PlaceDetailContentState();
+}
+
+class _PlaceDetailContentState extends State<PlaceDetailContent> {
+  PlaceDetail? _place;
+  List<Story> _stories = const [];
+  Object? _error;
+  bool _overviewOpen = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  @override
+  void didUpdateWidget(PlaceDetailContent old) {
+    super.didUpdateWidget(old);
+    if (old.placeId == widget.placeId) return;
+    setState(() {
+      _place = null;
+      _stories = const [];
+      _error = null;
+      _overviewOpen = false;
+    });
+    _load();
+  }
+
+  Future<void> _load() async {
+    final id = widget.placeId;
+    final api = widget.api;
+    try {
+      final p = await api.place(id);
+      if (!mounted || id != widget.placeId) return;
+      setState(() => _place = p);
+      widget.onLoaded?.call(p);
+      if (p.storyCount > 0) {
+        final s = await api.placeStories(id);
+        if (mounted && id == widget.placeId) setState(() => _stories = s);
+      }
+    } catch (e) {
+      if (mounted && id == widget.placeId) setState(() => _error = e);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final p = _place;
+    if (_error != null) return StateView(title: '장소 정보를 불러오지 못했어요', message: '$_error');
+    if (p == null) return const SizedBox(height: 120, child: Center(child: CircularProgressIndicator()));
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, mainAxisSize: MainAxisSize.min, children: [
+      if (p.images.isNotEmpty || p.imageUrl.isNotEmpty) ...[
+        _Gallery(urls: p.images.isNotEmpty ? p.images.map((i) => i.url).toList() : [p.imageUrl]),
+        const SizedBox(height: 14),
+      ],
+      Text(p.title, style: AppText.title),
+      const SizedBox(height: 4),
+      Text([p.categoryLabel, if (p.area.isNotEmpty) p.area].join(' · '), style: AppText.meta),
+      const SizedBox(height: 16),
+      _InfoRow(Icons.place_outlined, p.addr),
+      _InfoRow(Icons.schedule, p.openHours, label: '운영'),
+      _InfoRow(Icons.event_busy_outlined, p.restDate, label: '휴무'),
+      _InfoRow(Icons.payments_outlined, p.fee, label: '요금'),
+      _InfoRow(Icons.local_parking, p.parking, label: '주차'),
+      _InfoRow(Icons.restaurant_menu, p.menu, label: '메뉴'),
+      _InfoRow(Icons.call_outlined, p.tel),
+      if (p.overview.isNotEmpty) ...[
+        const SizedBox(height: 12),
+        Text('소개', style: AppText.section),
+        const SizedBox(height: 6),
+        Text(p.overview, style: AppText.body.copyWith(color: AppColors.text2), maxLines: _overviewOpen ? null : 5, overflow: _overviewOpen ? null : TextOverflow.ellipsis),
+        if (p.overview.length > 150)
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton(onPressed: () => setState(() => _overviewOpen = !_overviewOpen), child: Text(_overviewOpen ? '접기' : '더 보기')),
+          ),
+      ],
+      if (_stories.isNotEmpty) ...[
+        const SizedBox(height: 12),
+        Row(children: [
+          const Icon(Icons.headphones, size: 18, color: AppColors.ai),
+          const SizedBox(width: 6),
+          Text('현장 해설 이야기 ${_stories.length}', style: AppText.section),
+        ]),
+        const SizedBox(height: 6),
+        for (final s in _stories)
+          Card(
+            elevation: 0,
+            color: AppColors.aiSoft,
+            margin: const EdgeInsets.only(bottom: 8),
+            child: ExpansionTile(
+              shape: const Border(),
+              title: Text(s.title, style: AppText.label.copyWith(fontWeight: FontWeight.w700)),
+              subtitle: Text([if (s.themeTitle.isNotEmpty) s.themeTitle, if (s.playTimeSec > 0) '${(s.playTimeSec / 60).ceil()}분'].join(' · '), style: AppText.caption),
+              childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
+              children: [Text(s.script, style: AppText.meta.copyWith(color: AppColors.text))],
+            ),
+          ),
+      ],
     ]);
   }
 }

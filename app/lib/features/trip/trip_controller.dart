@@ -86,6 +86,13 @@ class TripController extends ChangeNotifier with WidgetsBindingObserver {
   List<AvoidZone> zones = const [];
   DateTime? _zonesAt;
 
+  /// 위험 구역 "지금 기준" 시각 (avoid 응답의 now). Today·Map 이 같은 구역을 그린다.
+  DateTime? zonesNow;
+
+  /// 손으로 고른 길 안내 장소 (다음 일정 🧭 · 지도 작은 창 [길 안내] · Map 우회 [이 길로 안내]). null 이면 자동 (이동 중 → 다음 장소).
+  /// 도착·출발로 지금 상태가 바뀌면 지운다 (redesign §2.1).
+  int? guideTo;
+
   bool get active => state?.active == true;
   bool get demoMode => session.demoLocationMode;
 
@@ -358,6 +365,7 @@ class TripController extends ChangeNotifier with WidgetsBindingObserver {
     }
     if (prev != null && (prev.currentItemId != s.currentItemId || prev.currentState != s.currentState)) {
       plan.load(silent: true).catchError((_) {}); // 진행 상태 (progress_version)
+      guideTo = null;
     }
     _checkHazardLeft();
     _notify();
@@ -370,7 +378,9 @@ class TripController extends ChangeNotifier with WidgetsBindingObserver {
     if (!force && at != null && clock.now().difference(at) < timing.zones) return;
     _zonesAt = clock.now();
     try {
-      zones = (await api.avoid()).$1;
+      final r = await api.avoid();
+      zones = r.$1;
+      zonesNow = r.$2 ?? clock.now();
       _checkHazardLeft();
       _notify();
     } catch (_) {}
@@ -386,6 +396,14 @@ class TripController extends ChangeNotifier with WidgetsBindingObserver {
     if (mine.isEmpty) return;
     final near = mine.any((z) => zoneDistanceM(z, loc.lat, loc.lng) <= 60);
     if (!near) hazard = null;
+  }
+
+  // ---------- 길 안내 ----------
+
+  /// [itemId] 로 길 안내 (null 이면 자동으로 돌아감).
+  void setGuide(int? itemId) {
+    guideTo = itemId;
+    _notify();
   }
 
   // ---------- 폴링 ----------

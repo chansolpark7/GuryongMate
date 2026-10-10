@@ -204,6 +204,15 @@ class PlanController extends ChangeNotifier {
     setTab(1);
   }
 
+  /// Map 시트를 펼쳐 열 항목 (Today 지도 작은 창 [자세히]). Map 이 한 번 읽고 지운다.
+  int? mapDetailRequest;
+
+  /// Today 작은 창 [자세히] → Map 탭에서 그 장소 시트를 펼친다 (탭이 바뀌는 유일한 곳, redesign §2.2).
+  void showDetailOnMap(int itemId) {
+    mapDetailRequest = itemId;
+    showOnMap(itemId);
+  }
+
   /// 지도 → Planner 에서 해당 카드 하이라이트.
   void showInPlanner(int itemId) {
     select(itemId);
