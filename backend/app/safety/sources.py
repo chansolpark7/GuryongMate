@@ -379,33 +379,126 @@ class LiveSources:
 
 # ---------- 키 없이 개발·시연할 때 ----------
 
-MOCK_SCENARIOS = {
-    "calm": "평상시. 맑고 바람 약함",
-    "rain": "약한 비 (지금부터 3~9시간 뒤, 시간당 5mm). 주의·위험은 없고 참고(info) 신호만",
-    "wind_tomorrow": "내일 12~18시 강풍·높은 파도 (풍속 15m/s, 파고 3.2m). 특보 없음 -> 방파제 위험, 그 밖의 야외 주의",
-    "flood": "지금 침수 센서 상승 (수협 맨홀 등급 3, 파출소 지표면 등급 2) + 약한 비. 침수 감시 구역만 위험",
-    "storm": "호우·강풍·풍랑 특보 + 침수 센서 상승 + 30시간 악천후 (계획 변경 흐름 확인용)",
+# 가상 날씨 시간표의 구간 종류. 구간 밖은 평상시(calm). 겹치면 KIND_PRIORITY 앞의 것(더 심한 것) 하나만 쓴다.
+SIM_KINDS = {
+    "storm": "폭풍: 호우·강풍·풍랑 특보 + 침수 센서 상승 + 비·강풍·높은 파도 (구간 시작 6~14시간째는 시간당 35mm)",
+    "flood": "침수: 침수 센서 상승 (수협 맨홀 등급 3, 파출소 지표면 등급 2) + 약한 비. 침수 감시 구역만 위험",
+    "wind": "강풍·높은 파도 (풍속 15m/s, 파고 3.2m). 특보 없음 -> 방파제 위험, 그 밖의 야외 주의",
+    "rain": "약한 비 (시간당 5mm). 주의·위험은 없고 참고(info) 신호만",
 }
+KIND_PRIORITY = ("storm", "flood", "wind", "rain")
+MAX_SEGMENTS = 20
+
+# 시나리오 = 시간표 프리셋. 설정한 순간(가상 시각) 기준 절대 구간이 된다 (시각을 옮겨도 밀리지 않음)
+MOCK_SCENARIOS = {
+    "calm": "평상시. 시간표를 비운다",
+    "rain": "약한 비: 지금부터 2~9시간 뒤 (시간당 5mm). 주의·위험은 없고 참고(info) 신호만",
+    "wind_tomorrow": "내일 12~18시 강풍·높은 파도 (풍속 15m/s, 파고 3.2m). 특보 없음 -> 방파제 위험, 그 밖의 야외 주의",
+    "flood": "침수: 지금부터 9시간 (수협 맨홀 등급 3, 파출소 지표면 등급 2) + 약한 비. 침수 감시 구역만 위험",
+    "storm": "폭풍: 지금부터 30시간 (호우·강풍·풍랑 특보 + 침수 센서 상승 + 악천후)",
+}
+
+
+@dataclass(frozen=True)
+class SimSegment:
+    """가상 날씨 구간. start 포함, end 제외 (가상 시각 기준 절대 시각)."""
+    kind: str
+    start: datetime
+    end: datetime
+
+    def covers(self, t: datetime) -> bool:
+        return self.start <= t < self.end
+
+    def overlaps(self, a: datetime, b: datetime) -> bool:
+        return self.start < b and a < self.end
+
+
+def _hour(t: datetime) -> datetime:
+    return t.replace(minute=0, second=0, microsecond=0)
+
+
+def _worst(segments: list[SimSegment]) -> SimSegment | None:
+    return min(segments, key=lambda s: (KIND_PRIORITY.index(s.kind), s.start)) if segments else None
+
+
+def preset_timeline(scenario: str, now: datetime, until: datetime | None = None) -> tuple[SimSegment, ...]:
+    """시나리오 프리셋 -> 시간표 (now 기준 절대 구간). until 이 있으면 그 시각에 끝난다 (calm 은 무시)."""
+    if scenario not in MOCK_SCENARIOS:
+        raise ValueError(f"알 수 없는 시나리오: {scenario}")
+    h = timedelta(hours=1)
+    if scenario == "calm":
+        return ()
+    if scenario == "storm":
+        seg = SimSegment("storm", now, now + 30 * h)
+    elif scenario == "flood":
+        seg = SimSegment("flood", now, now + 9 * h)
+    elif scenario == "rain":
+        seg = SimSegment("rain", now + 2 * h, now + 9 * h)
+    else:  # wind_tomorrow
+        noon = datetime.combine(now.astimezone(KST).date() + timedelta(days=1), time(12), KST)
+        seg = SimSegment("wind", noon, noon + 6 * h)
+    if until is not None:
+        if until <= seg.start:
+            raise ValueError(f"until({until:%m/%d %H:%M})은 구간 시작({seg.start:%m/%d %H:%M})보다 뒤여야 합니다")
+        seg = replace(seg, end=until)
+    return (seg,)
+
+
+def check_timeline(segments: list[SimSegment]) -> tuple[SimSegment, ...]:
+    """구간 목록 검증 (개수, 모르는 kind, start >= end). 문제가 있으면 ValueError. 시작 순으로 정렬해 돌려준다."""
+    if len(segments) > MAX_SEGMENTS:
+        raise ValueError(f"구간은 최대 {MAX_SEGMENTS}개입니다")
+    for i, seg in enumerate(segments, 1):
+        if seg.kind not in SIM_KINDS:
+            raise ValueError(f"{i}번째 구간: 알 수 없는 종류 {seg.kind}")
+        if not seg.start < seg.end:
+            raise ValueError(f"{i}번째 구간: start 는 end 보다 앞이어야 합니다")
+    return tuple(sorted(segments, key=lambda x: (x.start, x.end)))
 
 
 _SIM_LOCK = threading.Lock()
 
 
 class MockSources:
-    """키 없이 쓰는 가짜 데이터. 시나리오(MOCK_SCENARIOS)와 시각을 실행 중에 바꿀 수 있다 (PUT /safety/sim).
+    """키 없이 쓰는 가짜 데이터. 가상 날씨 시간표(구간 목록)와 가상 시각을 실행 중에 바꿀 수 있다 (PUT /safety/sim).
+    - 예보: 시각마다 그 시간(정시~1시간)과 겹치는 구간의 날씨. 구간을 넣는 즉시, 예보 범위(약 3일) 안이면 보인다.
+    - 지금 관측값(센서·특보·방파제 CCTV·자외선): 가상 시각이 속한 구간의 값, 구간 밖이면 평상시.
     값은 실제 응답 형태를 따르되 내용은 지어낸 것이다. 응답의 data_status 에 mock 임이 표시된다."""
 
     def __init__(self, scenario: str = "calm", clock: Callable[[], datetime] = now_kst):
-        if scenario not in MOCK_SCENARIOS:
-            raise ValueError(f"알 수 없는 시나리오: {scenario}")
-        self.scenario = scenario
         self._clock = clock
         self.offset = timedelta(0)  # 가상 시각 = 실제(clock) + offset
+        self.timeline: tuple[SimSegment, ...] = preset_timeline(scenario, self.now())
 
-    def set(self, scenario: str, offset: timedelta) -> None:
-        """시나리오와 가상 시각을 함께 바꾼다 (둘 중 하나만 바뀐 상태를 다른 요청이 보지 않게)."""
+    def set(self, offset: timedelta | None = None, timeline: tuple[SimSegment, ...] | None = None) -> None:
+        """시간표와 가상 시각을 함께 바꾼다 (둘 중 하나만 바뀐 상태를 다른 요청이 보지 않게)."""
         with _SIM_LOCK:
-            self.scenario, self.offset = scenario, offset
+            if offset is not None:
+                self.offset = offset
+            if timeline is not None:
+                self.timeline = timeline
+
+    def segment_at(self, t: datetime) -> SimSegment | None:
+        """t 가 속한 구간 (겹치면 더 심한 것)."""
+        return _worst([s for s in self.timeline if s.covers(t)])
+
+    @property
+    def scenario(self) -> str:
+        """지금(가상 시각) 적용 중인 구간 종류, 없으면 calm."""
+        seg = self.segment_at(self.now())
+        return seg.kind if seg else "calm"
+
+    @scenario.setter
+    def scenario(self, value: str) -> None:
+        """프리셋으로 시간표를 바꾼다 (지금 기준)."""
+        self.timeline = preset_timeline(value, self.now())
+
+    def observed_until(self) -> datetime | None:
+        """지금 관측값(센서·특보·CCTV·자외선)이 그대로인 끝 시각 = 지금 뒤 첫 구간 경계 (없으면 None).
+        safety 는 이 시각 뒤 방문에 지금 관측값을 쓰지 않고 예보로만 판단한다 (폭풍이 17시에 끝나면 17:30 일정은 안전)."""
+        now = self.now()
+        edges = [t for x in self.timeline for t in (x.start, x.end) if t > now]
+        return min(edges) if edges else None
 
     @property
     def storm(self) -> bool:
@@ -429,32 +522,35 @@ class MockSources:
         return self._f(out)
 
     def breakwater(self) -> Fetched[list[BreakwaterHour]]:
-        hour = self.now().replace(minute=0, second=0, microsecond=0) - timedelta(hours=1)
-        k = 3 if self.storm else 1
-        return self._f([BreakwaterHour("north", hour, 1 if self.storm else 0, 2 * k, 5 * k, 1),
+        storm = self.storm
+        hour = _hour(self.now()) - timedelta(hours=1)
+        k = 3 if storm else 1
+        return self._f([BreakwaterHour("north", hour, 1 if storm else 0, 2 * k, 5 * k, 1),
                         BreakwaterHour("south", hour, 0, 3 * k, 7 * k, 1)])
 
     def uv(self) -> Fetched[UvReading]:
         return self._f(UvReading(self.now(), 0.5 if self.storm else 4.0))
 
+    def _hour_weather(self, t: datetime) -> dict:
+        """t 시(정시부터 1시간)의 날씨. 그 1시간과 겹치는 구간 중 가장 심한 것, 없으면 평상시."""
+        calm = dict(pop=10, pcp_mm=0.0, pty=0, sky=1, wsd=3.0, wav=0.5, tmp=21.0)
+        seg = _worst([s for s in self.timeline if s.overlaps(t, t + timedelta(hours=1))])
+        if seg is None:
+            return calm
+        if seg.kind == "storm":
+            i = int((t - _hour(seg.start)).total_seconds() // 3600)  # 구간 시작부터 몇 시간째
+            return dict(pop=90, pcp_mm=35.0 if 6 <= i < 14 else 8.0, pty=1, sky=4, wsd=16.0, wav=3.5, tmp=18.0)
+        if seg.kind in ("rain", "flood"):
+            return dict(calm, pop=80, pcp_mm=5.0, pty=1, sky=4)
+        return dict(calm, sky=3, wsd=15.0, wav=3.2)  # wind
+
     def forecast(self, now: datetime) -> Fetched[Forecast]:
         base = kma_base(now)
         fc = Forecast(base=base)
         start = base + timedelta(hours=1)
-        calm = dict(pop=10, pcp_mm=0.0, pty=0, sky=1, wsd=3.0, wav=0.5, tmp=21.0)
-        tomorrow = base.date() + timedelta(days=1)
         for i in range(70):
             t = start + timedelta(hours=i)
-            lead = t - now  # 지금부터 몇 시간 뒤인지 (시나리오 시각은 지금 기준)
-            w = dict(calm)
-            if self.storm and i < 30:
-                w = dict(pop=90, pcp_mm=35.0 if 6 <= i < 14 else 8.0, pty=1, sky=4, wsd=16.0, wav=3.5, tmp=18.0)
-            elif self.scenario in ("rain", "flood") and timedelta(hours=-1) < lead < timedelta(hours=9) and (
-                    self.scenario == "flood" or lead >= timedelta(hours=2)):
-                w = dict(calm, pop=80, pcp_mm=5.0, pty=1, sky=4)
-            elif self.scenario == "wind_tomorrow" and t.date() == tomorrow and 12 <= t.hour < 18:
-                w = dict(calm, sky=3, wsd=15.0, wav=3.2)
-            fc.hours[t] = ForecastHour(t, **w)
+            fc.hours[t] = ForecastHour(t, **self._hour_weather(t))
         for d in {t.date() for t in fc.hours}:
             fc.tmin[d], fc.tmax[d] = 15.0, 23.0
         return self._f(fc)
@@ -539,7 +635,7 @@ class ShiftedLive:
 class SimSources:
     """실제(live) 와 가상 상황(mock) 을 실행 중에 바꾼다 (PUT /safety/sim 의 source). 가상 시각은 두 모드 모두 쓴다.
     발표에서 '실제 DT 데이터 화면 -> 가상 악천후' 를 이어서 보여주기 위한 것이다.
-    가상 시각·시나리오는 mock 이 갖고, 요청마다 snapshot() 으로 지금 모드의 소스 하나를 꺼내 쓴다 (요청 도중 모드가 바뀌어도 섞이지 않게)."""
+    가상 시각·시간표는 mock 이 갖고, 요청마다 snapshot() 으로 지금 모드의 소스 하나를 꺼내 쓴다 (요청 도중 모드가 바뀌어도 섞이지 않게)."""
 
     def __init__(self, live: "LiveSources", mock: MockSources, mode: str = "live"):
         self.live, self.mock = live, mock
@@ -548,6 +644,13 @@ class SimSources:
     @property
     def scenario(self) -> str:
         return self.mock.scenario
+
+    @property
+    def timeline(self) -> "tuple[SimSegment, ...]":
+        return self.mock.timeline
+
+    def segment_at(self, t: datetime) -> "SimSegment | None":
+        return self.mock.segment_at(t)
 
     @property
     def offset(self) -> timedelta:
@@ -559,9 +662,14 @@ class SimSources:
     def now(self) -> datetime:
         return self.mock.now()
 
-    def set(self, scenario: str, offset: timedelta, mode: str | None = None) -> None:
+    def set(self, offset: timedelta | None = None, timeline: "tuple[SimSegment, ...] | None" = None,
+            mode: str | None = None) -> None:
+        """시간표·가상 시각·모드를 함께 바꾼다. 시간표는 live 에서도 기억해 두었다가 sim 으로 바꾸면 쓴다."""
         with _SIM_LOCK:
-            self.mock.scenario, self.mock.offset = scenario, offset
+            if offset is not None:
+                self.mock.offset = offset
+            if timeline is not None:
+                self.mock.timeline = timeline
             if mode is not None:
                 self.mode = mode
 

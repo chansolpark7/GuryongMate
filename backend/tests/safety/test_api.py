@@ -156,12 +156,12 @@ def test_indoor_can_be_overridden(use):
 
 
 def test_risky_visit_suggests_better_times(use):
-    # storm mock: 10/05 15시부터 잠잠, 예보는 10/07 06시까지
+    # storm 프리셋: 지금(10/04 10:00)부터 30시간 -> 10/05 16시부터 잠잠, 예보는 10/07 06시까지
     v = assess(use(CountingMock("storm")), visit("p-breakwater", "2026-10-04", "14:00", "15:00"))["visits"][0]
     assert v["risk"] == "danger"
     wins = [(w["start"][5:16], w["end"][5:16]) for w in v["better_times"]]
-    assert wins == [("10-05T15:00", "10-05T19:00"), ("10-06T08:00", "10-06T19:00")]
-    assert "better_times" in v["advice"] and "10/05 15:00~19:00" in v["advice"]
+    assert wins == [("10-05T16:00", "10-05T19:00"), ("10-06T08:00", "10-06T19:00")]
+    assert "better_times" in v["advice"] and "10/05 16:00~19:00" in v["advice"]
 
 
 def test_no_better_time_tells_to_find_another_place(use):
@@ -177,8 +177,8 @@ def test_no_better_time_tells_to_find_another_place(use):
 
 
 def test_current_warning_does_not_decide_tomorrow(use):
-    # 내일 오후(약 29시간 뒤)는 예보가 잠잠하므로, 지금 발효 중인 특보만으로 위험해지지 않는다
-    v = assess(use(CountingMock("storm")), visit("p-breakwater", "2026-10-05", "15:00"))["visits"][0]
+    # 내일 오후(30시간 뒤, 폭풍 구간이 끝난 뒤)는 예보가 잠잠하므로, 지금 발효 중인 특보만으로 위험해지지 않는다
+    v = assess(use(CountingMock("storm")), visit("p-breakwater", "2026-10-05", "16:00"))["visits"][0]
     assert v["risk"] == "safe" and v["hazards"] == []
     # 20시간 뒤는 특보를 참고로만 붙이고, 위험 판단은 예보가 한다
     v = assess(use(CountingMock("storm")), visit("p-breakwater", "2026-10-05", "06:00"))["visits"][0]
@@ -240,7 +240,7 @@ def test_outlook_safe_windows(use):
     by = {}
     for w in r["safe_windows"]:
         by.setdefault(w["place_kind"], []).append((w["start"][11:16], w["end"][11:16]))
-    assert by["breakwater"] == [("15:00", "18:00")]  # 폭풍이 15시에 끝난다
+    assert by["breakwater"] == [("16:00", "18:00")]  # 폭풍(지금~30시간)이 16시에 끝난다
     assert by["outdoor"][-1][1] == "18:00"
     calm = ok(use(CountingMock()).get("/safety/outlook", params={"date": "2026-10-05", "now": NOW.isoformat()}))
     assert {(w["place_kind"], w["start"][11:16], w["end"][11:16]) for w in calm["safe_windows"]} == {
@@ -369,8 +369,10 @@ def test_sim_changes_scenario_and_clock(use):
     r = ok(client.post("/safety/assess", json={"visits": [visit("p-breakwater", "2026-10-05", "10:00")]}))
     assert r["now"].startswith("2026-10-05T09:00") and r["visits"][0]["horizon"] == "now"
     assert ok(client.get("/safety/situation"))["now"].startswith("2026-10-05T09:00")
+    # 시나리오는 설정한 가상 시각 기준 절대 구간이라 시각을 되돌려도 밀리지 않는다 -> 지금(10/04 10:00)은 폭풍 전
     st = ok(client.put("/safety/sim", json={"reset_clock": True}))
-    assert st["offset_minutes"] == 0 and st["scenario"] == "storm"
+    assert st["offset_minutes"] == 0 and st["scenario"] == "calm"
+    assert [x["start"][:16] for x in st["timeline"]] == ["2026-10-05T09:00"]
 
 
 def test_sim_rejects_bad_requests(use):
