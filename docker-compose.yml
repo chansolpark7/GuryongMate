@@ -43,6 +43,7 @@ services:
     volumes:
       - ./infra/gateway/Caddyfile:/etc/caddy/Caddyfile:ro
       - ./infra/gateway/routes.caddy:/etc/caddy/routes.caddy:ro
+      - ./infra/gateway/console:/srv/console:ro   # 데모 관제 대시보드 /console/ (고치고 새로고침)
     depends_on:
       - places
       - planner

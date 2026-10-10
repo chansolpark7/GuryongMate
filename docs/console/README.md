@@ -164,5 +164,47 @@
 5. 브라우저 화면 캡처(960px·1440px 폭) 몇 장을 `docs/console/review/`에 남긴다.
 6. 끝나면 `docker compose down` (worktree 스택을 켜 둔 채 끝내지 않는다).
 
-## 7. 열린 문제 (구현 중 발견하면 여기에 적는다)
-- (없음)
+## 7. 확인 결과와 열린 문제
+
+### 7.1 구현 (2026-10-10, `feat/console`)
+`infra/gateway/console/`: `index.html`, `style.css`, `app.js`(시작·로그인·설정·폴링), `api.js`(토큰·refresh·관리 토큰), `data.js`(읽기), `actions.js`(시각·안전·여행·위치 조작),
+`map.js`(Leaflet 레이어), `panels.js`(①~④), `store.js`, `ui.js`, `util.js`, `vendor/leaflet/`(1.9.4 + LICENSE).
+P0 전부와 P1(경로선, 일정 바로가기, planner 안전 경고, 다크 모드, 패널 접기)을 넣었다. 백엔드는 바꾸지 않았다.
+
+- 폴링: 시각 `/safety/sim` 5초(그 사이는 받은 뒤 흐른 시간으로 초 단위 표시), 안전 10초, 계획 목록 5초(`version`·`progress_version` 이 바뀔 때만 상세), 여행 상태 2초,
+  이벤트 2초(여행 중이 아니면 10초, `queued` 가 있으면 그 앞부터 다시 읽어 `delivered`·`failed`·`agent` 반영), planner 경고 15초.
+- 걸어가기: 경로선 25m 간격, 70m/분. 차: 60m 간격, 30km/h. 머물기: 30초 간격. 점마다 🔒 `PUT /safety/sim {now}` → 위치 전송 → 배속만큼 대기 (기본 20배, `즉시` 는 100점씩 묶어 보내고 시각은 끝에 한 번).
+  출발 시각은 지금 가상 시각, 단 마지막 위치 `recorded_at` 보다 이르면 그 1초 뒤 (서버가 버리지 않게).
+- [안전 점검 지금 + 틱]·[여행 시작] 전에 trip 의 지금이 가상 시각(±60초)을 따라올 때까지 최대 8초 기다리고, 틱에는 `?now=` 를 넘긴다 (§4).
+- [여행 시작]이 409 `not_trip_day` 면 서버 문구 + [가상 시각을 계획 날짜로] 버튼. ① 에도 "계획 날짜로: 첫 일정 10분 전" 바로가기가 있다.
+- 지도 클릭 팝업은 `[순간이동] [걸어가기] [차로 가기] [N분 머물기]`, 일정 마커 팝업도 같다 (이름·예정 시각·상태 포함). 파란 점을 끌어 놓으면 순간이동.
+- 관리 토큰은 설정 대화상자에서 입력 → `localStorage` 에만, 모든 요청에 `X-Admin-Token`. 403 `admin_only` 는 "설정에서 관리 토큰을 입력하세요" 알림.
+- 로그인 토큰(access·refresh)도 `localStorage` 에 둔다 (새로고침해도 유지). 401 이면 refresh 한 번 후 재시도, 실패하면 로그인 창.
+  개발 스택용 "로그인 없이 (X-User-Id)" 버튼이 있다 (`AUTH_REQUIRED=true` 면 401 안내).
+
+### 7.2 확인 (§6, worktree 스택 `-p guryong-console`, `API_PORT=8030`, `AGENT_PROVIDER=scripted`, `SAFETY_SIM_ENABLED=true`, 실제 E-UM·기상청 키)
+`run_demo.py --fast-to s2_start` (각본 LLM, 확인 2/2) 뒤 `q` → `/console/` 에서 `seoyun-demo` 로그인.
+
+| 확인 | 결과 |
+|---|---|
+| `/console` → `/console/` 308, 정적 파일·Leaflet 200 (개발 마운트) | 통과 |
+| ① [계획 날짜로] 10/10 12:20 → [여행 시작] (시계 캐시 대기 포함) | 통과 — `day_started` |
+| 구룡포항으로 순간이동 → 가옥거리 걸어가기(626m, 약 9분, 60배) → 머물기 3분 | 통과 — 12:28 `arrived` L2, 카드 '해설', 일정 1번 '머무는 중' |
+| 15:20 → 폭풍 칩 (바로 반영: 점검 + 틱) | 통과 — 구역 위험 3·주의 8, 센서 빨강, 피할 구역 5곳 빗금, `safety_raised` L3 "Agent 제안 #2 보냄" (함께 `delay` L3 가 `queued` — 쿨다운) |
+| 수협 앞(35.9912, 129.5572) 순간이동 + 머물기 3분 | 통과 — `near_hazard` L1 (구룡포수협_스마트맨홀 주변), 가옥거리 `departed` L1 |
+| [실제 데이터] 전환 | 통과 — `mode: live`, 센서 10대, 북·남방파제 CCTV 1시간 집계(모두 0), 데이터 5종 수신, "실제 데이터 (가상 시각에 맞춰 시각을 옮김)" |
+| 운영 게이트웨이: `infra/gateway/Dockerfile` 로 이미지를 만들어 `Caddyfile.prod` + 임시 관리 토큰으로 같은 스택에 붙임(:8031) | 통과 — 이미지 안 `/console/` 200, 토큰 없이 [+5분] → 403 "관리 토큰이 필요한 API 입니다 — 설정(⚙)에서…" 알림, 토큰 입력 후 [+5분]·[안전 점검 지금 + 틱] 200 |
+| [여행 종료] | 통과 — `day_ended`, 위치 조작 버튼 비활성 |
+| 토큰이 URL·콘솔 로그에 남는지 | 남지 않음 (콘솔에는 브라우저가 찍는 403 한 줄만) |
+| 화면 캡처 | `review/1440_live.jpg`, `review/1440_storm.jpg`, `review/960_storm.jpg`, `review/960_timeline.jpg`, `review/prod_403.jpg` |
+
+### 7.3 열린 문제·참고
+- **운영 compose 전체(`docker-compose.prod.yml`)로는 띄우지 않았다.** 운영 이미지 5개 빌드·Valhalla 볼륨이 필요해서, 게이트웨이 이미지만 운영 설정으로 만들어 개발 스택에 붙여 확인했다 (`AUTH_REQUIRED` 는 개발값 false — 로그인 자체는 `/auth/login` 으로 확인).
+  배포 전 `deploy/build.sh` 로컬 확인(docs/deploy §9) 때 `/console/` 을 한 번 열어 볼 것.
+- 캡처는 브라우저 도구가 폭 800px 로 줄여 저장했다 (레이아웃은 960·1440 뷰포트에서 그린 것).
+- 실제 ↔ 가상을 오가면 planner 가 그때마다 새 경고를 만들어 `safety_eased`(L1) → `safety_raised`(L3, 새 Agent 제안)가 다시 나온다 (원인 키 = 경고 id). 발표 중에는 전환을 한 번만 할 것.
+  "바꾸면 바로 반영" 이 켜져 있으면 전환할 때마다 점검·틱을 부른다 — 끄면 planner 주기(개발 60초·운영 10초)를 기다린다.
+- 가상 시각을 크게 앞으로 옮기면 그동안 위치가 없어 `delay` L3 가 함께 나올 수 있다 (실제로 늦은 것, docs/trip §3.2). 장면 순서는 `run_demo.py` 로.
+- 대시보드 걸어가기와 `run_demo.py` 재생을 동시에 돌리면 두 쪽이 가상 시각을 서로 덮어쓴다 (위치 시각이 뒤섞여 버려지는 점이 생김). 하나만 돌릴 것.
+- 백엔드에 꼭 필요한 변경은 없었다.
+

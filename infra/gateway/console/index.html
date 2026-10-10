@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>구룡메이트 관제</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='6' fill='%231971c2'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="vendor/leaflet/leaflet.css">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- 피할 구역 빗금 무늬 (style.css .avoid-zone) -->
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <defs>
+      <pattern id="gm-hatch" width="8" height="8" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+        <rect width="8" height="8" fill="rgba(224,49,49,0.12)"></rect>
+        <line x1="0" y1="0" x2="0" y2="8" stroke="rgba(201,42,42,0.55)" stroke-width="3"></line>
+      </pattern>
+    </defs>
+  </svg>
+
+  <header id="top">
+    <div class="bar">
+      <h1>구룡메이트 관제</h1>
+      <span class="chip" id="conn" title="GET /health"><i class="dot"></i><span id="conn-text">연결 확인 중</span></span>
+      <span class="chip" id="llm" title="GET /agent/info">LLM -</span>
+      <span class="chip" id="mode-chip" title="GET /safety/sim">안전 -</span>
+      <span class="grow"></span>
+      <span class="clock-top" id="clock-top" title="지금 가상 시각 (safety)">-</span>
+      <button class="icon" id="btn-settings" title="설정·도움말">⚙ 설정</button>
+      <button class="icon" id="btn-panel" title="오른쪽 패널 접기/펴기" aria-expanded="true">패널 ▸</button>
+    </div>
+    <div class="bar">
+      <span class="muted">사용자</span> <b id="user-label">-</b>
+      <button class="link" id="btn-logout">로그아웃</button>
+      <label class="muted" for="plan-select">계획</label>
+      <select id="plan-select"><option value="">-</option></select>
+      <span class="chip" id="trip-chip">여행 -</span>
+    </div>
+  </header>
+
+  <main id="main">
+    <div id="map-wrap">
+      <div id="map" aria-label="구룡포 지도"></div>
+      <div id="motion-bar" hidden>
+        <span id="motion-text"></span>
+        <progress id="motion-progress" max="1" value="0"></progress>
+        <button class="danger" id="btn-stop">정지</button>
+      </div>
+      <div id="toasts" aria-live="polite"></div>
+    </div>
+
+    <aside id="panel">
+      <details class="sec" id="sec-clock" open>
+        <summary><span class="num">①</span> 시각</summary>
+        <div class="clock-big"><span id="clock-now">-</span> <span class="badge" id="clock-badge"></span></div>
+        <div class="row" id="clock-shift">
+          <button data-shift="5">+5분</button>
+          <button data-shift="10">+10분</button>
+          <button data-shift="30">+30분</button>
+          <button data-shift="60">+1시간</button>
+        </div>
+        <div class="row">
+          <input type="datetime-local" id="clock-input" step="1" aria-label="가상 시각 직접 입력 (KST)">
+          <button id="clock-apply">적용</button>
+          <button id="clock-reset" title="reset_clock">실제 시각으로</button>
+        </div>
+        <div class="row"><button class="link" id="clock-plan" hidden></button></div>
+        <p class="note" id="clock-note" hidden></p>
+      </details>
+
+      <details class="sec" id="sec-safety" open>
+        <summary><span class="num">②</span> 안전 상황</summary>
+        <div class="row seg" role="group" aria-label="데이터">
+          <button id="src-live">실제 데이터</button>
+          <button id="src-mock">가상 상황</button>
+        </div>
+        <p class="note" id="src-note" hidden></p>
+        <div class="chips" id="scenario-chips"></div>
+        <p class="desc" id="scenario-desc"></p>
+        <div id="safety-summary"></div>
+        <div class="row">
+          <button class="primary" id="btn-scan" title="POST /planner/safety/scan → POST /trip/plans/{id}/tick?now=">안전 점검 지금 + 틱</button>
+          <label class="check"><input type="checkbox" id="apply-now" checked> 바꾸면 바로 반영</label>
+        </div>
+        <p class="note" id="scan-busy" hidden></p>
+      </details>
+
+      <details class="sec" id="sec-trip" open>
+        <summary><span class="num">③</span> 위치 · 여행</summary>
+        <div id="trip-state"></div>
+        <div class="row">
+          <button class="primary" id="btn-start">여행 시작</button>
+          <button id="btn-end">여행 종료</button>
+          <span class="note inline" id="trip-busy"></span>
+        </div>
+        <div class="error" id="trip-error" hidden></div>
+        <div class="row">
+          <button id="btn-stay">현재 위치에서</button>
+          <input type="number" id="stay-min" min="1" max="180" value="3" aria-label="머무는 분"> 분 머물기
+          <span class="grow"></span>
+          <label class="muted" for="speed">배속</label>
+          <select id="speed" title="실제 1초 = 가상 N초">
+            <option value="0">즉시</option>
+            <option value="5">5배</option>
+            <option value="10">10배</option>
+            <option value="20">20배</option>
+            <option value="60">60배</option>
+            <option value="120">120배</option>
+          </select>
+        </div>
+        <p class="hint">지도를 클릭하면 [순간이동]·[걸어가기]·[차로 가기]·[머물기]. 파란 점을 끌어 놓으면 순간이동.
+          도착은 반경 안에 90초 이상 있어야 판정된다 — 순간이동 뒤 [머물기].</p>
+        <ol id="itinerary"></ol>
+      </details>
+
+      <details class="sec" id="sec-timeline" open>
+        <summary><span class="num">④</span> 이벤트 타임라인 <span class="muted" id="tl-count"></span></summary>
+        <ul id="timeline"></ul>
+        <details class="sub" id="alerts-box">
+          <summary>planner 안전 경고 <span class="muted" id="alerts-count"></span></summary>
+          <ul id="alerts"></ul>
+        </details>
+      </details>
+    </aside>
+  </main>
+
+  <dialog id="dlg-login">
+    <form method="dialog" id="login-form">
+      <h2>로그인</h2>
+      <p class="hint">앱과 같은 데모 사용자로 로그인한다 (여행·위치·이벤트는 사용자별).</p>
+      <label>아이디 <input name="login_id" id="login-id" autocomplete="username" value="seoyun-demo" required></label>
+      <label>비밀번호 <input name="password" id="login-pw" type="password" autocomplete="current-password" required></label>
+      <p class="error" id="login-error" hidden></p>
+      <div class="row end">
+        <button type="button" class="link" id="btn-dev-user" title="AUTH_REQUIRED=false 개발 스택 전용">로그인 없이 (개발: X-User-Id)</button>
+        <button type="submit" class="primary" id="btn-login">로그인</button>
+      </div>
+      <p class="hint">서버: <span id="login-server"></span> · <button type="button" class="link" id="btn-login-settings">서버·관리 토큰 설정</button></p>
+    </form>
+  </dialog>
+
+  <dialog id="dlg-settings">
+    <form method="dialog" id="settings-form">
+      <h2>설정</h2>
+      <label>서버 주소 <input id="set-base" placeholder="비우면 이 페이지의 출처 (같은 게이트웨이)" autocomplete="off"></label>
+      <p class="hint">다른 출처를 넣으면 CORS 때문에 막힐 수 있다 — 보통은 그 서버의 /console/ 을 연다.</p>
+      <label>관리 토큰 (운영 서버의 🔒 API: 가상 시각·안전 상황·즉시 점검·틱)
+        <input id="set-admin" type="password" autocomplete="off" placeholder="deploy/admin_token.sh 로 확인"></label>
+      <p class="hint">이 브라우저의 localStorage 에만 저장되고 모든 요청에 X-Admin-Token 헤더로 붙는다. 개발 스택은 토큰 없이 열려 있다.
+        <span id="admin-state"></span></p>
+      <div class="row end">
+        <button type="button" id="btn-admin-clear">토큰 지우기</button>
+        <button type="submit" class="primary" value="save">저장</button>
+      </div>
+      <h3>연결 확인</h3>
+      <ul class="kv" id="conn-detail"></ul>
+      <h3>도움말</h3>
+      <ul class="help">
+        <li>대시보드는 상태 표시 + 수동 조작이다. 장면 순서·대화·제안 승인은 <code>scripts/demo/run_demo.py</code> 가 맡는다 (같이 써도 된다).</li>
+        <li><b>같은 장면을 다시 보려면</b> 초기화가 필요하다 (같은 원인으로는 한 번만 알린다). 대시보드에서 하지 말고
+          <code>python scripts/demo/run_demo.py --url &lt;서버&gt; --fast-to &lt;단계&gt;</code> (또는 <code>prep</code> 단계)를 쓴다.</li>
+        <li>시계는 safety 하나. trip·planner 는 5초 캐시하므로 시각을 크게 옮긴 직후엔 몇 초 기다린다 ([안전 점검 지금 + 틱]·[여행 시작]은 자동으로 기다림).</li>
+        <li>위치의 시각은 단조 증가해야 한다. 마지막 위치보다 이른 가상 시각으로 돌리면 그 사이 위치는 버려진다.</li>
+        <li>도착: 장소 반경(60m + 정확도) 안에 90초 이상. 출발: 반경 밖 2분 이상. 순간이동 한 번으로는 도착이 안 난다 → [머물기].</li>
+        <li>이벤트 읽음 처리(seen)는 하지 않는다 — 앱의 몫.</li>
+      </ul>
+      <div class="row end"><button type="submit" value="close">닫기</button></div>
+    </form>
+  </dialog>
+
+  <script src="vendor/leaflet/leaflet.js"></script>
+  <script type="module" src="app.js"></script>
+</body>
+</html>

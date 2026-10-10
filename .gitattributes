@@ -6,3 +6,6 @@ Dockerfile text eol=lf
 deploy/** text eol=lf
 Dockerfile.prod text eol=lf
 docker-compose*.yml text eol=lf
+# 이미지는 줄바꿈 변환 금지 (위 infra/** 규칙보다 뒤에 둔다 — 대시보드 vendor/leaflet/images)
+*.png binary
+*.jpg binary
