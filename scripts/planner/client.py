@@ -376,9 +376,11 @@ class PlannerClient:
         return self._req("GET", "/safety/sim")
 
     def set_sim(self, scenario: str | None = None, now: str | None = None, reset_clock: bool = False,
-                source: str | None = None) -> dict:
-        """source: live(실제 데이터) | mock(가상 상황). SAFETY_SIM_ENABLED 일 때 live 로 바꿀 수 있다. scenario 를 주면 mock."""
-        body = {k: v for k, v in {"scenario": scenario, "now": now, "source": source}.items() if v is not None}
+                source: str | None = None, until: str | None = None, timeline: list[dict] | None = None) -> dict:
+        """source: live(실제 데이터) | mock(가상 상황). SAFETY_SIM_ENABLED 일 때 live 로 바꿀 수 있다. scenario 를 주면 mock.
+        scenario 는 날씨 시간표 프리셋 (until: 그 구간이 끝나는 시각), timeline 은 시간표 전체 교체 [{kind, start, end}]."""
+        body = {k: v for k, v in {"scenario": scenario, "now": now, "source": source, "until": until,
+                                  "timeline": timeline}.items() if v is not None}
         if reset_clock:
             body["reset_clock"] = True
         return self._req("PUT", "/safety/sim", json=body)
