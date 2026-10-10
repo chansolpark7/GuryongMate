@@ -54,6 +54,8 @@
 - **자동 종료를 미룸 (결정 2026-10-11)**: 많이 늦은 채 아직 다니는 중이면 '계획 종료 + 120분'에 끝나 버렸다 (위치 판정·선제 턴이 끊김).
   계획 종료 + 120분이 지나도 위치가 계속 들어오면(마지막 위치 전송이 `TRIP_ACTIVE_MIN` 안) 미루고, 위치가 끊긴 뒤 `TRIP_ACTIVE_MIN` 이 지나면 끝낸다.
   기준은 위치 전송만이다 (이벤트 조회는 아님 — 숙소에서 앱만 켜 둔 채 자정까지 이어지지 않게). 자정 종료는 그대로.
+- **가이드 자동 준비 (2026-10-11)**: 시작이 성공하면 응답 뒤 `POST /agent/plans/{id}/guide/prepare {"auto": true}` (그 사용자의 짧은 토큰, 선제 턴과 같음) —
+  아직 노트가 없는 장소를 준비한다 (`docs/docent/README.md` §3.2). 실패(agent 접근 불가·429)해도 시작에는 영향 없음, 로그만.
   위치 시각(`trip_day.located_at`)은 받은 때의 trip 의 지금과 점의 `recorded_at` 중 늦은 것 (§4.1 앱 활동과 같은 시계).
 
 앱 권장 동작: 오늘이 여행일이고 (첫 일정 시작 1시간 전 이후 또는 구룡포 반경 3km 안) 이면 "오늘 여행 시작할까요?"를 띄운다. **자동으로 시작하지는 않는다** (여행일에 집에서 계획만 고치는 경우).
@@ -138,7 +140,7 @@
 
 | `type` | 판정 (결정론적) | 단계 | 처리 | 데모 |
 |---|---|---|---|---|
-| `arrived` | 오늘 남은 항목 장소 반경(`TRIP_ARRIVE_RADIUS_M` 60 + accuracy, 최대 150m) 안에 `TRIP_ARRIVE_DWELL_SEC`(90초) 이상 머묾. 예정 순서가 아닌 항목이어도 오늘 남은 항목이면 도착으로 본다 (`out_of_order: true`). **머무는 중에도** 다른 남은 항목 B 의 반경 안이고 지금 장소보다 B 에 더 가까운 점이 90초 이어지면 `departed` → `arrived` (가까운 장소 사이 이동, 아래) | 0 + 2 | 항목을 `visiting` 으로. **해설 카드**: "일본인가옥거리예요. 이야기 들어볼까요? [짧게] [자세히]" → 누르면 해설 (`docs/docent/README.md`) | ② |
+| `arrived` | 오늘 남은 항목 장소 반경(`TRIP_ARRIVE_RADIUS_M` 60 + accuracy, 최대 150m) 안에 `TRIP_ARRIVE_DWELL_SEC`(90초) 이상 머묾. 예정 순서가 아닌 항목이어도 오늘 남은 항목이면 도착으로 본다 (`out_of_order: true`). **머무는 중에도** 다른 남은 항목 B 의 반경 안이고 지금 장소보다 B 에 더 가까운 점이 90초 이어지면 `departed` → `arrived` (가까운 장소 사이 이동, 아래) | 0 + 2 | 항목을 `visiting` 으로. **해설 카드**: "일본인가옥거리예요. 이야기 들어볼까요? [짧게] [자세히]" → 누르면 해설 (`docs/docent/README.md`). 응답 뒤 그 장소 가이드 자동 준비 요청 (`place_ids: [그 장소]`, 노트가 있거나 준비 중·실패면 agent 가 건너뜀) | ② |
 | `departed` | `visiting` 장소 반경 밖이 `TRIP_DEPART_DWELL_SEC`(120초) 이상 이어짐, 또는 위의 가까운 장소 전환 | 0 + 1 | 항목을 `done` 으로. "다음은 과메기문화관, 도보 8분" | |
 | `delay` (`reason: violations`) | 현재 위치·시각 기준으로 남은 일정을 다시 계산(§6.2)했을 때 **기준 일정에 없던 위반이 새로 생김**: `fixed_time_missed`, `day_overflow`, `outside_open_hours`, `closed_day`, hard 규칙 위반 | 3 | Agent 선제 턴: 근거·영향 설명 + 추천안 1개(제안 카드) + "다른 방법" 한 줄 → 승인 (대화로 조건을 붙이면 다시 제안) | ③ |
 | `delay` (`reason: behind_schedule`) | 새 위반은 없지만 **다음 일정이 계획보다 `TRIP_BEHIND_MIN`(30)분 이상 늦음** (`delay_minutes` ≥ 30). 마지막으로 알린 지연보다 30분 더 밀릴 때만 다시 | 3 | Agent 선제 턴: "남은 일정을 미룰까요?" — 늦어진 정도·영향 + 추천안 1개(남은 일정 미루기) + "다른 방법" 한 줄 | |
@@ -382,6 +384,7 @@ POST /planner/plans/{id}/projection        (저장 안 함, 본문·필드 모�
 | safety | `GET /safety/sim` | 시계 (§5) |
 | routing | (planner projection 이 부름) | 이동 중 예상 도착 |
 | agent | `POST /agent/sessions` (세션이 없을 때), `POST /agent/sessions/{sid}/events` | 선제 턴 |
+| agent | `POST /agent/plans/{id}/guide/prepare` `{"auto": true, "place_ids"?}` (응답 뒤, 실패는 로그만) | 가이드 자동 준비: 여행 시작(전체)·`arrived`(그 장소) |
 
 | → trip | API | 용도 |
 |---|---|---|

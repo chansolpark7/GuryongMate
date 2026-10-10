@@ -282,6 +282,7 @@ LLM은 일정을 직접 바꾸지 않는다. 결과는 두 종류의 **카드**�
 | `AGENT_WEB_SEARCH_CONTEXT` | `low` | OpenAI 내장 검색 `search_context_size` (`low`·`medium`·`high`, 클수록 비쌈) |
 | `AGENT_GUIDE_MAX_STEPS` | `6` | 가이드 준비 작업에서 장소 하나의 LLM 호출 최대 횟수 (마지막은 도구 없이 노트 JSON 강제) |
 | `AGENT_GUIDE_PASSAGES` | `6` | 가이드 준비 작업이 장소마다 미리 찾아 주는 근거 조각 수 |
+| `AGENT_GUIDE_AUTO` | `true` | 가이드 자동 준비 (제안 승인·추천 추가 뒤, trip 의 여행 시작·도착 때 노트가 없는 장소). `false` 면 버튼으로만 (테스트는 끈다) |
 | `AGENT_LIMIT_CHAT_HOUR`·`_DAY` | `0` | 사용자당 대화 턴(다시 제안 포함) 상한, 1시간·24시간. `0` 이면 제한 없음(개발 기본). 공개 서버 값: `deploy/backend.env.example` (docs/deploy/README.md §3.3) |
 | `AGENT_LIMIT_EVENT_HOUR`·`_DAY` | `0` | 선제 턴 상한. 넘으면 trip 이 실패로 세고 다시 보낸다 |
 | `AGENT_LIMIT_GUIDE_HOUR`·`_DAY` | `0` | 가이드 준비 작업 상한 (새 작업 하나 = 계획의 장소 여러 곳) |
@@ -629,12 +630,19 @@ trip 이 단계 3 이벤트(`delay`, `safety_raised`)에서 부른다. 앱은 �
 
 | 메서드 | 경로 | 본문 | 성공 | 오류 |
 |---|---|---|---|---|
-| POST | `/agent/plans/{plan_id}/guide/prepare` | `{"place_ids"?: [...], "force"?: false}` (생략 가능) | 202 `GuideJobView` | 404 `plan_not_found`, 422 `place_not_in_plan`(`place_ids`), 503 docent·planner 접근 불가 |
+| POST | `/agent/plans/{plan_id}/guide/prepare` | `{"place_ids"?: [...], "force"?: false, "auto"?: false}` (생략 가능) | 202 `GuideJobView` | 404 `plan_not_found`, 422 `place_not_in_plan`(`place_ids`), 429 `rate_limited`, 503 docent·planner 접근 불가 |
 | GET | `/agent/plans/{plan_id}/guide/jobs/{job_id}` | | 200 `GuideJobView` | 404 `job_not_found` (없음·다른 계획·다른 사용자·끝난 지 1시간 지남) |
 
 - 대상: 일정의 장소(날짜·순서대로, 같은 장소는 한 번, 건너뛴 항목 제외). `place_ids` 면 그중 그 장소만. `force` 가 아니면 이미 `ready` 인 노트는 건너뛴다
   (`pending`·`preparing`·`failed`·`stale`·없음은 다시 만든다 — 앱의 [다시 시도]·[다시 준비]도 같은 호출).
-- **계획당 작업 하나**: 진행 중인 작업이 있으면 새로 만들지 않고 그 작업을 돌려준다(202). 준비할 곳이 없으면 바로 `status: "done"`, `total: 0`.
+  지금 돌고 있는 작업이 아직 끝내지 않은 장소와 이어서 할 장소(`queued`)는 대상에서 뺀다 (`force` 여도).
+- `auto: true` (trip 의 여행 시작·도착): 노트가 `ready`·`pending`·`preparing`·`failed` 면 건너뛰고(없음·`stale` 만), 일정에 없는 `place_ids` 는 422 대신 무시한다.
+  `AGENT_GUIDE_AUTO=false` 면 아무것도 하지 않는다 (`total: 0`).
+- **계획당 작업 하나**: 진행 중인 작업이 있으면 새로 만들지 않고 그 작업을 돌려준다(202). 그 작업에 없는 대상은 `pending` 으로 표시하고 `queued` 에 두었다가
+  **작업이 끝나면 그 장소들로 새 작업을 이어서** 돌린다 (작업 id 가 바뀐다. 노트 상태는 docent 에서 계속 볼 수 있다). 준비할 곳이 없으면 바로 `status: "done"`, `total: 0`.
+- **자동 시작** (`docs/docent/README.md` §3.2): 제안 승인·추천 후보 [추가]가 성공하면 응답 뒤(기다리지 않음) 같은 함수(`router._prepare`, `auto`)로 일정 전체를 준비한다.
+  trip 은 여행 시작·`arrived` 때 이 엔드포인트를 `auto: true` 로 부른다. 자동 준비도 `AGENT_LIMIT_GUIDE_*` 에 센다 (새로 준비할 곳이 있을 때만).
+  승인·추가 뒤의 자동 준비는 한도 초과(429)·서비스 오류를 로그만 남기고 건너뛴다 (승인 응답에는 영향 없음).
 - 응답 전에 대상 노트를 모두 `pending` 으로 저장한다 (docent 노트 목록만 보는 앱도 바로 "대기"를 본다). 이전 본문은 docent 가 남긴다.
 - 작업은 받은 인증 대신 같은 사용자로 새로 발급한 2시간짜리 토큰(개발 모드면 `X-User-Id`)으로 planner·places·docent 를 부른다.
 
@@ -648,6 +656,7 @@ trip 이 단계 3 이벤트(`delay`, `safety_raised`)에서 부른다. 앱은 �
              "error": "", "sources": 4, "web_searches": 2, "seconds": 18.2,
              "usage": {"input": 9100, "cached": 2048, "output": 1400, "reasoning": 300, "calls": 3}}],
  "started_at": "…", "finished_at": null,
+ "queued": ["kto-2660046"],                                    // 이 작업이 끝난 뒤 이어서 준비할 장소 (작업 중에 들어온 요청)
  "usage": {"input": 9100, "cached": 2048, "output": 1400, "reasoning": 300, "calls": 3}}   // 작업 전체 LLM 토큰
 ```
 
