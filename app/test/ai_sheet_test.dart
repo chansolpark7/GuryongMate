@@ -305,4 +305,41 @@ void main() {
     expect(find.byTooltip('구룡메이트 열기'), findsWidgets);
     expect(find.text('목록'), findsNothing);
   });
+  testWidgets('05 다시 열기: 이전 대화가 길면 최근 대화(맨 아래)부터 · 위로 올려 읽는 중엔 끌어내리지 않음', (tester) async {
+    await phone(tester);
+    final gw = FixtureGateway(['f1_plan_with_ai.json']);
+    final ps = PlanState(gw, (gw.response('accept') as Map)['plan'] as Map<String, dynamic>,
+        session: {'id': 'sess-long', 'plan_id': 240, 'created_at': '2026-10-09T00:00:00Z', 'updated_at': '2026-10-09T00:00:00Z'});
+    ps.sessionDetail = {
+      'id': 'sess-long', 'plan_id': 240, 'created_at': '2026-10-09T00:00:00Z', 'updated_at': '2026-10-09T00:00:00Z',
+      'messages': [
+        for (var n = 0; n < 15; n++) ...[
+          {'id': n * 2 + 1, 'role': 'user', 'content': '질문 $n'},
+          {'id': n * 2 + 2, 'role': 'assistant', 'content': '답변 $n입니다. 구룡포 일정에 대해 조금 길게 설명해 드릴게요.'},
+        ],
+      ],
+    };
+    final session = await signedInSession(gw);
+    await tester.pumpWidget(app(session, const PlannerShell(planId: 240)));
+    await settle(tester);
+
+    await openSheet(tester);
+    expect(find.textContaining('답변 14').hitTestable(), findsOneWidget, reason: '최근 대화가 보인다');
+    expect(find.text('질문 0').hitTestable(), findsNothing);
+
+    // 위로 올려 이전 대화를 읽는 중이면 그대로
+    final list = find.descendant(of: find.byType(DraggableScrollableSheet).last, matching: find.byType(Scrollable)).first;
+    for (var i = 0; i < 2; i++) {
+      await tester.drag(list, const Offset(0, 300));
+      await tester.pump(const Duration(milliseconds: 50));
+    }
+    await settle(tester, 10);
+    expect(find.textContaining('답변 14').hitTestable(), findsNothing);
+
+    // 닫았다가 다시 열면 다시 맨 아래
+    await tester.tap(find.byTooltip('닫기'));
+    await settle(tester, 10);
+    await openSheet(tester);
+    expect(find.textContaining('답변 14').hitTestable(), findsOneWidget);
+  });
 }

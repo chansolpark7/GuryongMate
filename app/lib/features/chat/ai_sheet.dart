@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show ScrollDirection;
 import 'package:provider/provider.dart';
 
 import '../../core/models/agent.dart';
@@ -61,6 +62,10 @@ class _AiSheetState extends State<_AiSheet> {
   late final ChatController _chat;
   int _lastLen = 0;
 
+  /// 열면 최근 대화(맨 아래)부터 보인다. 기록·카드가 늦게 채워져 길이가 늘어도, 사용자가 직접 스크롤하기 전까지는 맨 아래에 붙여 둔다.
+  /// 선제 메시지로 열 때(특정 메시지로 스크롤)는 처음부터 끈다.
+  late bool _pinBottom = !widget.full;
+
   /// 선제 메시지로 스크롤하기 위한 턴 키 (message id 별).
   final _turnKeys = <int, GlobalKey>{};
 
@@ -77,6 +82,8 @@ class _AiSheetState extends State<_AiSheet> {
     };
     _input.text = widget.prefill ?? '';
     _input.addListener(() => setState(() {}));
+    if (_chat.focusMessageId != null) _pinBottom = false;
+    WidgetsBinding.instance.addPostFrameCallback((_) => _jumpToBottom());
     _chat.init().then((_) {
       final s = widget.sendNow;
       if (s != null && mounted) {
@@ -98,6 +105,24 @@ class _AiSheetState extends State<_AiSheet> {
     super.dispose();
   }
 
+  void _jumpToBottom() {
+    final s = _scroll;
+    if (!mounted || !_pinBottom || s == null || !s.hasClients) return;
+    if (s.position.pixels < s.position.maxScrollExtent) s.jumpTo(s.position.maxScrollExtent);
+  }
+
+  /// 목록 길이·시트 높이가 바뀌면(기록 로드, 카드 펼침, Half↔Full) 맨 아래에 붙여 둔 동안은 다시 맨 아래로.
+  bool _onMetrics(ScrollMetricsNotification n) {
+    if (_pinBottom && n.depth == 0 && n.metrics.extentAfter > 0) WidgetsBinding.instance.addPostFrameCallback((_) => _jumpToBottom());
+    return false;
+  }
+
+  /// 사용자가 목록을 직접 움직이면 붙여 두기를 푼다 (위로 올려 이전 대화를 읽는 중).
+  bool _onUserScroll(UserScrollNotification n) {
+    if (n.depth == 0 && n.direction != ScrollDirection.idle) _pinBottom = false;
+    return false;
+  }
+
   /// 새 내용이 오면 맨 아래로 (사용자가 위로 올려 읽는 중이면 그대로 둔다).
   void _autoScroll() {
     final s = _scroll;
@@ -115,6 +140,7 @@ class _AiSheetState extends State<_AiSheet> {
   void _focusMessage() {
     final mid = _chat.focusMessageId;
     if (mid == null) return;
+    _pinBottom = false;
     WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToMessage(mid));
   }
 
@@ -132,6 +158,7 @@ class _AiSheetState extends State<_AiSheet> {
 
   /// 대기 안내 줄 [제안 보기] → 대기 중인 제안이 있는 턴으로.
   void _scrollToPending() {
+    _pinBottom = false;
     for (final t in _chat.turns.reversed) {
       if (t.proposals.any((e) => e.state == ProposalState.pending) && t.messageId != null) {
         _scrollToMessage(t.messageId!);
@@ -148,6 +175,7 @@ class _AiSheetState extends State<_AiSheet> {
       return;
     }
     _input.clear();
+    _pinBottom = true; // 보낸 말과 답을 따라간다
     _chat.send(msg);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final s = _scroll;
@@ -205,35 +233,41 @@ class _AiSheetState extends State<_AiSheet> {
                 ]),
               ),
               Expanded(
-                child: ListView(
-                  controller: scroll,
-                  padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
-                  children: [
-                    if (chat.initializing && chat.turns.isEmpty)
-                      const Padding(padding: EdgeInsets.all(32), child: Center(child: CircularProgressIndicator()))
-                    else if (chat.initError != null && chat.sessionId == null)
-                      StateView(
-                        icon: Icons.dns_outlined,
-                        title: '구룡메이트에 연결하지 못했어요',
-                        message: '잠시 후 다시 시도해 주세요. 일정은 그대로예요.',
-                        actionLabel: '다시 시도',
-                        onAction: chat.init,
-                      )
-                    else if (chat.turns.isEmpty)
-                      _Welcome(day: plan.day, onPick: _send)
-                    else
-                      for (final (i, t) in chat.turns.indexed)
-                        TurnView(
-                          key: t.messageId == null ? null : _keyFor(t.messageId!),
-                          turn: t,
-                          isLast: i == chat.turns.length - 1,
-                          onFollowUp: _send,
-                          onShowPending: _scrollToPending,
-                        ),
-                    // 시트가 열려 있을 때 온 도착 카드 (대화 기록에는 남지 않는 로컬 카드, 16)
-                    if (chat.arrivalCard != null && tripHub.controller != null)
-                      Padding(padding: const EdgeInsets.only(bottom: 16), child: ArrivalCard(event: chat.arrivalCard!, c: tripHub.controller!, inChat: true)),
-                  ],
+                child: NotificationListener<ScrollMetricsNotification>(
+                  onNotification: _onMetrics,
+                  child: NotificationListener<UserScrollNotification>(
+                    onNotification: _onUserScroll,
+                    child: ListView(
+                      controller: scroll,
+                      padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
+                      children: [
+                        if (chat.initializing && chat.turns.isEmpty)
+                          const Padding(padding: EdgeInsets.all(32), child: Center(child: CircularProgressIndicator()))
+                        else if (chat.initError != null && chat.sessionId == null)
+                          StateView(
+                            icon: Icons.dns_outlined,
+                            title: '구룡메이트에 연결하지 못했어요',
+                            message: '잠시 후 다시 시도해 주세요. 일정은 그대로예요.',
+                            actionLabel: '다시 시도',
+                            onAction: chat.init,
+                          )
+                        else if (chat.turns.isEmpty)
+                          _Welcome(day: plan.day, onPick: _send)
+                        else
+                          for (final (i, t) in chat.turns.indexed)
+                            TurnView(
+                              key: t.messageId == null ? null : _keyFor(t.messageId!),
+                              turn: t,
+                              isLast: i == chat.turns.length - 1,
+                              onFollowUp: _send,
+                              onShowPending: _scrollToPending,
+                            ),
+                        // 시트가 열려 있을 때 온 도착 카드 (대화 기록에는 남지 않는 로컬 카드, 16)
+                        if (chat.arrivalCard != null && tripHub.controller != null)
+                          Padding(padding: const EdgeInsets.only(bottom: 16), child: ArrivalCard(event: chat.arrivalCard!, c: tripHub.controller!, inChat: true)),
+                      ],
+                    ),
+                  ),
                 ),
               ),
               _InputBar(controller: _input, focus: _focus, busy: chat.busy, onSend: _send, onStop: chat.stop),
