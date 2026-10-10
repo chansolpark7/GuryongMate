@@ -426,6 +426,7 @@ class Demo:
             ], self.s4_move),
             Step("s4_clear", "장면 ④", f"카페에서 쉬는 동안 {STORM_UNTIL} 폭풍이 그침 → 평상시", [
                 "안전 화면: 특보 없음, 침수 센서 정상, 지도 구역 초록",
+                "알림: '악천후가 그쳤어요. 지금 구룡포는 특이사항이 없어요.' (safety_eased, LLM 없음) → 지도 구역·배지 다시 불러옴",
                 "남은 일정(카페)은 그대로 — 새 경고·제안 없음",
             ], self.s4_clear),
             Step("end", "마무리", "여행 종료·결과", [
@@ -685,10 +686,10 @@ class Demo:
         self.check(calm, f"{STORM_UNTIL} 뒤 특보·센서 평상시, 구역 모두 안전")
         trip_cli._tick(self.c, self.plan, t, wait=True, on_event=self.on_event)  # planner 안전 점검 + trip 틱
         self.check(not self.events_since("safety_raised", end), "폭풍이 그친 뒤 새 경고 없음 (남은 일정 그대로)")
-        if not self.events_since("safety_eased", end):
-            # planner 는 남은 일정 중 단계가 내려간 것이 있을 때만 경고 완화를 낸다. 이 계획에서 폭풍 중 위험했던 남은 일정은
-            # 차로 카페 가는 길(계획 시각 16:14~16:25)뿐이라 17시에는 이미 지났고, 카페(실내)는 폭풍 중에도 안전이었다.
-            print(f"{DIM}  safety_eased 없음: 폭풍 중 위험했던 남은 일정이 없다 (카페 가는 길은 지남, 카페는 실내라 안전).{RESET}")
+        # 상황 해제 (docs/trip/README.md §3.2): 이 계획에서 폭풍 중 위험했던 남은 일정(차로 카페 가는 길)은 17시에 이미 지나
+        # planner 경고 완화는 없지만, trip 이 safety 상황(특보·구역)이 평상시로 돌아온 것을 보고 safety_eased 를 한 번 낸다
+        self.expect({"type": "safety_eased", "level": 1})
+        self.check(len(self.events_since("safety_eased", end)) == 1, "상황 해제 알림 한 번 (중복 없음)")
 
     def finish(self) -> None:
         trip_cli.print_state(self.c.trip_state(self.plan))
