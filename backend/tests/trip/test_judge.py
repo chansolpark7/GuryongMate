@@ -164,6 +164,78 @@ def test_delay_message_explains_fresh_violation_first():
     assert "fixed_time_missed 4" in d.message and "그 밖에 1건" in d.message
 
 
+# 여유 있는 계획: 가옥거리(12:30~13:30, 머무는 중) -> 구룡포항 13:39 -> … 15:42 종료
+BASE = {"version": 3, "days": [{"day": 1, "end_at": "15:42", "items": [
+    {"id": 1, "place_id": "p-a", "place": {"title": "가옥거리"}, "status": "visiting", "start_at": "12:30", "stay_minutes": 60},
+    {"id": 2, "place_id": "p-b", "place": {"title": "구룡포항"}, "status": "planned", "start_at": "13:39", "stay_minutes": 50}]}]}
+VISITING = Track(state="visiting", item_id=1, since=T0.replace(hour=12, minute=30))
+
+
+def behind(delay: int, eta: str, violations=(), plan_end: str = "15:42") -> dict:
+    return {"new_violations": list(violations), "delay_minutes": delay,
+            "next": {"item_id": 2, "planned_start": "13:39", "eta": eta, "start_at": eta},
+            "plan": {"days": [{"day": 1, "end_at": plan_end, "items": [
+                {"id": 2, "place_id": "p-b", "place": {"title": "구룡포항"}}]}]}}
+
+
+def judge_behind(proj, at, known=frozenset(), notice=None, track=VISITING):
+    return judge.judge_delay(proj, at, known, behind_min=30, plan=BASE, day=1, track=track, notice=notice)
+
+
+def test_behind_schedule_asks_at_30_minutes():
+    t = T0.replace(hour=13, minute=54)
+    assert judge_behind(behind(25, "14:04"), t) is None  # 30분 미만: 가벼운 지연
+    assert judge.judge_delay(behind(64, "14:43"), t) is None  # behind_min 0(기본): 보지 않음 (기존 동작)
+    d = judge_behind(behind(64, "14:43", plan_end="16:46"), t.replace(hour=14, minute=34))
+    assert (d.type, d.level, d.item_ids, d.payload["reason"]) == ("delay", 3, [2], "behind_schedule")
+    assert d.message == "구룡포항 도착이 13:39 예정에서 14:43으로 1시간 늦어질 것 같아요."
+    assert d.cause_key == "delay:behind:1:0:2"
+    assert d.payload["end"] == {"planned": "15:42", "expected": "16:46"} and d.payload["plan_version"] == 3
+    assert d.payload["next"]["title"] == "구룡포항"
+    # 추천안: 가옥거리 체류를 계획 시작(12:30)부터 지금(14:34) + 여유 15분 = 140분(5분 올림)으로
+    assert d.payload["suggest"] == {"kind": "extend_stay", "item_id": 1, "title": "가옥거리", "stay_minutes": 140,
+                                    "from_stay_minutes": 60}
+    assert judge.duration_ko(35) == "35분" and judge.duration_ko(75) == "1시간 15분"
+
+
+def test_behind_schedule_asks_again_30_minutes_after_last_notice():
+    t = T0.replace(hour=14, minute=10)
+    first = judge_behind(behind(35, "14:14"), t)
+    assert first.cause_key == "delay:behind:1:0:1"
+    # 알린 뒤(이벤트 9, 그때 35분)에는 그보다 30분 더 밀릴 때만
+    for d in (35, 50, 64):
+        assert judge_behind(behind(d, "x"), t, notice=(9, 35)) is None
+    again = judge_behind(behind(65, "14:44"), t, notice=(9, 35))
+    assert again.cause_key == "delay:behind:1:9:1" and again.payload["reason"] == "behind_schedule"
+    # 위반으로 알린 지연(23분)도 기준이다 -> 다음 항목이 바뀌어도 53분 전에는 다시 묻지 않는다
+    assert judge_behind(behind(30, "x"), t, notice=(5, 23)) is None
+    assert judge_behind(behind(53, "x"), t, notice=(5, 23)) is not None
+    # 제안 승인으로 지연이 30분 이상 줄면(65 -> -15) 새로 센다: 그 일정 기준 30분이 되면 다시 묻는다
+    assert judge_behind(behind(-15, "x"), t, notice=(12, 65)) is None
+    assert judge_behind(behind(10, "x"), t, notice=(12, 65)) is None  # 그 뒤 25분 더 늦어도 조용
+    reset = judge_behind(behind(30, "x"), t, notice=(12, 65))
+    assert reset.cause_key == "delay:behind:1:12r:1"
+
+
+def test_behind_and_violation_together_make_one_event():
+    t = T0.replace(hour=15, minute=45)
+    v = violation("outside_open_hours", 5)
+    d = judge_behind(behind(31, "x", [v]), t)
+    assert d.payload["reason"] == "violations" and d.item_ids == [5] and "outside_open_hours 5" in d.message
+    assert d.cause_key == "delay:behind:1:0:1|delay:outside_open_hours:1:5:None"
+    assert d.payload["suggest"]["kind"] == "extend_stay"  # 밀림 정보도 담는다
+    # 위반은 이미 알렸고 밀림만 새것이면 밀림이 이유
+    d = judge_behind(behind(31, "16:16", [v]), t, known={"delay:outside_open_hours:1:5:None"})
+    assert d.payload["reason"] == "behind_schedule" and d.item_ids == [2] and d.message.startswith("구룡포항 도착이")
+
+
+def test_behind_suggestion_while_moving_shifts_next_start():
+    moving = Track(state="moving", item_id=1, since=T0)
+    d = judge_behind(behind(33, "14:12"), T0.replace(hour=14, minute=5), track=moving)
+    assert d.payload["suggest"] == {"kind": "shift_next", "item_id": 2, "title": "구룡포항", "start_time": "14:15",
+                                    "from_start": "13:39"}
+
+
 # ---------- 위험 구역 ----------
 
 ZONE = {"id": "flood_4", "name": "구룡포수협_스마트맨홀 주변", "kind": "flood", "risk": "danger", "reason": "등급 3",

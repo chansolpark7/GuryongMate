@@ -15,8 +15,8 @@ from app.agent.scripted_llm import DEFAULT_DIR, Context, ScriptedProvider, Scrip
 from app.agent.tools import GUIDE_NOTE_SPEC, MEMORY_SPECS, PASSAGES_SPEC, TOOL_SPECS, WEB_SPECS, Draft, Toolbox
 from app.main import app
 from tests.agent import test_harness as th
-from tests.agent.test_guide import delay_event, trip_plan, trip_state, up  # noqa: F401  (픽스처)
-from tests.agent.test_harness import H, _reset, client, ok, session, sse  # noqa: F401  (픽스처)
+from tests.agent.test_guide import behind_event, delay_event, trip_plan, trip_state, up  # noqa: F401  (픽스처)
+from tests.agent.test_harness import H, _reset, client, ok, review_on, session, sse  # noqa: F401  (픽스처)
 
 ALL_TOOLS = {t["function"]["name"] for t in [*TOOL_SPECS, *MEMORY_SPECS, PASSAGES_SPEC, GUIDE_NOTE_SPEC, *WEB_SPECS]}
 SPECS = [*TOOL_SPECS, *MEMORY_SPECS, PASSAGES_SPEC]
@@ -140,6 +140,40 @@ def test_event_turn_skips_tools_not_offered(client, trip_plan, up, scripted):  #
     assert th.last(events, "done")["text"].startswith("대기 제안 위에서")
 
 
+@pytest.mark.parametrize("kind", ["extend_stay", "shift_next"])
+def test_demo_behind_schedule_turn(client, trip_plan, up, review_on, kind):  # noqa: F811
+    """데모 각본의 일정 밀림 선제 턴: trip 이 계산한 추천 변경(payload.suggest)을 그대로 제안한다 (실제 스택처럼 검토 단계 포함)."""
+    sid, pid, items = trip_plan
+    provider = ScriptedProvider(DEFAULT_DIR, delay_ms=0, latency_ms=0)
+    app.dependency_overrides[get_llm] = lambda: provider
+    try:
+        suggest = ({"kind": "extend_stay", "item_id": items["p-food"], "title": "물회집", "stay_minutes": 90,
+                    "from_stay_minutes": 60} if kind == "extend_stay" else
+                   {"kind": "shift_next", "item_id": items["p-cafe"], "title": "카페", "start_time": "15:35",
+                    "from_start": "15:00"})
+        up.trip = trip_state(pid, items)
+        res = ok(client.post(f"/agent/sessions/{sid}/events", json={"event": behind_event(pid, items, suggest),
+                                                                    "trip": trip_state(pid, items)}, headers=H))
+    finally:
+        app.dependency_overrides[get_llm] = lambda: th.llm
+    assert res["error"] is None and res["text"].startswith("카페 도착이 15:00 예정에서 15:35으로 35분쯤 늦어질 것 같아요.")
+    assert "다른 방법으로" in res["text"]
+    [card] = res["cards"]
+    change = {"stay_minutes": 90} if kind == "extend_stay" else {"start_time": "15:35"}
+    assert card["proposal"]["ops"] == [{"op": "update_item", "item_id": suggest["item_id"], **change}]
+
+
+def test_event_reason_detection():
+    msg = "[이벤트] 일정 밀림: 늦음\n근거: " + json.dumps({"reason": "behind_schedule", "suggest": {"item_id": 7}})
+    ctx = Context([{"role": "user", "content": msg}])
+    assert (ctx.event, ctx.reason, ctx.fill("$event:suggest.item_id"), ctx.fill("$event:suggest.stay_minutes")) == (
+        "delay", "behind_schedule", 7, None)
+    # reason 을 지정한 각본은 그 이유에만, 지정하지 않은 각본은 그 event 의 모든 이유에 맞는다
+    p = ScriptedProvider(DEFAULT_DIR, delay_ms=0, latency_ms=0)
+    assert p.pick(Context([{"role": "user", "content": "[이벤트] 일정 지연: 위반"}]))["id"] == "scene3_delay"
+    assert Context([{"role": "user", "content": "[이벤트] 일정 지연: 위반"}]).reason is None
+
+
 # ---------- 공급자 단위 ----------
 
 def test_context_turn_step_and_review():
@@ -213,7 +247,7 @@ def test_script_reload_and_validation(tmp_path):
 
 # ---------- 데모 각본 (backend/app/agent/scripts) ----------
 
-REF_KINDS = {"item", "order", "start", "end", "last", "memory"}
+REF_KINDS = {"item", "order", "start", "end", "last", "memory", "event"}
 
 
 def _walk(value):
@@ -250,6 +284,7 @@ def test_demo_scripts_are_valid():
     ("다음부터는 더 짧게 해줘요", "## 현재 상황 (여행 중)", "scene2_shorter"),
     ("과메기문화관은 유지해줘", "## 현재 상황 (여행 중)\n## 승인 대기 중인 제안 #3", "scene3_keep_museum"),
     ("[이벤트] 일정 지연: 늦어요", "", "scene3_delay"),
+    ("[이벤트] 일정 밀림: 30분 늦어요", "", "behind_schedule"),
     ("[이벤트] 안전 경고: 위험", "", "scene4_safety"),
     ("[테스트] LLM 오류", "", "error_llm_unavailable"),
     ("이전 제안을 현재 일정에 맞춰 다시 만들어줘.", "## 다시 제안 요청\n원래 요청: 구룡포항 점심은 1시간으로 늘려줘", "f2_repropose_lunch"),

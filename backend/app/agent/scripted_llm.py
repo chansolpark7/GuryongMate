@@ -5,15 +5,16 @@
 
 공급자는 상태가 없다. 호출마다 메시지 목록에서 지금 상황을 읽는다:
 - 턴의 시작 = 마지막 user 메시지 중 하네스 안내('[시스템] …')가 아닌 것. 그 뒤 assistant 메시지 수 = 각본의 몇 번째 단계인지
-- 선제 턴: '[이벤트] 일정 지연: …' (prompts.event_message) -> event type
+- 선제 턴: '[이벤트] 일정 지연: …' (prompts.event_message) -> event type ('일정 밀림' 은 delay + reason behind_schedule)
 - 가이드 준비: 시스템 프롬프트가 guide.PREP_SYSTEM, 사용자 메시지의 '## 장소 (place_id …)' -> 장소
 - 검토 관문이 되돌렸으면 마지막 메시지가 하네스의 REVIEW_NOTE 다 -> 각본의 on_review 단계
 
 각본 파일 (backend/app/agent/scripts/*.json, AGENT_SCRIPTED_DIR):
 {"fallback": "맞는 각본이 없을 때의 답",
  "turns": [{"id": "scene1_plan",
-            "when": {"user": "정규식", "event": "delay", "guide_place": "정규식", "mode": "plan|guide",
-                     "pending": true, "system": "정규식"},          // 모두 맞아야 한다. 위에서부터 처음 맞는 것
+            "when": {"user": "정규식", "event": "delay", "reason": "behind_schedule", "guide_place": "정규식",
+                     "mode": "plan|guide", "pending": true, "system": "정규식"},  // 모두 맞아야 한다. 위에서부터 처음 맞는 것
+                                                                  // (reason 이 없으면 그 event 의 모든 이유에 맞는다)
             "steps": [{"thinking": "…", "text": "…", "tools": [{"name": "search_places", "args": {…}}]},
                       …, {"text": "최종 답변"}],                  // 마지막 단계(도구 없음)가 답변. {"json": {…}} 은 JSON 텍스트로
             "on_review": [ … ],                                  // 검토 관문이 되돌리면 이어서 (없으면 같은 답을 다시 낸다)
@@ -24,6 +25,7 @@
 - order:<place_id>  그 항목의 순서 / start:<place_id> 시작 시각 HH:MM / end:<n> n일차 종료 시각
 - last:<도구>.<경로>  이번 턴에서 그 도구의 가장 최근 결과 JSON 의 값 (예: last:search_places.items[0].place_id)
 - memory:<분류>      view_memory·remember 결과에서 그 분류의 첫 항목 id
+- event:<경로>       선제 턴 이벤트 payload 의 값 ('근거: {…}' 줄과 '예상 지연', 예: event:suggest.stay_minutes)
 찾지 못하면 인자는 빠지고(null), 텍스트에는 빈 문자열이 들어간다.
 """
 import asyncio
@@ -44,6 +46,8 @@ FALLBACK = ("지금은 데모용 각본 모드라 이 요청에는 답할 수 �
 REVIEW_PREFIX = "[시스템] 방금 쓴 답변은 아직"
 NOTE_PREFIX = "[시스템]"
 EVENT_RE = re.compile(r"^\[이벤트\] ([^:]+):")
+EVENT_PAYLOAD_RE = re.compile(r"^근거: (.*)$", re.M)
+EVENT_DELAY_RE = re.compile(r"^예상 지연: (-?\d+)분$", re.M)  # payload.delay_minutes 는 근거 JSON 밖에 따로 적힌다
 GUIDE_PLACE_RE = re.compile(r"## 장소 \(place_id ([^)]+)\)")
 PLAN_HEADER = "## 현재 일정"
 REF_RE = re.compile(r"\{\{([^{}]+)\}\}")
@@ -86,7 +90,7 @@ class Context:
     """한 번의 호출에서 본 대화 상태."""
 
     def __init__(self, messages: list[dict]):
-        from app.agent.prompts import EVENT_LABEL  # 순환 import 방지
+        from app.agent.prompts import EVENT_LABEL, REASON_LABEL  # 순환 import 방지
 
         self.system = messages[0]["content"] if messages and messages[0]["role"] == "system" else ""
         self.review = bool(messages) and messages[-1]["role"] == "user" and messages[-1]["content"].startswith(REVIEW_PREFIX)
@@ -97,10 +101,16 @@ class Context:
         self.user = messages[start]["content"] if messages else ""
         after = messages[start + 1:]
         self.step = sum(1 for m in after if m["role"] == "assistant")
-        self.event = None
+        self.event = self.reason = None
+        self.payload: dict = {}
         if m := EVENT_RE.match(self.user):
-            labels = {v: k for k, v in EVENT_LABEL.items()}
-            self.event = labels.get(m.group(1).strip(), m.group(1).strip())
+            labels = {v: k for k, v in (EVENT_LABEL | REASON_LABEL).items()}
+            self.event, _, reason = labels.get(m.group(1).strip(), m.group(1).strip()).partition(":")
+            self.reason = reason or None
+            p = EVENT_PAYLOAD_RE.search(self.user)
+            self.payload = (_json(p.group(1)) if p else None) or {}
+            if d := EVENT_DELAY_RE.search(self.user):
+                self.payload["delay_minutes"] = int(d.group(1))
         g = GUIDE_PLACE_RE.search(self.user)
         self.guide_place = g.group(1) if g and "현장 해설 작가" in self.system else None
         self.mode = "guide" if "## 현재 상황 (여행 중)" in self.system else "plan"
@@ -153,6 +163,14 @@ class Context:
                 except (KeyError, IndexError, TypeError):
                     return None
             return value
+        if kind == "event":
+            value = self.payload
+            for key, idx in PATH_RE.findall(arg):
+                try:
+                    value = value[key] if key else value[int(idx)]
+                except (KeyError, IndexError, TypeError):
+                    return None
+            return value
         if kind == "memory":
             for name, r in reversed(self.results):
                 if not isinstance(r, dict):
@@ -181,6 +199,8 @@ class Context:
 
 def _matches(when: dict, ctx: Context) -> bool:
     if "event" in when and when["event"] != ctx.event:
+        return False
+    if "reason" in when and when["reason"] != ctx.reason:
         return False
     if "guide_place" in when and not (ctx.guide_place and re.fullmatch(when["guide_place"], ctx.guide_place)):
         return False

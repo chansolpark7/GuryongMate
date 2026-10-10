@@ -7,7 +7,7 @@
 from app.db import SessionLocal
 from app.trip import service
 
-from .conftest import H, at, err, ok
+from .conftest import H, USER, at, err, ok
 
 LUNCH, PORT, HOUSE, MUSEUM, HISTORY = "kto-2834330", "kto-2610501", "kto-1909659", "kto-2660046", "kto-2603493"
 
@@ -157,6 +157,8 @@ def test_delay_once_and_again_when_worse(env):
     [d] = r["events"]
     assert (d["type"], d["level"], d["status"]) == ("delay", 3, "queued")  # 응답 시점에는 큐에 있다
     assert d["item_ids"] == [item_id(env, 5)] and "운영시간" in d["message"]
+    # 29분 늦음. 위반으로 지연을 알렸으므로 그 뒤 30분 이상 밀려도(아래 16:05 까지) 일정 밀림으로 또 묻지 않는다
+    assert d["payload"]["reason"] == "violations" and d["payload"]["delay_minutes"] == 29
     [sent] = env.agent.received
     assert sent[1]["id"] == d["id"] and sent[2]["active"] is True  # {"event", "trip"}
     delivered = env.events(after=d["id"] - 1)[0]
@@ -179,6 +181,80 @@ def test_delay_detected_by_tick_without_location(env):
     [d] = env.tick("15:45")["events"]
     assert d["type"] == "delay"
     assert env.tick("15:55")["events"] == []
+
+
+# ---------- 일정 밀림 (§3.2 결정 2026-10-11) ----------
+
+# 여유 있는 계획: 가옥거리 12:30~13:30 -> 구룡포항 13:39~14:29 -> 과메기문화관 14:35~15:35 (18:00 까지 여유)
+ROOMY = {"title": "여유", "start_date": "2026-10-10", "day_start": "12:30", "day_end": "18:00",
+         "items": [{"place_id": HOUSE, "stay_minutes": 60}, {"place_id": PORT, "stay_minutes": 50},
+                   {"place_id": MUSEUM, "stay_minutes": 60}]}
+
+
+def roomy(env) -> None:
+    env.plan_id = env.planner.create(USER, ROOMY)
+    env.start("12:25")
+    assert [e["type"] for e in env.stay(HOUSE, "12:30", 3)] == ["arrived"]
+
+
+def behind_events(env) -> list[dict]:
+    return [e for e in env.events() if e["type"] == "delay"]
+
+
+def test_behind_schedule_asks_every_30_minutes_then_new_baseline_after_accept(env):
+    roomy(env)
+    planned = env.planner.get_plan(env.plan_id, {})["days"][0]["items"][1]["start_at"]
+    assert env.tick("13:55")["events"] == []  # 가옥거리에 머문 채 25분 늦음: 조용
+    [d] = env.tick("14:05")["events"]  # 35분 -> 묻는다 (위반 없음)
+    assert (d["type"], d["level"], d["payload"]["reason"]) == ("delay", 3, "behind_schedule")
+    assert d["message"] == f"구룡포항 도착이 {planned} 예정에서 {d['payload']['next']['eta']}으로 35분 늦어질 것 같아요."
+    assert d["item_ids"] == [item_id(env, 2)] and d["payload"]["new_violations"] == []
+    assert d["payload"]["suggest"] == {"kind": "extend_stay", "item_id": item_id(env, 1), "title": "구룡포 일본인 가옥거리",
+                                       "stay_minutes": 110, "from_stay_minutes": 60}  # 12:30 ~ 14:05 + 15분
+    assert env.events(after=d["id"] - 1)[0]["status"] == "delivered"
+    for t in ("14:10", "14:20", "14:34"):  # 같은 단계: 조용
+        assert env.tick(t)["events"] == []
+    [d2] = env.tick("14:35")["events"]  # 65분 -> 다시
+    assert d2["payload"]["reason"] == "behind_schedule" and d2["payload"]["delay_minutes"] == 65
+    assert d2["payload"]["suggest"]["stay_minutes"] == 140
+    assert len(env.agent.received) == 2
+    # 제안 승인 (가옥거리 140분, version 이 오른다) -> 미뤄진 일정이 새 기준
+    env.planner.set_stay(env.plan_id, HOUSE, 140)
+    assert env.planner.get_plan(env.plan_id, {})["days"][0]["items"][1]["start_at"] > planned
+    for t in ("14:40", "15:05"):  # 그 뒤 25분 더 늦어도 조용 (새 기준으로 -15 -> 15분)
+        assert env.tick(t)["events"] == []
+        assert env.state()["delay_minutes"] < 30
+    [d3] = env.tick("15:20")["events"]  # 새 기준으로 30분 -> 다시 묻는다
+    assert d3["payload"]["reason"] == "behind_schedule" and d3["payload"]["plan_version"] == 2
+    assert len(behind_events(env)) == 3
+
+
+def test_behind_schedule_same_step_is_quiet_after_moving_on(env):
+    """한 번 물은 지연은 다음 항목이 바뀌어도(이동·도착) 그보다 30분 더 밀리기 전에는 다시 묻지 않는다."""
+    roomy(env)
+    [d] = env.tick("14:05")["events"]
+    walk = env.stay(PORT, "14:15", 5)  # 가옥거리를 떠나 구룡포항 도착 (다음은 과메기문화관, 여전히 35분쯤 늦음)
+    assert [e["type"] for e in walk] == ["departed", "arrived"]
+    assert env.state()["delay_minutes"] >= 30 and env.state()["next"]["item_id"] == item_id(env, 3)
+    assert env.tick("14:25")["events"] == [] and behind_events(env) == [env.events(after=d["id"] - 1)[0]]
+
+
+def test_behind_schedule_queue_and_cooldown(env, monkeypatch):
+    roomy(env)
+    env.agent.busy = True  # Agent 가 응답 중 -> 큐에 둔다
+    [d1] = env.tick("14:05")["events"]
+    [d2] = env.tick("14:35")["events"]
+    # 같은 원인 묶음(delay): 새것이 큐의 옛것을 대체
+    assert [(e["id"], e["status"]) for e in behind_events(env)] == [(d1["id"], "suppressed"), (d2["id"], "queued")]
+    env.agent.busy = False
+    env.tick("14:36")
+    assert [e["status"] for e in behind_events(env)] == ["suppressed", "delivered"]
+    # 쿨다운(10분) 안에 생긴 delay 는 큐에서 기다린다
+    monkeypatch.setattr(service.settings, "proactive_cooldown_min", 40)
+    [d3] = env.tick("15:05")["events"]  # 95분 -> 다시 (지난번 65분 + 30)
+    assert env.events(after=d3["id"] - 1)[0]["status"] == "queued"
+    env.tick("15:17")
+    assert env.events(after=d3["id"] - 1)[0]["status"] == "delivered" and len(env.agent.received) == 2
 
 
 # ---------- 단계 3 큐 ----------

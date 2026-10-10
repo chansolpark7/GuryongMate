@@ -157,6 +157,31 @@ def test_safety_event_message():
     assert "할 일: 여행 중 상황이 바뀌었다" in event_message({"type": "something_new"})
 
 
+def behind_event(pid: int, items: dict, suggest: dict) -> dict:
+    """일정 밀림 (delay, payload.reason=behind_schedule, docs/trip/README.md §3.2). 물회집에 머무는 중, 카페가 35분 늦음."""
+    return {"id": 42, "plan_id": pid, "day": 1, "type": "delay", "level": 3, "severity": "warning",
+            "created_at": "2026-10-10T14:20:00+09:00", "now": "2026-10-10T14:20:00+09:00",
+            "item_ids": [items["p-cafe"]], "message": "카페 도착이 15:00 예정에서 15:35으로 35분 늦어질 것 같아요.",
+            "payload": {"reason": "behind_schedule", "new_violations": [], "delay_minutes": 35, "plan_version": 3,
+                        "next": {"item_id": items["p-cafe"], "title": "카페", "planned_start": "15:00", "eta": "15:35"},
+                        "end": {"planned": "16:00", "expected": "16:35"}, "suggest": suggest},
+            "status": "queued", "agent": None, "card": None}
+
+
+def test_behind_schedule_event_message():
+    text = event_message(behind_event(1, {"p-cafe": 5}, {"kind": "extend_stay", "item_id": 4, "title": "물회집",
+                                                         "stay_minutes": 60, "from_stay_minutes": 30}))
+    assert text.startswith("[이벤트] 일정 밀림: 카페 도착이 15:00 예정에서 15:35으로 35분 늦어질 것 같아요.")
+    assert "오늘 예상 종료: 16:35 (계획 16:00)" in text
+    assert "추천 변경: update_item(item_id=4, stay_minutes=60)" in text and "물회집 체류 30분 → 60분" in text
+    assert "남은 일정을 미룰까요" in text and "다른 방법" in text  # 할 일: 밀림 지침 (위반 지침 아님)
+    shift = event_message(behind_event(1, {"p-cafe": 5}, {"kind": "shift_next", "item_id": 5, "title": "카페",
+                                                          "start_time": "15:35", "from_start": "15:00"}))
+    assert 'update_item(item_id=5, start_time="15:35")' in shift and "이동 중이라" in shift
+    # 위반으로 난 delay 는 그대로 '일정 지연'
+    assert event_message({"type": "delay", "message": "x", "payload": {"reason": "violations"}}).startswith("[이벤트] 일정 지연: x")
+
+
 # ---------- 동행 모드 (매 턴 trip 조회) ----------
 
 def test_chat_in_guide_mode(client, trip_plan, up):  # noqa: F811

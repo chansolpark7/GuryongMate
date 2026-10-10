@@ -152,6 +152,15 @@ EVENT_GUIDE = {
     "delay": ("일정이 늦어져 남은 일정에 새 문제가 생겼다. 사용자에게 먼저 말을 거는 상황이다. "
               "오늘 남은 일정을 고친 추천안을 만든다 (체류 줄이기, 순서 바꾸기, 영향받는 곳 빼기·다른 날로 옮기기, "
               "가까운 대체 장소). 완료한 곳과 지금 머무는 곳의 지난 시간은 바꾸지 않는다. " + EVENT_ANSWER),
+    # delay 중 payload.reason=behind_schedule: 새 위반은 없지만 다음 일정을 계획대로 못 감 (docs/trip/README.md §3.2)
+    "delay:behind_schedule": (
+        "새 위반은 없지만 다음 일정을 계획대로 가기 어려울 만큼 늦어졌다. 사용자에게 먼저 '남은 일정을 미룰까요?'라고 묻는 상황이다. "
+        "추천안은 남은 일정을 늦어진 만큼 미루는 변경 하나다: 위 '추천 변경'을 그대로 도구로 만든다 "
+        "(머무는 중이면 지금 장소 체류를 늘려 뒤 일정이 자동으로 밀리게, 이동 중이면 다음 장소 시작 시각을 예상 도착에 맞춘다). "
+        "미뤄서 운영시간·종료 시각 같은 새 문제가 생기면 그것도 함께 고친다. 완료한 곳과 지난 시각은 바꾸지 않는다. "
+        "답변은 현장에서 바로 듣기 좋게 짧은 세 문장으로: ① 얼마나 늦었고 무엇에 영향이 있는지 (다음 일정·오늘 끝나는 시각) "
+        "② 추천안 — 남은 일정을 그만큼 미루는 변경 (제안 카드로 전달된다) "
+        "③ '다른 방법으로 …도 있어요' 한 줄 (뒤 장소 체류를 줄이거나 한 곳을 빼서 원래 시간에 맞추기. 도구로 만들지 않는다)."),
     "safety_raised": ("오늘 남은 일정에 안전 경고가 새로 생겼다. 사용자에게 먼저 말을 거는 상황이다. "
                       "check_safety 로 근거(예보·특보·센서)를 확인하고, 해당 방문·이동을 신호가 없는 시간대로 옮기거나 "
                       "실내 장소로 바꾸거나 이동 수단을 바꾼 추천안을 만든다. " + EVENT_ANSWER
@@ -159,6 +168,7 @@ EVENT_GUIDE = {
 }
 EVENT_DEFAULT = "여행 중 상황이 바뀌었다. 사용자에게 먼저 짧게 알리고, 일정을 바꿔야 하면 변경안을 만든다."
 EVENT_LABEL = {"delay": "일정 지연", "safety_raised": "안전 경고"}
+REASON_LABEL = {"delay:behind_schedule": "일정 밀림"}  # 같은 type 의 다른 이유 (payload.reason). 각본 LLM 도 이 이름으로 구분한다
 
 
 def _item_index(plan: dict | None) -> dict[int, dict]:
@@ -174,21 +184,42 @@ def _title(item: dict | None, fallback: str = "") -> str:
 def event_message(event: dict) -> str:
     """선제 턴을 여는 숨김 메시지 '[이벤트] …' (이벤트 요약 + 근거 + 할 일). 일정·현재 상황은 시스템 프롬프트에 있다."""
     kind = event.get("type", "")
-    lines = [f"[이벤트] {EVENT_LABEL.get(kind, kind or '상황 변화')}: {event.get('message') or '(설명 없음)'}"]
+    payload = event.get("payload") or {}
+    reason = f"{kind}:{payload['reason']}" if payload.get("reason") else kind
+    label = REASON_LABEL.get(reason) or EVENT_LABEL.get(kind, kind or "상황 변화")
+    lines = [f"[이벤트] {label}: {event.get('message') or '(설명 없음)'}"]
     if event.get("item_ids"):
         lines.append(f"영향받는 항목 item_id: {', '.join(str(i) for i in event['item_ids'])}")
-    payload = event.get("payload") or {}
     violations = payload.get("new_violations") or []
     if violations:
         lines.append("새로 생긴 문제:\n" + "\n".join(
             f"- {v.get('message', v) if isinstance(v, dict) else v}" for v in violations[:8]))
     if payload.get("delay_minutes") is not None:
         lines.append(f"예상 지연: {payload['delay_minutes']}분")
+    end = payload.get("end") or {}
+    if end.get("expected"):
+        lines.append(f"오늘 예상 종료: {end['expected']} (계획 {end.get('planned') or '?'})")
+    if reason == "delay:behind_schedule" and (line := _suggest_line(payload.get("suggest"))):
+        lines.append(line)
     rest = {k: v for k, v in payload.items() if k not in ("new_violations", "delay_minutes")}
     if rest:
         lines.append("근거: " + json.dumps(rest, ensure_ascii=False, default=str)[:1500])
-    lines.append("할 일: " + EVENT_GUIDE.get(kind, EVENT_DEFAULT))
+    lines.append("할 일: " + EVENT_GUIDE.get(reason, EVENT_GUIDE.get(kind, EVENT_DEFAULT)))
     return "\n".join(lines)
+
+
+def _suggest_line(sg: dict | None) -> str | None:
+    """일정 밀림의 추천 변경 (trip 이 계산: judge.behind_suggestion)."""
+    if not sg or sg.get("item_id") is None:
+        return None
+    title = sg.get("title") or f"항목 {sg['item_id']}"
+    if sg.get("kind") == "extend_stay":
+        return (f"추천 변경: update_item(item_id={sg['item_id']}, stay_minutes={sg['stay_minutes']}) — 지금 머무는 {title} 체류 "
+                f"{sg.get('from_stay_minutes')}분 → {sg['stay_minutes']}분 (계획 시작부터 지금까지 + 여유 15분). 뒤 일정이 자동으로 밀린다")
+    if sg.get("kind") == "shift_next":
+        return (f"추천 변경: update_item(item_id={sg['item_id']}, start_time=\"{sg['start_time']}\") — 이동 중이라 늘릴 체류가 없어 "
+                f"다음 {title} 시작을 {sg.get('from_start')} → {sg['start_time']}(예상 도착)으로. 그 뒤 일정이 자동으로 밀린다")
+    return None
 
 
 def _delay_text(minutes) -> str:

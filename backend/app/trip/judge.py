@@ -2,7 +2,7 @@
 DB·HTTP 를 쓰지 않는다. 같은 입력이면 같은 결과라 pytest 와 재생 파일로 그대로 검증한다 (docs/trip/README.md §3, §8).
 
 - 도착·출발: step()       반경(60m + accuracy, 최대 150m) 안 90초 머묾 / 머무는 곳 반경 밖 120초
-- 지연:      judge_delay() planner projection 의 new_violations 중 일정에 영향이 있는 것
+- 지연:      judge_delay() planner projection 의 new_violations 중 일정에 영향이 있는 것, 또는 다음 일정이 30분 이상 밀림
 - 위험 구역: judge_hazard() safety /avoid 구역 안이거나 50m 안
 - 안전 경고: judge_alert() planner 경고의 오늘 남은 항목 변화
 감지 결과의 중복 억제·전송 순서는 policy.py 가 정한다.
@@ -235,22 +235,110 @@ def violation_key(v: dict) -> str:
     return f"delay:{v['code']}:{v.get('day')}:{v.get('item_id')}:{v.get('constraint_id')}"
 
 
-def judge_delay(projection: dict, at: datetime, known: set[str] | frozenset = frozenset()) -> Detection | None:
-    """planner projection(§6.2)의 new_violations 중 일정에 영향이 있는 것이 있으면 delay 감지.
-    가벼운 지연(새 위반 없음)은 None. 원인 키는 위반마다 하나 ('|' 로 묶음) — 하나라도 새것이면 다시 알린다."""
+def duration_ko(minutes: int) -> str:
+    """64 -> '1시간', 75 -> '1시간 15분', 35 -> '35분' (10분 미만 나머지는 말하지 않는다)."""
+    if minutes < 60:
+        return f"{minutes}분"
+    h, m = divmod(minutes, 60)
+    return f"{h}시간" if m < 10 else f"{h}시간 {m}분"
+
+
+def _ceil5(minutes: float) -> int:
+    return int(-(-minutes // 5) * 5)
+
+
+BEHIND_MARGIN_MIN = 15  # 밀림 추천안: 지금 장소 체류를 '지금 + 이만큼'까지로 늘린다 (조금 더 머물 여유)
+
+
+def behind_ref(delay: float, notice: tuple[int, float | None] | None, step_min: float) -> tuple[str, float]:
+    """일정 밀림을 셀 기준 (기준 이름, 기준 지연). notice: 이 여행일에 마지막으로 알린 delay 이벤트 (id, 그때 delay_minutes).
+    - 알린 적 없음: 기준 0 -> 30분 밀리면 묻는다.
+    - 알린 적 있음: 그때 지연이 기준 -> 그보다 30분 더 밀릴 때만 다시 묻는다 (위반으로 알렸어도, 다음 항목이 바뀌어도).
+    - 그 뒤 지연이 그때보다 30분 이상 줄었으면 (제안 승인으로 일정이 미뤄짐) 새로 센다: 기준 0.
+    계획 version 은 쓰지 않는다 — 승인한 변경이 지연을 흡수하지 않았으면(장면 ③: 끝 시각만 맞춤) 같은 지연을 또 묻게 된다."""
+    if not notice or notice[1] is None:
+        return "0", 0
+    nid, nd = notice
+    if delay <= nd - step_min:
+        return f"{nid}r", 0
+    return str(nid), max(nd, 0)
+
+
+def behind_key(day: int, ref: str, delay: float, ref_delay: float, step_min: float) -> str:
+    """일정 밀림 원인 키: 같은 기준에서 30분 단계가 오를 때만 새것."""
+    return f"delay:behind:{day}:{ref}:{int((delay - ref_delay) // step_min)}"
+
+
+def behind_suggestion(plan: dict | None, day: int, track: Track | None, nxt: dict, at: datetime) -> dict | None:
+    """밀림 추천안 (Agent 가 그대로 도구로 만들 변경). 남은 일정을 미루되 완료 항목·지난 시각은 건드리지 않는다.
+    - 머무는 중: 지금 장소 체류를 (계획 시작부터 지금까지 + 여유 15분, 5분 올림)으로 늘린다 -> 뒤 일정이 자동으로 밀린다.
+      계획 시작 기준이라 도착이 늦었던 만큼도 함께 흡수한다.
+    - 이동 중·첫 장소 전 (늘릴 체류가 없음): 다음 장소 시작 시각을 예상 도착(5분 올림)으로 정한다 -> 그 뒤 일정이 밀린다."""
+    items = {i["id"]: i for d in (plan or {}).get("days") or [] if d.get("day") in (None, day) for i in d["items"]}
+    now_min = at.hour * 60 + at.minute
+    cur = items.get(track.item_id) if track is not None and track.state == "visiting" else None
+    if cur and cur.get("status") != "done" and cur.get("start_at") and cur.get("stay_minutes") is not None:
+        stay = max(_ceil5(now_min + BEHIND_MARGIN_MIN - minutes_of(cur["start_at"])), cur["stay_minutes"] + 5)
+        return {"kind": "extend_stay", "item_id": cur["id"], "title": (cur.get("place") or {}).get("title"),
+                "stay_minutes": stay, "from_stay_minutes": cur["stay_minutes"]}
+    if nxt.get("eta"):
+        start = _ceil5(max(minutes_of(nxt["eta"]), now_min))
+        return {"kind": "shift_next", "item_id": nxt["item_id"], "title": nxt.get("title"),
+                "start_time": f"{start // 60:02d}:{start % 60:02d}", "from_start": nxt.get("planned_start")}
+    return None
+
+
+def judge_delay(projection: dict, at: datetime, known: set[str] | frozenset = frozenset(), *,
+                behind_min: float = 0, plan: dict | None = None, day: int = 1, track: Track | None = None,
+                notice: tuple[int, float | None] | None = None) -> Detection | None:
+    """planner projection(§6.2)으로 delay 감지. 둘 중 하나라도 새것이면 이벤트 하나:
+    - 위반: new_violations 중 일정에 영향이 있는 것. 원인 키는 위반마다 하나 ('|' 로 묶음) — 하나라도 새것이면 다시 알린다.
+    - 일정 밀림: 다음 항목이 계획 시작보다 behind_min(TRIP_BEHIND_MIN) 이상 늦음 (0 이면 보지 않음).
+      다시 묻는 것은 마지막으로 알린 지연(notice)보다 behind_min 더 밀릴 때 (behind_ref). 원인 키는 behind_key.
+    payload.reason: 새 위반이 있으면 violations (밀림 정보도 담는다), 밀림만 새것이면 behind_schedule.
+    plan: 기준 일정 PlanDetail (version·계획 종료·지금 장소의 계획 시작). track: 지금 판정 상태 (추천안).
+    가벼운 지연(새 위반 없음, 밀림 behind_min 미만)은 None."""
     vs = [v for v in projection.get("new_violations") or [] if is_delay_violation(v)]
-    if not vs:
+    delay = projection.get("delay_minutes")
+    nxt = projection.get("next")
+    behind = False
+    if behind_min and nxt is not None and delay is not None:
+        ref, ref_delay = behind_ref(delay, notice, behind_min)
+        behind = delay >= ref_delay + behind_min
+    if not vs and not behind:
         return None
     keys = [violation_key(v) for v in vs]
     fresh = [v for v, k in zip(vs, keys) if k not in known]
-    first = (fresh or vs)[0]
-    msg = f"지금대로면 일정에 문제가 생겨요. {first['message']}"
-    if len(vs) > 1:
-        msg += f" (그 밖에 {len(vs) - 1}건)"
-    return Detection("delay", at, sorted({v["item_id"] for v in vs if v.get("item_id") is not None}), msg,
-                     payload={"new_violations": vs, "delay_minutes": projection.get("delay_minutes"),
-                              "next": projection.get("next")},
+    titles = {i["id"]: (i.get("place") or {}).get("title") or i["place_id"]
+              for d in (projection.get("plan") or {}).get("days") or [] for i in d["items"]}
+    payload: dict = {"reason": "violations", "new_violations": vs, "delay_minutes": delay,
+                     "next": {**nxt, "title": titles.get(nxt["item_id"])} if nxt else nxt}
+    item_ids = {v["item_id"] for v in vs if v.get("item_id") is not None}
+    if behind:
+        keys.append(behind_key(day, ref, delay, ref_delay, behind_min))
+        payload["plan_version"] = (plan or {}).get("version")
+        payload["end"] = {"planned": _day_end(plan, day), "expected": _day_end(projection.get("plan"), day)}
+        payload["suggest"] = behind_suggestion(plan, day, track, payload["next"], at)
+        if not fresh:  # 새 위반이 없으면 밀림이 이 이벤트의 이유다 (밀림도 이미 알렸으면 policy.fresh 가 뺀다)
+            payload["reason"] = "behind_schedule"
+            item_ids = {nxt["item_id"]}
+    if payload["reason"] == "behind_schedule":
+        n = payload["next"]
+        msg = (f"{n['title'] or '다음 장소'} 도착이 {n.get('planned_start')} 예정에서 {n.get('eta')}으로 "
+               f"{duration_ko(int(delay))} 늦어질 것 같아요.")
+    else:
+        first = (fresh or vs)[0]
+        msg = f"지금대로면 일정에 문제가 생겨요. {first['message']}"
+        if len(vs) > 1:
+            msg += f" (그 밖에 {len(vs) - 1}건)"
+    return Detection("delay", at, sorted(item_ids), msg, payload=payload,
                      cause_key="|".join(sorted(set(keys))), severity="warning")
+
+
+def _day_end(plan: dict | None, day: int) -> str | None:
+    days = (plan or {}).get("days") or []
+    d = next((x for x in days if x.get("day") == day), None)
+    return (d or {}).get("end_at")
 
 
 # ---------- 위험 구역 ----------
