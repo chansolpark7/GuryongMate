@@ -73,8 +73,11 @@
 
 ### 2.3 ② 안전 상황
 - 모드: [실제 데이터] / [가상 상황] 전환 (🔒 `PUT /safety/sim {"source": "live"|"mock"}`). `switchable=false`면 비활성 + 이유 표시.
-- 시나리오 칩 5개: 이름과 설명은 `GET /safety/sim`의 `scenarios`에서 (calm 평상시, rain 비, wind_tomorrow 내일 강풍, flood 침수 센서, storm 폭풍). 누르면 🔒 `PUT /safety/sim {"scenario": …}`.
-  시나리오는 "지금 기준 상태"다 (특정 시각 사건이 아님, docs/safety §1). 칩 아래 설명 한 줄로 보여준다.
+- 시나리오 칩 5개: 이름과 설명은 `GET /safety/sim`의 `scenarios`에서 (calm 평상시, rain 비, wind_tomorrow 내일 강풍, flood 침수 센서, storm 폭풍). 누르면 🔒 `PUT /safety/sim {"scenario": …, "until"?}`.
+  시나리오는 **날씨 시간표 프리셋**이다 (지금 기준 절대 구간, 시각을 옮겨도 밀리지 않음 — §7.5, docs/safety §1). 칩 아래 **끝: [계속 | 1시간 | 2시간 | 시각 지정]** 으로 `until` 을 정한다.
+- 날씨 시간표: 그날(가상 시각 날짜) 0~24시 막대에 구간 색칠(폭풍 빨강·침수 파랑·강풍 주황·비 하늘) + 지금 시각 선(보라) + 오늘 일정 시각 눈금,
+  아래 구간 목록([삭제]) 과 [구간 추가](종류·시작·끝, 끝이 시작보다 이르면 다음 날) — 🔒 `PUT /safety/sim {"timeline": [...]}` (전체 교체, 데이터 모드는 그대로).
+  실제 데이터 모드면 막대를 흐리게 하고 "시간표는 가상 상황에서만 적용" 안내.
 - 요약: `overall_risk`, 특보(`warnings`), 앞으로 12시간 위험 신호(`next_hours`), `data_status` 중 실패한 소스.
 - 버튼 [안전 점검 지금] 🔒 `POST /planner/safety/scan` → 이어서 [틱] 🔒 `POST /trip/plans/{id}/tick?now=<가상 시각>`.
   자동 주기(planner 점검 개발 60초·운영 10초, trip 틱 30초)를 기다리지 않고 바로 이벤트가 나오게 한다. 시나리오를 바꾼 뒤 "바로 반영" 체크가 켜져 있으면 자동으로 둘 다 부른다.
@@ -222,6 +225,7 @@ P0 전부와 P1(경로선, 일정 바로가기, planner 안전 경고, 다크 �
   센서·특보·CCTV 는 지금이 `until` 을 지나면 평상시. 생략하면 지금처럼 "지금 기준" (run_demo.py·기존 테스트 영향 없음).
 - 대시보드: 시나리오 칩 아래 "끝나는 시각" 입력 (비우면 계속).
 - 데모 타임라인 참고: `run_demo.py` 의 `s4_move` 는 16:33 쯤 수협 앞 `near_hazard` 를 기대하므로, 데모에 쓴다면 `until` 은 17:00 정도. (run_demo.py 는 그대로 두기로 함)
+- → §7.5 의 시간표로 대신 구현했다 (`until` 은 프리셋의 끝 시각으로 들어감).
 
 
 ### 7.5 결정 — 가상 날씨 시간표 (2026-10-11, 구현: `feat/sim-timeline`)
@@ -235,3 +239,36 @@ P0 전부와 P1(경로선, 일정 바로가기, planner 안전 경고, 다크 �
 - **기존 시나리오는 프리셋**으로 유지 (앱 칩·재생 파일·`run_demo.py` 호환): `scenario` 를 주면 시간표를 그 프리셋으로 **바꾼다**. 설정한 순간 기준 절대 구간이 되고 더는 밀리지 않는다.
   `calm` = 비움, `storm` = 지금~30시간, `flood` = 지금~9시간, `rain` = 2~9시간 뒤, `wind_tomorrow` = 다음 날 12~18시 `wind`. `until` 을 함께 주면 그 시각에 끝난다.
 - 구간 안 시각의 판정 결과는 기존 시나리오 표(docs/safety §1)의 기대 결과와 같다 (storm: 방파제·침수 구역 위험, 야외 주의, 실내 안전 …).
+
+**구현 결과** (2026-10-11, `feat/sim-timeline`, 위 결정대로)
+- safety (`backend/app/safety/sources.py` `MockSources`·`SimSegment`·`preset_timeline`, `router.py` `put_sim`): `PUT /safety/sim` 에 `timeline`(전체 교체, 최대 20개)·`until`,
+  `GET` 에 `timeline`·`segment`·`kinds`, `scenario` = 지금 구간 종류 또는 `calm`. `/safety/status`·`/situation` 에 `scenario`·`segment`, situation `fingerprint` 에 지금 구간.
+  예보는 그 시(정시~1시간)와 겹치는 구간의 날씨 (15:20 에 시작하는 폭풍은 15시 예보부터 보인다).
+- **결정에 더한 것 — 지금 관측값의 유효 시각**: 구간이 끝나는 시각을 알므로, 지금 관측값(센서·CCTV·발효 특보)은 **다음 구간 경계까지만** 방문 판단에 쓴다
+  (`MockSources.observed_until`, `SafetyService._obs`). 이것이 없으면 15:20 폭풍 중에 17:30 방문을 판단할 때 "6시간 안 발효 특보는 그대로"·"3시간 안 실측 센서"
+  규칙(docs/safety §2) 때문에 17:30 도 위험으로 나온다. 실제 데이터는 끝을 모르므로 그대로다.
+- 대시보드 ②: §2.3. 확인 (worktree 스택 `guryong-simtl`, `API_PORT=8040`, `AGENT_PROVIDER=scripted`, `SAFETY_SIM_ENABLED=true`):
+
+| 확인 | 결과 |
+|---|---|
+| 15:10 에 [구간 추가] 폭풍 15:20~17:00 | 통과 — 막대에 빨간 구간·일정 눈금, 지금은 평상시지만 12시간 예보에 15~17시 위험 (예보 즉시 반영) |
+| 15:22 (구간 안) | 통과 — `scenario: storm`, 특보 3, 구역 위험 3·주의 8. 북방파제 16:00 방문 **danger**, 17:30 방문 **safe** |
+| 17:05 (구간 뒤) | 통과 — `calm`, 센서 10대 모두 등급 1, 특보 없음, 구역 11곳 모두 안전, 지도 초록 |
+| [실제 데이터] 전환 | 통과 — 막대 흐리게 + "시간표는 가상 상황에서만 적용", 실제 데이터 안전. [가상 상황] 으로 돌아오면 기억한 구간을 씀 |
+| 끝 [시각 지정] 16:30 + [폭풍] 칩 | 통과 — 시간표 폭풍 15:22~16:30 |
+| 캡처 | `review/1440_timeline_storm.jpg`, `review/1440_timeline_after.jpg`, `review/960_timeline_live.jpg`, `review/960_timeline_until.jpg` |
+
+- `run_demo.py --auto --speed 0` (각본 LLM): **22/22 통과**, 168초. `s4_storm` 은 폭풍 15:20~17:00 (`scenario` + `until`), 새 단계 `s4_clear` 에서 17:05 평상시·새 경고 없음 확인.
+- 앱 호환: 앱 모델(`app/lib/core/models/safety.dart` `SimState.fromJson`)은 `scenario`(문자열)·`now`·`scenarios`(맵)만 읽고 모르는 필드는 무시 → 그대로 읽힌다.
+  앱 설정의 시나리오 칩은 기존 `PUT {"scenario": …}` 그대로 동작 (프리셋). 단, 칩 강조는 `scenario` 가 "지금 구간 종류"라 `wind_tomorrow` 를 눌러도 오늘은 `calm` 이 강조된다.
+- 실제로 발견한 것: 안전 상황을 2.5초마다 다시 그려 목록을 새로 만들면 [삭제] 클릭이 사라졌다 → 시간표는 내용이 같으면 다시 만들지 않고 지금 선만 옮긴다.
+  (기존 시나리오 칩도 같은 방식으로 다시 그려지지만 이번 확인에서는 문제가 없었다.)
+
+**열린 문제 — 폭풍이 그친 뒤 `safety_eased` 가 나오지 않는다 (데모 계획에서)**
+- planner 는 **남은 일정 중 단계가 내려간 항목**이 있을 때만 경고 완화를 만들고, trip 은 그것을 `safety_eased` 로 낸다.
+- 데모 계획에서 15:25 승인 뒤 폭풍 중 위험했던 남은 것은 **차로 카페 가는 길**(계획 시각 16:14~16:25, 침수 감시 구역)뿐이다. 17:00 에는 이미 지난 구간이라
+  planner 가 판단하지 않고(`past`), 카페(실내, 침수 구역 밖)는 폭풍 중에도 안전이었다 → 내려갈 항목이 없다.
+- 16:33 `near_hazard`(실제 이동은 계획보다 늦음)를 유지하면서 계획 시각 16:25 전에 폭풍을 끝낼 수는 없다. 그래서 `s4_clear` 는 "17:05 평상시 + 새 경고 없음"을 확인하고,
+  `safety_eased` 는 기대에 넣지 않았다 (planner·trip 코드는 바꾸지 않음).
+- 보여주려면 선택지: (a) 카페 뒤에 야외 일정(예: 해안 산책)을 두는 데모 계획 → 폭풍 중 주의였다가 17시 뒤 해제, (b) trip 에 "지금 상황 해제" 이벤트 추가(새 이벤트 종류, trip·앱 변경).
+
