@@ -20,6 +20,7 @@ import 'trip_controller.dart';
 
 /// 14 Today (동행 홈) · 15 이동 중 · 14-S1 위치 꺼짐/오프라인 · 14-S2 첫 장소 전 + 데모 위치 칩 (Figma 73:2042, 73:2240, 73:7222, 73:7401).
 /// 지도(현재 위치 · 오늘 남은 경로 · 다녀온 구간 · 위험 구역) + 패널(지금 · 다음 · 남은 일정).
+/// Today 는 "지금 여행" — 핀·일정 행을 눌러도 탭을 옮기지 않고 그 자리 작은 창, Map 은 둘러보기·자세히 (docs/app/today-map-redesign.md).
 class TodayScreen extends StatefulWidget {
   const TodayScreen({super.key, required this.onEndTrip});
 
@@ -68,8 +69,14 @@ class _TodayScreenState extends State<TodayScreen> {
   LatLng? _guideFrom;
   bool _guideLoading = false;
 
-  /// 14 [길 안내]: 머무는 중에도 다음 장소 안내 카드를 보인다.
-  bool _guiding = false;
+  /// 안내 카드 [×] 로 숨긴 구간 ("상태:지금 항목:다음 항목"). 다음 구간이 되면 키가 바뀌어 다시 자동으로 켜진다.
+  String? _hiddenLeg;
+
+  /// 안내를 시작할 때 카메라를 내 위치 + 목적지로 한 번 맞춘 대상 (그 뒤 사용자가 움직이면 따라가지 않는다).
+  int? _guideFitted;
+
+  /// 지도 작은 창을 띄운 항목 (핀 · 남은 일정 행).
+  int? _popup;
 
   /// 14-S2: 지금 위치 → 첫 장소 도보 시간.
   int? _firstWalk;
@@ -121,6 +128,46 @@ class _TodayScreenState extends State<TodayScreen> {
         if (mounted) setState(() => _legs[key] = r == null || r.points.length < 2 ? ([_pt(a), _pt(b)], true) : (r.points, r.estimated));
       });
     }
+  }
+
+  /// 안내 대상: 손으로 고른 장소(t.guideTo) 또는 자동 — 이동 중이거나 첫 장소 전에 위치가 있으면 다음 장소 (redesign §2.1).
+  /// [×] 로 숨긴 구간이면 자동 대상은 없다.
+  PlanItem? _guideTarget(TripController t, List<PlanItem> items, PlanItem? next, bool beforeFirst) {
+    final manual = t.guideTo == null ? null : items.where((i) => i.id == t.guideTo && i.status != 'done').firstOrNull;
+    if (manual != null) return manual;
+    final auto = t.state?.moving == true || (beforeFirst && _loc(t) != null);
+    return auto && _hiddenLeg != _legOf(t, next) ? next : null;
+  }
+
+  static String _legOf(TripController t, PlanItem? next) => '${t.state?.currentState}:${t.state?.currentItemId}:${next?.id}';
+
+  void _closeGuide(TripController t, PlanItem? next) {
+    setState(() => _hiddenLeg = _legOf(t, next));
+    if (t.guideTo != null) t.setGuide(null);
+  }
+
+  void _startGuide(TripController t, PlanItem item) {
+    setState(() {
+      _hiddenLeg = null;
+      _popup = null;
+    });
+    t.setGuide(item.id);
+  }
+
+  /// 안내선이 처음 그려지면 내 위치 + 목적지가 들어오게 한 번.
+  void _fitGuide(PlanItem target, LatLng? loc) {
+    if (!_ready || loc == null || _guideFitted == target.id || _guide == null || _guideFor != target.id) return;
+    _guideFitted = target.id;
+    // 아래 패널(기본 49%)에 가리지 않게 지도 높이의 절반 위에 둘 다
+    final h = _map.camera.size.height;
+    _map.fitCamera(CameraFit.coordinates(coordinates: [loc, _pt(target)], padding: EdgeInsets.fromLTRB(48, 200, 80, h * 0.52), maxZoom: 17));
+  }
+
+  /// 핀·남은 일정 행 → 지도에서 그 핀 + 작은 창 (탭 이동 없음, redesign §2.2).
+  void _focus(PlanItem i) {
+    setState(() => _popup = i.id);
+    // 핀이 아래 패널 위쪽에 오게 (작은 창은 핀 위로 뜬다)
+    if (_ready) _map.move(_pt(i), _map.camera.zoom < 15.5 ? 15.5 : _map.camera.zoom, offset: Offset(0, -_map.camera.size.height * 0.12));
   }
 
   void _ensureGuide(TripController t, PlanItem? next) {
@@ -175,14 +222,23 @@ class _TodayScreenState extends State<TodayScreen> {
     final beforeFirst = s != null && s.idle && !started && next != null;
     if (_ready) WidgetsBinding.instance.addPostFrameCallback((_) => mounted ? _fit(t, items) : null);
     _ensureLegs(c, items.where((i) => i.status != 'done' || i == done.lastOrNull).toList());
-    final showGuide = (moving || _guiding) && next != null;
-    if (showGuide) _ensureGuide(t, next);
+    final target = _guideTarget(t, items, next, beforeFirst);
+    final showGuide = target != null;
+    final loc = t.locationOff ? null : _loc(t);
+    if (target != null) {
+      _ensureGuide(t, target);
+      WidgetsBinding.instance.addPostFrameCallback((_) => mounted ? _fitGuide(target, loc) : null);
+    } else if (_guideFitted != null) {
+      _guideFitted = null;
+      _fitted = null; // 안내가 끝나면(도착·[×]) 오늘 경로 전체로 한 번 되돌린다
+    }
     if (beforeFirst) _ensureFirstWalk(t, next);
+    final popup = _popup == null ? null : items.where((i) => i.id == _popup).firstOrNull;
     final top = MediaQuery.paddingOf(context).top;
 
     return Scaffold(
       body: Stack(children: [
-        Positioned.fill(child: _buildMap(c, t, items, done, current, next, showGuide)),
+        Positioned.fill(child: _buildMap(c, t, items, done, current, target, popup)),
         Positioned(
           left: 16,
           right: 16,
@@ -196,7 +252,17 @@ class _TodayScreenState extends State<TodayScreen> {
             if (t.demoMode) ...[const SizedBox(height: 8), const _DemoChip()],
             if (t.locationOff) ...[const SizedBox(height: 10), _LocationOffBanner(onEnable: t.requestAccess)],
             if (t.offline) ...[const SizedBox(height: 10), const _OfflineStrip()],
-            if (showGuide && !t.offline && !t.locationOff) ...[const SizedBox(height: 10), _GuideCard(route: _guide, next: next, eta: s?.nextEta, loc: _loc(t), loading: _guideLoading)],
+            if (showGuide && !t.offline) ...[
+              const SizedBox(height: 10),
+              _GuideCard(
+                route: _guideFor == target.id ? _guide : null,
+                next: target,
+                eta: target.id == s?.nextItemId ? s?.nextEta : null,
+                loc: loc,
+                loading: _guideLoading,
+                onClose: () => _closeGuide(t, next),
+              ),
+            ],
           ]),
         ),
         Positioned(
@@ -243,11 +309,10 @@ class _TodayScreenState extends State<TodayScreen> {
                     first: next,
                     now: t.serverNow(),
                     walk: _firstWalk,
-                    onGuide: () => setState(() => _guiding = true),
                     onPreview: () => t.onOpenGuide?.call(next.placeId),
                   )
                 else if (moving && next != null)
-                  _MovingSection(trip: t, from: t.item(s.currentItemId), next: next, onArrived: null, onRoute: () => c.setTab(1))
+                  _MovingSection(trip: t, from: t.item(s.currentItemId), next: next, onArrived: null)
                 else if (current != null)
                   _NowSection(
                     trip: t,
@@ -255,22 +320,24 @@ class _TodayScreenState extends State<TodayScreen> {
                     safety: c.safety?.visit(current.id),
                     stale: t.locationOff,
                     onListen: () => t.onOpenGuide?.call(current.placeId),
-                    onGuide: () => setState(() => _guiding = !_guiding),
                     onBadge: () => showSafetyDetailSheet(context, c, current),
                   ),
                 if (s != null && !allDone && !beforeFirst && !moving && next != null) ...[
                   const Divider(height: 28, color: AppColors.line),
-                  _NextSection(trip: t, next: next, number: items.indexOf(next) + 1),
+                  _NextSection(trip: t, next: next, number: items.indexOf(next) + 1, guiding: target?.id == next.id, onGuide: () => _startGuide(t, next)),
                 ],
                 if (s != null && !allDone) ...[
                   const Divider(height: 28, color: AppColors.line),
+                  // 여행 시작~첫 도착 전에도 목록을 보인다 (한 줄 요약은 머리에, redesign §2.3 — Figma 14-S2 와 다름)
                   _RemainingSection(
                     items: beforeFirst ? items : remaining.where((i) => i.id != next?.id || moving).toList(),
                     total: beforeFirst,
                     end: (t.today?.endAt ?? items.lastOrNull?.endAt),
                     safety: c.safety,
+                    selected: popup?.id,
                     onAll: () => c.setTab(0),
-                    onTap: (i) => c.showOnMap(i.id),
+                    onMap: () => c.setTab(1),
+                    onTap: _focus,
                   ),
                 ],
                 const SizedBox(height: 12),
@@ -288,32 +355,33 @@ class _TodayScreenState extends State<TodayScreen> {
     );
   }
 
-  Widget _buildMap(PlanController c, TripController t, List<PlanItem> items, List<PlanItem> done, PlanItem? current, PlanItem? next, bool showGuide) {
+  Widget _buildMap(PlanController c, TripController t, List<PlanItem> items, List<PlanItem> done, PlanItem? current, PlanItem? target, PlanItem? popup) {
     final loc = _loc(t), acc = t.state?.location?.accuracy;
     final lines = <Polyline>[];
-    final guide = showGuide && _guide != null && _guide!.points.length > 1 ? _guide : null;
+    final guide = target != null && _guideFor == target.id && _guide != null && _guide!.points.length > 1 ? _guide : null;
     for (var i = 1; i < items.length; i++) {
       final a = items[i - 1], b = items[i];
-      // 안내 중에는 다음 장소로 가는 구간선 대신 안내선만 (같은 길에 두 줄이 겹치지 않게)
-      if (guide != null && b.id == next?.id) continue;
+      // 안내 중에는 안내 대상으로 가는 구간선 대신 안내선만 (같은 길에 두 줄이 겹치지 않게)
+      if (guide != null && b.id == target?.id) continue;
       final mode = b.legMode ?? c.plan?.travelMode ?? 'walk';
       final leg = _legs['${a.id}>${b.id}:$mode'];
       final walked = b.status != 'planned';
       final pts = leg?.$1 ?? [_pt(a), _pt(b)];
       final dotted = mode == 'car' || (leg?.$2 ?? true);
+      // 안내 중이면 나머지 구간은 옅게 — 안내선이 눈에 띄게
       lines.add(Polyline(
         points: pts,
         strokeWidth: walked ? 4 : 5,
-        color: walked ? const Color(0xFFAEB6C1) : AppColors.primary,
+        color: walked ? const Color(0xFFAEB6C1) : (guide != null ? AppColors.primary.withValues(alpha: 0.3) : AppColors.primary),
         borderColor: Colors.white,
-        borderStrokeWidth: walked ? 0 : 2,
+        borderStrokeWidth: walked || guide != null ? 0 : 2,
         pattern: dotted && !walked ? StrokePattern.dotted(spacingFactor: 2) : const StrokePattern.solid(),
       ));
     }
     if (guide != null) {
       final (:passed, :ahead) = splitGuide(guide.points, loc);
       if (passed.length > 1) lines.add(Polyline(points: passed, strokeWidth: 4, color: const Color(0xFFAEB6C1)));
-      if (ahead.length > 1) lines.add(Polyline(points: ahead, strokeWidth: 5, color: AppColors.primary, borderColor: Colors.white, borderStrokeWidth: 2));
+      if (ahead.length > 1) lines.add(Polyline(points: ahead, strokeWidth: 7, color: AppColors.primary, borderColor: Colors.white, borderStrokeWidth: 3));
     }
     return FlutterMap(
       mapController: _map,
@@ -323,6 +391,9 @@ class _TodayScreenState extends State<TodayScreen> {
         onMapReady: () {
           _ready = true;
           _fit(t, items);
+        },
+        onTap: (_, _) {
+          if (_popup != null) setState(() => _popup = null);
         },
       ),
       children: [
@@ -338,15 +409,39 @@ class _TodayScreenState extends State<TodayScreen> {
               width: i.id == current?.id ? 40 : 32,
               height: i.id == current?.id ? 40 : 32,
               child: GestureDetector(
-                onTap: () => c.showOnMap(i.id),
+                key: ValueKey('today-pin-${i.id}'),
+                onTap: () => _focus(i),
                 child: i.status == 'done'
                     ? const MapDot(color: Color(0xFFAEB6C1), icon: Icons.check, size: 28)
-                    : MapDot(color: AppColors.primary, label: '${n + 1}', size: i.id == current?.id ? 36 : 28),
+                    : MapDot(color: AppColors.primary, label: '${n + 1}', size: i.id == current?.id || i.id == popup?.id ? 36 : 28),
               ),
             ),
         ]),
         // 사용자 위치는 장소 Pin 위에 (새 위치로 부드럽게 옮겨 간다)
         if (loc != null) UserLocationLayer(point: loc, accuracy: acc, duration: t.markerGlide, dotKey: const ValueKey('today-location')),
+        if (popup != null)
+          MarkerLayer(markers: [
+            Marker(
+              point: _pt(popup),
+              width: 248,
+              height: 196,
+              alignment: Alignment.topCenter,
+              child: _PlacePopup(
+                item: popup,
+                number: items.indexOf(popup) + 1,
+                onListen: () {
+                  setState(() => _popup = null);
+                  t.onOpenGuide?.call(popup.placeId);
+                },
+                onGuide: popup.status == 'done' ? null : () => _startGuide(t, popup),
+                onDetail: () {
+                  setState(() => _popup = null);
+                  c.showDetailOnMap(popup.id);
+                },
+                onClose: () => setState(() => _popup = null),
+              ),
+            ),
+          ]),
       ],
     );
   }
@@ -474,12 +569,15 @@ class _OfflineStrip extends StatelessWidget {
 
 /// 15 길 안내 카드: 현재 위치에서 가장 가까운 경로 점 k → begin_index ≤ k 인 마지막 안내의 다음 안내.
 class _GuideCard extends StatelessWidget {
-  const _GuideCard({required this.route, required this.next, required this.eta, required this.loc, required this.loading});
+  const _GuideCard({required this.route, required this.next, required this.eta, required this.loc, required this.loading, required this.onClose});
   final RouteResult? route;
   final PlanItem next;
   final String? eta;
   final LatLng? loc;
   final bool loading;
+
+  /// [×]: 이번 구간 동안만 숨김 (다음 구간에서 다시 자동).
+  final VoidCallback onClose;
 
   static RouteStep? currentStep(RouteResult r, LatLng? loc) {
     if (r.steps.isEmpty) return null;
@@ -505,7 +603,9 @@ class _GuideCard extends StatelessWidget {
     final mode = next.legMode == 'car' ? '차량' : '도보';
     final step = r == null ? null : currentStep(r, loc);
     final car = next.legMode == 'car';
-    final title = r == null
+    final title = loc == null
+        ? '위치를 켜면 길을 안내해요'
+        : r == null
         ? (loading ? '경로를 찾고 있어요' : '${next.title} 방향')
         : car
             ? '차로 ${r.minutes}분'
@@ -514,7 +614,7 @@ class _GuideCard extends StatelessWidget {
     final detour = r?.hazards?.avoided.isNotEmpty == true && (r?.hazards?.detourMinutes ?? 0) > 0 ? r!.hazards!.detourMinutes : null;
     return Container(
       key: const ValueKey('guide-card'),
-      padding: const EdgeInsets.all(12),
+      padding: const EdgeInsets.fromLTRB(12, 12, 6, 12),
       decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(16), boxShadow: AppShadow.floating),
       child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
         Row(children: [
@@ -522,7 +622,7 @@ class _GuideCard extends StatelessWidget {
             width: 40,
             height: 40,
             decoration: BoxDecoration(color: AppColors.primary, borderRadius: BorderRadius.circular(10)),
-            child: Icon(car ? Icons.directions_car : turnIcon(step?.type ?? ''), color: Colors.white),
+            child: Icon(loc == null ? Icons.location_disabled : car ? Icons.directions_car : turnIcon(step?.type ?? ''), color: Colors.white),
           ),
           const SizedBox(width: 12),
           Expanded(
@@ -530,6 +630,18 @@ class _GuideCard extends StatelessWidget {
               Text(title, style: AppText.label.copyWith(fontSize: 15, fontWeight: FontWeight.w700), maxLines: 1, overflow: TextOverflow.ellipsis),
               Text(sub, style: AppText.meta, maxLines: 1, overflow: TextOverflow.ellipsis),
             ]),
+          ),
+          SizedBox(
+            width: 32,
+            height: 32,
+            child: IconButton(
+              key: const ValueKey('guide-close'),
+              tooltip: '안내 닫기',
+              padding: EdgeInsets.zero,
+              iconSize: 18,
+              onPressed: onClose,
+              icon: const Icon(Icons.close, color: AppColors.text3),
+            ),
           ),
         ]),
         if (detour != null) ...[
@@ -571,13 +683,12 @@ class EtaChip extends StatelessWidget {
 }
 
 class _NowSection extends StatelessWidget {
-  const _NowSection({required this.trip, required this.item, required this.safety, required this.stale, required this.onListen, required this.onGuide, required this.onBadge});
+  const _NowSection({required this.trip, required this.item, required this.safety, required this.stale, required this.onListen, required this.onBadge});
   final TripController trip;
   final PlanItem item;
   final SafetyItem? safety;
   final bool stale;
   final VoidCallback onListen;
-  final VoidCallback onGuide;
   final VoidCallback onBadge;
 
   @override
@@ -604,21 +715,22 @@ class _NowSection extends StatelessWidget {
             : '머무는 중${until == null ? '' : ' · ${fromMinutes(until)}까지 예정'}${left == null ? '' : ' ($left분 남음)'}',
         style: AppText.meta.copyWith(color: over ? AppColors.warning : AppColors.text2, fontWeight: over ? FontWeight.w700 : FontWeight.w400),
       ),
+      // 큰 [길 안내] 는 없앴다 — 머무는 중 안내는 다음 일정 🧭 · 지도 작은 창에서 (redesign §2.1)
       const SizedBox(height: 14),
-      Row(children: [
-        Expanded(child: AppButton(label: '이야기 듣기', icon: Icons.auto_awesome, kind: ButtonKind.aiSoft, onPressed: onListen)),
-        const SizedBox(width: 8),
-        Expanded(child: AppButton(label: '길 안내', icon: Icons.near_me_outlined, kind: ButtonKind.secondary, onPressed: onGuide)),
-      ]),
+      AppButton(label: '이야기 듣기', icon: Icons.auto_awesome, kind: ButtonKind.aiSoft, height: 48, onPressed: onListen),
     ]);
   }
 }
 
 class _NextSection extends StatelessWidget {
-  const _NextSection({required this.trip, required this.next, required this.number});
+  const _NextSection({required this.trip, required this.next, required this.number, required this.guiding, required this.onGuide});
   final TripController trip;
   final PlanItem next;
   final int number;
+  final bool guiding;
+
+  /// 🧭 머무는 중에도 다음 장소 길 안내를 미리 (redesign §2.1 수동 켜기).
+  final VoidCallback onGuide;
 
   @override
   Widget build(BuildContext context) {
@@ -637,6 +749,13 @@ class _NextSection extends StatelessWidget {
             Text('${planned ?? '--:--'} 예정${next.travelMinutes == null ? '' : ' · $mode ${next.travelMinutes}분'}', style: AppText.meta),
           ]),
         ),
+        IconButton(
+          key: const ValueKey('next-guide'),
+          tooltip: '길 안내',
+          visualDensity: VisualDensity.compact,
+          onPressed: guiding ? null : onGuide,
+          icon: Icon(Icons.explore_outlined, size: 22, color: guiding ? AppColors.text3 : AppColors.primary),
+        ),
         EtaChip(key: const ValueKey('eta-chip'), delay: s?.delayMinutes, violation: EtaChip.violationLabel(trip)),
       ]),
     ]);
@@ -644,12 +763,11 @@ class _NextSection extends StatelessWidget {
 }
 
 class _MovingSection extends StatelessWidget {
-  const _MovingSection({required this.trip, required this.from, required this.next, required this.onArrived, required this.onRoute});
+  const _MovingSection({required this.trip, required this.from, required this.next, required this.onArrived});
   final TripController trip;
   final PlanItem? from;
   final PlanItem next;
   final VoidCallback? onArrived;
-  final VoidCallback onRoute;
 
   @override
   Widget build(BuildContext context) {
@@ -662,20 +780,36 @@ class _MovingSection extends StatelessWidget {
         Expanded(child: Text('${next.title}으로 가는 중', style: AppText.headline.copyWith(fontSize: 18))),
         EtaChip(key: const ValueKey('eta-chip'), delay: s.delayMinutes, violation: EtaChip.violationLabel(trip)),
       ]),
+      // [경로 전체] → 남은 일정 머리의 작은 [전체 지도] (redesign §2.3)
       Text('${s.nextPlannedStart ?? next.startAt ?? '--:--'} 예정${s.nextEta == null ? '' : ' → ${s.nextEta} 도착 예상'}', style: AppText.meta),
-      const SizedBox(height: 14),
-      AppButton(label: '경로 전체', icon: Icons.alt_route, kind: ButtonKind.secondary, onPressed: onRoute),
     ]);
   }
 }
 
 class _RemainingSection extends StatelessWidget {
-  const _RemainingSection({required this.items, required this.total, required this.end, required this.safety, required this.onAll, required this.onTap});
+  const _RemainingSection({
+    required this.items,
+    required this.total,
+    required this.end,
+    required this.safety,
+    required this.selected,
+    required this.onAll,
+    required this.onMap,
+    required this.onTap,
+  });
   final List<PlanItem> items;
+
+  /// 첫 장소 전: 머리가 "오늘 일정 n곳" (목록은 처음부터 모두).
   final bool total;
   final String? end;
   final SafetyCheck? safety;
+  final int? selected;
   final VoidCallback onAll;
+
+  /// [전체 지도] → Map 탭 (지금 날짜·선택 유지).
+  final VoidCallback onMap;
+
+  /// 행 → 지도에서 그 핀 + 작은 창 (탭 이동 없음).
   final ValueChanged<PlanItem> onTap;
 
   @override
@@ -687,14 +821,25 @@ class _RemainingSection extends StatelessWidget {
               style: AppText.caption.copyWith(fontWeight: FontWeight.w700),
             ),
           ),
+          InkWell(
+            key: const ValueKey('today-full-map'),
+            onTap: onMap,
+            child: Text('전체 지도', style: AppText.caption.copyWith(color: AppColors.text2, fontWeight: FontWeight.w700, decoration: TextDecoration.underline)),
+          ),
+          const SizedBox(width: 12),
           InkWell(onTap: onAll, child: Text('전체 일정 ›', style: AppText.caption.copyWith(color: AppColors.primary, fontWeight: FontWeight.w700))),
         ]),
-        if (!total)
-          for (final i in items)
-            InkWell(
+        const SizedBox(height: 4),
+        for (final i in items)
+          Material(
+            color: i.id == selected ? AppColors.primarySoft : Colors.transparent,
+            borderRadius: BorderRadius.circular(10),
+            child: InkWell(
+              key: ValueKey('remaining-${i.id}'),
+              borderRadius: BorderRadius.circular(10),
               onTap: () => onTap(i),
               child: Padding(
-                padding: const EdgeInsets.symmetric(vertical: 7),
+                padding: const EdgeInsets.symmetric(vertical: 7, horizontal: 4),
                 child: Row(children: [
                   SizedBox(width: 50, child: Text(i.startAt ?? '', style: AppText.meta.copyWith(fontWeight: FontWeight.w700, color: AppColors.text2))),
                   Expanded(child: Text(i.title, style: AppText.label, overflow: TextOverflow.ellipsis)),
@@ -702,15 +847,15 @@ class _RemainingSection extends StatelessWidget {
                 ]),
               ),
             ),
+          ),
       ]);
 }
 
 class _BeforeFirst extends StatelessWidget {
-  const _BeforeFirst({required this.first, required this.now, required this.walk, required this.onGuide, required this.onPreview});
+  const _BeforeFirst({required this.first, required this.now, required this.walk, required this.onPreview});
   final PlanItem first;
   final DateTime now;
   final int? walk;
-  final VoidCallback onGuide;
   final VoidCallback onPreview;
 
   @override
@@ -722,13 +867,80 @@ class _BeforeFirst extends StatelessWidget {
       const SizedBox(height: 4),
       Text(first.title, style: AppText.headline.copyWith(fontSize: 18)),
       Text('${first.startAt ?? ''} 시작${walk == null ? '' : ' · 지금 위치에서 도보 $walk분'}', style: AppText.meta),
+      // 길 안내는 위치가 있으면 자동으로 켜진다 (큰 [길 안내] 없음, redesign §2.1)
       const SizedBox(height: 14),
-      Row(children: [
-        Expanded(child: AppButton(label: '길 안내', icon: Icons.near_me_outlined, onPressed: onGuide)),
-        const SizedBox(width: 8),
-        Expanded(child: AppButton(label: '가이드 미리 보기', icon: Icons.auto_awesome, kind: ButtonKind.aiSoft, onPressed: onPreview)),
-      ]),
+      AppButton(label: '가이드 미리 보기', icon: Icons.auto_awesome, kind: ButtonKind.aiSoft, height: 48, onPressed: onPreview),
     ]);
+  }
+}
+
+/// 지도 핀 위 작은 창: 번호 · 이름 · 예정 시각 · 상태 + [설명 듣기] [길 안내] + [자세히] (redesign §2.2).
+class _PlacePopup extends StatelessWidget {
+  const _PlacePopup({required this.item, required this.number, required this.onListen, required this.onGuide, required this.onDetail, required this.onClose});
+  final PlanItem item;
+  final int number;
+  final VoidCallback onListen;
+  final VoidCallback? onGuide;
+  final VoidCallback onDetail;
+  final VoidCallback onClose;
+
+  @override
+  Widget build(BuildContext context) {
+    final (status, color) = switch (item.status) {
+      'visiting' => ('머무는 중', AppColors.success),
+      'done' => ('완료', AppColors.text3),
+      _ => ('예정', AppColors.primary),
+    };
+    return Align(
+      alignment: Alignment.bottomCenter,
+      child: Padding(
+        padding: const EdgeInsets.only(bottom: 24), // 핀이 보이게
+        child: Container(
+          key: const ValueKey('today-place-popup'),
+          padding: const EdgeInsets.fromLTRB(12, 10, 4, 6),
+          decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(16), boxShadow: AppShadow.floating),
+          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            Row(children: [
+              MapDot(color: item.status == 'done' ? const Color(0xFFAEB6C1) : AppColors.primary, label: '$number', size: 24),
+              const SizedBox(width: 8),
+              Expanded(child: Text(item.title, style: AppText.section.copyWith(fontSize: 15), maxLines: 1, overflow: TextOverflow.ellipsis)),
+              SizedBox(
+                width: 28,
+                height: 28,
+                child: IconButton(tooltip: '닫기', padding: EdgeInsets.zero, iconSize: 16, onPressed: onClose, icon: const Icon(Icons.close, color: AppColors.text3)),
+              ),
+            ]),
+            const SizedBox(height: 2),
+            Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: Text.rich(
+                TextSpan(style: AppText.meta, children: [
+                  TextSpan(text: '${item.startAt ?? '--:--'}${item.endAt == null ? '' : ' – ${item.endAt}'} · '),
+                  TextSpan(text: status, style: TextStyle(color: color, fontWeight: FontWeight.w700)),
+                ]),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: Row(children: [
+                Expanded(child: AppButton(label: '설명 듣기', icon: Icons.auto_awesome, kind: ButtonKind.aiSoft, height: 36, onPressed: onListen)),
+                const SizedBox(width: 6),
+                Expanded(child: AppButton(label: '길 안내', icon: Icons.near_me_outlined, kind: ButtonKind.secondary, height: 36, onPressed: onGuide)),
+              ]),
+            ),
+            Align(
+              alignment: Alignment.centerRight,
+              child: TextButton(
+                onPressed: onDetail,
+                style: TextButton.styleFrom(minimumSize: const Size(0, 28), padding: const EdgeInsets.symmetric(horizontal: 8), tapTargetSize: MaterialTapTargetSize.shrinkWrap),
+                child: Text('자세히 ›', style: AppText.caption.copyWith(color: AppColors.text2, fontWeight: FontWeight.w700)),
+              ),
+            ),
+          ]),
+        ),
+      ),
+    );
   }
 }
 

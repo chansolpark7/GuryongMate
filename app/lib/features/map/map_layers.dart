@@ -23,33 +23,41 @@ class ZoneLayer extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (zones.isEmpty) return const SizedBox.shrink();
-    return Stack(children: [
-      PolygonLayer(polygons: [
-        for (final z in zones)
-          if (z.polygon.length > 2)
-            Polygon(
-              points: z.polygon,
-              color: colorOf(z.risk).withValues(alpha: 0.18),
-              borderColor: colorOf(z.risk),
-              borderStrokeWidth: 1.5,
-              pattern: StrokePattern.dashed(segments: const [6, 4]),
-            ),
-      ]),
-      if (labels)
-        MarkerLayer(markers: [
-          for (final z in zones)
-            if (z.polygon.isNotEmpty)
-              Marker(
-                point: _center(z.polygon),
-                width: 160,
-                height: 28,
-                child: GestureDetector(
-                  onTap: onTap == null ? null : () => onTap!(z),
-                  child: Center(child: MapLabel(text: '${_short(z.name)} · ${z.risk == 'danger' ? '위험' : '주의'}', color: colorOf(z.risk))),
+    return Stack(
+      children: [
+        PolygonLayer(
+          polygons: [
+            for (final z in zones)
+              if (z.polygon.length > 2)
+                Polygon(
+                  points: z.polygon,
+                  color: colorOf(z.risk).withValues(alpha: 0.18),
+                  borderColor: colorOf(z.risk),
+                  borderStrokeWidth: 1.5,
+                  pattern: StrokePattern.dashed(segments: const [6, 4]),
                 ),
-              ),
-        ]),
-    ]);
+          ],
+        ),
+        if (labels)
+          MarkerLayer(
+            markers: [
+              for (final z in zones)
+                if (z.polygon.isNotEmpty)
+                  Marker(
+                    point: _center(z.polygon),
+                    width: 160,
+                    height: 28,
+                    child: GestureDetector(
+                      onTap: onTap == null ? null : () => onTap!(z),
+                      child: Center(
+                        child: MapLabel(text: '${_short(z.name)} · ${z.risk == 'danger' ? '위험' : '주의'}', color: colorOf(z.risk)),
+                      ),
+                    ),
+                  ),
+            ],
+          ),
+      ],
+    );
   }
 
   static String _short(String name) => name.replaceAll('_스마트맨홀', '').replaceAll('_지표면', '').replaceAll('_하천수위계', '');
@@ -74,14 +82,22 @@ class MapDot extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Container(
-        width: size,
-        height: size,
-        alignment: Alignment.center,
-        decoration: BoxDecoration(color: color, shape: BoxShape.circle, border: Border.all(color: Colors.white, width: 3), boxShadow: AppShadow.card),
-        child: icon != null
-            ? Icon(icon, size: size * 0.45, color: Colors.white)
-            : Text(label ?? '', style: AppText.caption.copyWith(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 13)),
-      );
+    width: size,
+    height: size,
+    alignment: Alignment.center,
+    decoration: BoxDecoration(
+      color: color,
+      shape: BoxShape.circle,
+      border: Border.all(color: Colors.white, width: 3),
+      boxShadow: AppShadow.card,
+    ),
+    child: icon != null
+        ? Icon(icon, size: size * 0.45, color: Colors.white)
+        : Text(
+            label ?? '',
+            style: AppText.caption.copyWith(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 13),
+          ),
+  );
 }
 
 class MapLabel extends StatelessWidget {
@@ -91,10 +107,14 @@ class MapLabel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Container(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-        decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(8), boxShadow: AppShadow.card),
-        child: Text(text, style: AppText.caption.copyWith(color: color, fontWeight: FontWeight.w700), overflow: TextOverflow.ellipsis),
-      );
+    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+    decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(8), boxShadow: AppShadow.card),
+    child: Text(
+      text,
+      style: AppText.caption.copyWith(color: color, fontWeight: FontWeight.w700),
+      overflow: TextOverflow.ellipsis,
+    ),
+  );
 }
 
 /// 사용자 위치 (점 + 정확도 원). Today·우회 안내 등 사용자 마커를 그리는 곳은 모두 이것으로.
@@ -150,28 +170,49 @@ class _UserLocationLayerState extends State<UserLocationLayer> with SingleTicker
     super.dispose();
   }
 
+  // 지금 머무는 곳 핀 위에 점이 겹쳐도 핀을 누를 수 있게 (점은 누르는 대상이 아니다)
   @override
-  Widget build(BuildContext context) => AnimatedBuilder(
-        animation: _anim,
-        builder: (context, _) {
-          final at = _shown, acc = widget.accuracy;
-          return Stack(children: [
+  Widget build(BuildContext context) => IgnorePointer(
+    child: AnimatedBuilder(
+      animation: _anim,
+      builder: (context, _) {
+        final at = _shown, acc = widget.accuracy;
+        return Stack(
+          children: [
             if (acc != null)
-              CircleLayer(circles: [
-                CircleMarker(point: at, radius: acc, useRadiusInMeter: true, color: AppColors.primary.withValues(alpha: 0.15), borderColor: AppColors.primary.withValues(alpha: 0.3), borderStrokeWidth: 1),
-              ]),
-            MarkerLayer(markers: [
-              Marker(
-                point: at,
-                width: widget.size,
-                height: widget.size,
-                child: Container(
-                  key: widget.dotKey,
-                  decoration: BoxDecoration(color: AppColors.primary, shape: BoxShape.circle, border: Border.all(color: Colors.white, width: 3), boxShadow: AppShadow.card),
-                ),
+              CircleLayer(
+                circles: [
+                  CircleMarker(
+                    point: at,
+                    radius: acc,
+                    useRadiusInMeter: true,
+                    color: AppColors.primary.withValues(alpha: 0.15),
+                    borderColor: AppColors.primary.withValues(alpha: 0.3),
+                    borderStrokeWidth: 1,
+                  ),
+                ],
               ),
-            ]),
-          ]);
-        },
-      );
+            MarkerLayer(
+              markers: [
+                Marker(
+                  point: at,
+                  width: widget.size,
+                  height: widget.size,
+                  child: Container(
+                    key: widget.dotKey,
+                    decoration: BoxDecoration(
+                      color: AppColors.primary,
+                      shape: BoxShape.circle,
+                      border: Border.all(color: Colors.white, width: 3),
+                      boxShadow: AppShadow.card,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        );
+      },
+    ),
+  );
 }

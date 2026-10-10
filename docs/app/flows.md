@@ -93,7 +93,7 @@ flowchart TD
 | 1 | 29/04 | 계획 열기 | `GET /trip/plans/{id}/state` | `active=false` |
 | 2 | 11 | [여행 시작] | `POST /trip/plans/{id}/start {"session_id": 최근 세션}` | 200 TripState / 409 `not_trip_day {start_date, end_date}` / 404 |
 | 3 | 13 | 권한 허용·거부 | (OS) | 거부 → 14-S1 배너 |
-| 4 | 14-S2 | 첫 장소로 이동 | `POST …/location` (30m 또는 30~60초) | `{state, events}` · `current.state=idle` |
+| 4 | 14-S2 | 첫 장소로 이동 | `POST …/location` (30m 또는 30~60초) | `{state, events}` · `current.state=idle` · 위치가 있으면 첫 장소로 자동 길 안내, 패널에 오늘 일정 목록 (2026-10-11 변경) |
 | 5 | 14 | 도착 | — | `arrived` → F4 |
 | 6 | 12 | [오늘로 옮기기] | AI 시트에 "일정을 오늘(10/9)로 옮겨줘" 전송 → 카드 → F2 | 승인 후 다시 2 |
 | 7 | 14 | (실수) [여행 종료] → 확인 | `POST …/end` | `active=false, ended_reason:user` → 30 |
@@ -289,3 +289,8 @@ flowchart TD
 
 - 로그아웃: `POST /auth/logout {refresh_token}` → 토큰 삭제 → 01. 탈퇴: `DELETE /users/me` (33, 확인 2단계).
 - `created: true` (Google 첫 로그인) → 02 대신 이름 확인 시트(선택, P2).
+
+## 2026-10-11 변경 (Today·Map 역할 나누기)
+- F3 4: 첫 장소 전에도 남은 일정 목록이 보이고, 위치가 있으면 첫 장소로 자동 길 안내 (14·15 변경).
+- F4: 17 로 가는 길이 하나 더 — Today 지도 핀 작은 창 [설명 듣기] (탭은 Today 그대로). 이동 중 자동 안내는 도착하면 꺼진다.
+- F5·F7: 15 토스트 [경로 보기] 는 Map 탭(동행 레이어 있음). Map 우회 카드 [이 길로 안내] 는 Today 로 돌아가 안내 (28 변경).

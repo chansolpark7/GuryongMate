@@ -61,3 +61,46 @@ Map 의 아래 카드는 손잡이 그림만 있고 끌 수 없으며, [길 안�
   바꿔야 하면 테스트도 같이 고치고 이유를 남긴다.
 - fixture(`test/fixtures/*.json`, `test/support/trip_replay.dart`): API 호출이 늘면 `gw.unmatched` 기대가 깨질 수 있다.
 - Figma 와 달라지는 곳(14-S2 한 줄 요약 → 목록, 큰 [길 안내] 버튼 제거, Map 시트)은 `docs/app/screens/` 해당 문서에 "2026-10-11 변경" 으로 적는다.
+
+## 5. 결과 (2026-10-11 구현, 브랜치 `feat/today-map`)
+
+### 바뀐 화면
+| 화면 | 바뀐 것 | 코드 |
+|---|---|---|
+| Today 패널 | 첫 장소 전에도 일정 행 전부(머리에 "오늘 일정 n곳 · 종료 예정"). 큰 [길 안내] 제거 → [이야기 듣기]/[가이드 미리 보기] 한 줄(h48). 다음 행 🧭. 머리에 작은 [전체 지도]. [경로 전체] 제거 | `today_screen.dart` `_RemainingSection`·`_NextSection`·`_NowSection`·`_BeforeFirst` |
+| Today 길 안내 | 자동(이동 중 · 첫 장소 전 + 위치) / 도착하면 꺼짐 / 카드 [×] = 이번 구간만 / 수동(🧭·작은 창·Map 우회) = `TripController.guideTo`(상태가 바뀌면 지움). 안내선 7px + 흰 3px, 나머지 30%. 카메라 한 번 맞춤, 끝나면 전체로. 위치 없으면 "위치를 켜면 길을 안내해요" | `_guideTarget`·`_closeGuide`·`_fitGuide`, `trip_controller.dart` `guideTo`·`setGuide` |
+| Today 지도 | 핀·남은 일정 행 → 작은 창(`today-place-popup`) [설명 듣기][길 안내][자세히 ›]. 탭·Planner 선택은 그대로. [자세히] 만 Map 으로(시트 펼침) | `_PlacePopup`, `PlanController.showDetailOnMap`·`mapDetailRequest` |
+| Map 아래 | 고정 카드 → `DraggableScrollableSheet` 3단. 경로 요약/그날 목록 · 장소 카드/장소 상세 · 관광지 장소/상세+[Day N에 추가] · 우회 카드. 상세는 펼칠 때만 요청 | `map_screen.dart` `_buildSheet`·`_itemSheet`·`_placeSheet`·`_DayRow` |
+| 장소 상세 | 모달 속 `_PlaceDetail` 본문을 `PlaceDetailContent`(+ `AddPlaceFooter`)로 꺼내 모달·Map 시트가 같이 씀 | `place_search_sheet.dart` |
+| Map 동행 레이어 | 내 위치(`map-location`), 지나온 구간 회색, 다녀온 핀 ✓, 지금 36 + 원, 다음 고리. 위험 구역 = `TripController.zones`(따로 60초 `api.avoid` 안 함). 우회 [이 길로 안내] → Today 안내 | `_Pin`, `TripController.zonesNow` |
+| 공통 | 사용자 위치 점은 `IgnorePointer` — 지금 머무는 곳 핀 위에 겹쳐도 핀이 눌린다 (원래는 점이 탭을 먹었다) | `map_layers.dart` |
+
+### Figma 와 달라진 곳
+`docs/app/screens/` 에 "2026-10-11 변경" 으로 적었다: 14(14-S2 목록, 큰 버튼 제거, 🧭, 작은 창, [전체 지도]), 15(자동 안내·[×]·[경로 전체] 제거),
+17(진입 두 곳 추가), 00-existing 07 Map(끄는 시트·상세·동행 레이어), 28(구역 공용·[이 길로 안내] → Today), flows.md F3·F4·F5·F7 메모.
+
+### 테스트
+- `flutter test`: **64 통과** (기존 59 + 새 5), 16 건너뜀(캡처 전용, `--dart-define=CAPTURE=true` 일 때만).
+- 새 `test/today_map_test.dart`: ① f3 여행 시작 직후 일정 행 5개 + 큰 [길 안내] 없음 ② 이동 중 자동 → [×] 숨김(같은 구간 유지) → 도착 꺼짐 → 🧭 수동 → 다음 이동 다시 자동
+  ③ 핀 → 작은 창(탭 2 그대로, Planner 선택 없음) → [설명 듣기] → 17 · 남은 일정 행 → 작은 창 · [자세히] → Map 시트 펼침 + 상세 + [설명 듣기]
+  ④ Map 시트 끌기 접힘·반·펼침, 반 = 그날 목록, 행 → 장소 카드(상세 요청 없음) → 펼침 = 장소 상세, 동행 중 내 위치, avoid 추가 호출 없음, [일정에서 보기] → Planner ⑤ 우회 [이 길로 안내] → Today 안내(hazards avoid).
+- 바꾼 기존 테스트: `trip_screens_test` F3 — 첫 장소 전 패널이 일정 목록만큼 길어져 "여행 종료"까지 `scrollUntilVisible` 를 넣었다. §4 의 키·문구(`guide-card`, `eta-chip`, `Grabber().last` 끌기, 안내선 색·점 검사, '첫 일정까지' 등)는 그대로 통과.
+- Map 시트는 Map 탭이 보일 때만 그린다 — IndexedStack 안에서 Today 패널·AI 시트와 `find.byType(DraggableScrollableSheet)` 가 섞이지 않게.
+
+### 캡처 (`docs/app/review/today-map/`)
+- `before/`·`after/`: 같은 fixture 장면(390×844)을 변경 전 코드(dev 57bf345)와 변경 후 코드로 — `flutter test test/capture_today_map_test.dart --dart-define=CAPTURE=true --dart-define=CAPTURE_DIR=../docs/app/review/today-map/after`.
+  a1·a2 첫 장소 전 / b1 이동 중 / c1 머무는 중 / c2 핀 누르기 / c3 설명 듣기(후만) / d1~d4 Map(동행 중 · 반 · 장소 선택 · 펼침). 지도 타일은 네트워크가 없어 비어 있다.
+- `live/before`·`live/after`: 로컬 스택(`http://127.0.0.1:8000`, AGENT_PROVIDER 그대로 · 대화는 보내지 않음) + 관제 대시보드(`/console/`) + Windows 데스크톱 빌드(`--dart-define=DEMO=true`, 데모 위치 모드, 창 440×980).
+  순서: 👤 → 계정 초기화 → 🎬 데모 시작 상태로 → (빈 계획이라 `demo_plan.json` 의 일정 5곳을 planner API `POST …/items` 로 넣음, LLM 없음) →
+  계획 날짜(10/10 12:20)로 이동 후 여행 시작 → 지도 빈 곳 "여기로 이동" → 1번 "걸어가기" → "여기서 머물기"(도착) → 2번 핀 → [설명 듣기] → [자세히] → Map 시트 펼침·반·접힘.
+  - after: 1 시작 직후 목록 5곳 · 2 위치가 들어오면 자동 안내("회전교차로 후 10m 이동") · 3 걷는 중 안내 갱신·지나온 길 회색 · 4 도착 → 안내 꺼짐·카메라 전체로 · 5 핀 작은 창(탭 Today 그대로) · 6 [설명 듣기] → 17 · 7 [자세히] → Map 시트 펼침(실제 사진·주소·운영·소개 + [설명 듣기]) · 8 반 · 9 접힘 + 동행 레이어(내 위치, 지금 1번 원, 다음 2번).
+  - before (dev 57bf345 빌드): 1 시작 직후 "오늘 일정 5곳" 한 줄만 + 큰 [길 안내] · 3 걷는 중에도 안내 없음(버튼을 눌러야) · 4 도착 · 5 핀 → Map 탭으로 넘어가 고정 카드(끌어도 안 움직임, 내 위치 없음).
+
+### 남은 문제
+- **가이드 노트 없음 상태만 확인**: "데모 시작 상태로" 가 가이드 노트를 지우고, 노트 준비·[지금 설명 듣기] 는 LLM 호출이라 실제 스택에서는 17 의 "준비된 해설이 없어요" 까지만 봤다. 노트가 있을 때 [설명 듣기] → 본문은 fixture 테스트(f4)로만 확인.
+- **"데모 시작 상태로" 는 빈 계획**을 만든다 (콘솔 문구도 "빈 계획"). 이번 확인은 일정 5곳을 API 로 넣어서 했다 — 대시보드만으로 Today 흐름을 보려면 일정까지 넣는 버튼이 필요할 수 있다 (콘솔은 이번 범위 밖이라 그대로 둠).
+- 14-S2 "지금 위치에서 도보 n분" 은 처음 한 번만 계산해 걷는 동안 줄지 않는다 (예전부터). 안내 카드의 분·도착 예상은 갱신된다.
+- Map 시트 접힘 높이는 내용별 고정값(경로 104 · 장소 카드 236 · 관광지 214 · 우회 300px + 위 버튼 칸 150)이다. 장소 카드에 위반 칩이 여러 줄이면 접힘에서 버튼이 아래로 밀려 살짝 끌어야 보인다.
+- 지도 작은 창은 핀 위 248×196 고정. 화면 오른쪽 끝 핀이면 AI FAB·현재 위치 버튼과 겹칠 수 있다 (지도를 옮기면 해결, 자동으로 피하지는 않음).
+- 우회 [이 길로 안내] → Today 안내는 fixture 테스트로만 확인 (실제 스택은 평상시 시나리오라 우회 카드가 뜨지 않음).
+- Planner 의 [지도에서 보기] · 출발 토스트 [경로 보기] 는 그대로 Map 탭으로 간다 (Map 에 동행 레이어가 생겨 그대로 둠).
