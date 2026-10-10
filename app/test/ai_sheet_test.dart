@@ -251,4 +251,39 @@ void main() {
     expect(find.text('구룡메이트가 답하는 중이에요. 잠시 후 다시 눌러 주세요'), findsOneWidget);
     expect(find.text('하나 더'), findsNothing, reason: '시작되지 않은 말풍선은 거둔다');
   });
+  testWidgets('05 시트 닫기: 헤더를 끝까지 끌어내리거나 X 를 두 번 눌러도 시트만 닫힌다 (계획 화면은 그대로)', (tester) async {
+    await phone(tester);
+    final gw = FixtureGateway(['f1_plan_with_ai.json']);
+    PlanState(gw, (gw.response('accept') as Map)['plan'] as Map<String, dynamic>);
+    final session = await signedInSession(gw);
+    // 계획 목록 대신: PlannerShell 아래에 화면 하나를 깔아 두 번째 pop 을 잡는다
+    await tester.pumpWidget(app(session, Builder(
+      builder: (context) => Scaffold(body: Center(child: TextButton(
+        onPressed: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => const PlannerShell(planId: 240))),
+        child: const Text('목록'),
+      ))),
+    )));
+    await tester.tap(find.text('목록'));
+    await settle(tester);
+    expect(find.byTooltip('구룡메이트 열기'), findsWidgets);
+
+    // 헤더를 최소 높이 아래까지 끌면 시트가 스스로 닫히고, 손을 떼도 한 번 더 pop 하지 않는다
+    await openSheet(tester);
+    expect(find.byTooltip('닫기'), findsOneWidget);
+    await tester.drag(find.text('구룡메이트').first, const Offset(0, 600));
+    await settle(tester);
+    expect(find.byTooltip('닫기'), findsNothing, reason: '시트는 닫힘');
+    expect(find.byTooltip('구룡메이트 열기'), findsWidgets, reason: '계획 화면은 그대로');
+    expect(find.text('목록'), findsNothing);
+
+    // X 를 빠르게 두 번
+    await openSheet(tester);
+    await tester.tap(find.byTooltip('닫기'));
+    await tester.pump(const Duration(milliseconds: 50));
+    await tester.tap(find.byTooltip('닫기'), warnIfMissed: false);
+    await settle(tester);
+    expect(find.byTooltip('닫기'), findsNothing);
+    expect(find.byTooltip('구룡메이트 열기'), findsWidgets);
+    expect(find.text('목록'), findsNothing);
+  });
 }

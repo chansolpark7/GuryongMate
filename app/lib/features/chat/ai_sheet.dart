@@ -14,6 +14,12 @@ import 'proposal_card.dart';
 const _half = 0.77; // Figma: Half top 196 / 844
 const _full = 0.94; // Full top 56
 
+/// 시트가 아직 맨 위일 때만 닫는다. 이미 닫히는 중(최소 높이 도달로 자동 pop, X 두 번 탭)에 또 pop 하면
+/// 아래의 PlannerShell 까지 닫혀 계획 목록으로 돌아가 버린다.
+void _closeSheet(BuildContext context) {
+  if (ModalRoute.of(context)?.isCurrent ?? false) Navigator.of(context).pop();
+}
+
 /// 05_Planner_AI_BottomSheet. FAB → Half 로 slide-up, 위로 끌거나 확장 아이콘 → Full.
 Future<void> showAiSheet(
   BuildContext context, {
@@ -185,10 +191,10 @@ class _AiSheetState extends State<_AiSheet> {
                   _sheet.jumpTo((_sheet.size - d.delta.dy / h).clamp(0.0, _full));
                 },
                 onVerticalDragEnd: (d) {
-                  if (!_sheet.isAttached) return;
+                  if (!_sheet.isAttached || !(ModalRoute.of(context)?.isCurrent ?? false)) return;
                   final v = d.primaryVelocity ?? 0;
                   if (v > 700 || _sheet.size < 0.5) {
-                    Navigator.of(context).maybePop();
+                    _closeSheet(context);
                   } else {
                     _sheet.animateTo(v < -300 || _sheet.size > (_half + _full) / 2 ? _full : _half, duration: const Duration(milliseconds: 200), curve: Curves.easeOut);
                   }
@@ -274,7 +280,7 @@ class _Header extends StatelessWidget {
               icon: Icon(full ? Icons.close_fullscreen : Icons.open_in_full, size: 20, color: AppColors.text2),
               onPressed: onToggle,
             ),
-            IconButton(tooltip: '닫기', icon: const Icon(Icons.close, color: AppColors.text2), onPressed: () => Navigator.of(context).maybePop()),
+            IconButton(tooltip: '닫기', icon: const Icon(Icons.close, color: AppColors.text2), onPressed: () => _closeSheet(context)),
           ]),
         ),
       );
