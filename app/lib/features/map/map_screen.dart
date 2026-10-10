@@ -834,14 +834,19 @@ class _RouteSummary extends StatelessWidget {
                 final p = c.lastApplied?.proposal;
                 if (p == null) return;
                 final entry = ProposalEntry(p)..state = ProposalState.applied;
+                final chat = context.read<ChatController>();
+                // 시트는 앱 Navigator 에 따로 올라가 셸의 Provider 밖이다 → 카드가 읽는 두 컨트롤러를 다시 넘긴다
                 showModalBottomSheet<void>(
                   context: context,
                   isScrollControlled: true,
                   showDragHandle: true,
-                  builder: (ctx) => SafeArea(
-                    child: SingleChildScrollView(
-                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-                      child: ProposalCard(entry: entry, readOnly: true),
+                  builder: (ctx) => MultiProvider(
+                    providers: [ChangeNotifierProvider.value(value: c), ChangeNotifierProvider.value(value: chat)],
+                    child: SafeArea(
+                      child: SingleChildScrollView(
+                        padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                        child: ProposalCard(entry: entry, readOnly: true),
+                      ),
                     ),
                   ),
                 );

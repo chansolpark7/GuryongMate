@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:guryong_mate/core/models/agent.dart';
 import 'package:guryong_mate/features/chat/chat_controller.dart';
+import 'package:guryong_mate/features/planner/plan_controller.dart';
 import 'package:guryong_mate/features/planner/planner_shell.dart';
 import 'package:provider/provider.dart';
 
@@ -117,6 +118,24 @@ void main() {
     expect(find.text('안전 · 실내'), findsWidgets);
     expect(find.text('차량 13분'), findsNothing, reason: '화면 밖');
     expect(gw.unmatched.where((u) => !u.contains('/routing')), isEmpty);
+
+    // 26 지도 → [변경 내역]: 시트는 셸 Provider 밖이라 컨트롤러를 넘겨받아야 카드가 그려진다
+    // (녹화는 빈 일정에서 시작해 지도에 이전 경로가 없다 → 이전 일정을 지금 일정으로 두고 버튼을 띄운다)
+    final plan = Provider.of<PlanController>(tester.element(find.byType(IndexedStack).first), listen: false);
+    final applied = plan.lastApplied!;
+    plan.lastApplied = AppliedProposal(proposal: applied.proposal, before: plan.plan!, at: applied.at);
+    plan.setTab(1);
+    await settle(tester, 4);
+    await tester.tap(find.text('변경 내역'));
+    await settle(tester, 8);
+    expect(tester.takeException(), isNull);
+    expect(find.text('6건 적용됨'), findsOneWidget, reason: '읽기 전용 카드');
+    expect(find.text('구룡포 일본인 가옥거리'), findsWidgets);
+    await tester.tapAt(const Offset(195, 40)); // 바깥을 눌러 닫기
+    await settle(tester, 8);
+    plan.lastApplied = applied;
+    plan.setTab(0);
+    await settle(tester, 4);
 
     // 08 실행 취소 (승인 직후 스낵바에서만, c9): 승인 전 일정으로 되돌리는 ops
     gw.on('POST /planner/plans/{id}/ops', (r) => Res.json(200, gw.response('create_plan')));
