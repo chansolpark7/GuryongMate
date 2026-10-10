@@ -61,10 +61,13 @@ export function resample(line, step) {
 
 export const sleep = (msec) => new Promise((r) => setTimeout(r, msec));
 
-/** DOM 만들기: h("button.primary", {onclick}, "글자", child…). 문자열 자식은 textContent 로 넣는다 (HTML 해석 안 함). */
+/** DOM 만들기: h("button#id.primary", {onclick}, "글자", child…). 문자열 자식은 textContent 로 넣는다 (HTML 해석 안 함). */
 export function h(spec, attrs, ...children) {
+  let id = null;
+  spec = spec.replace(/#([\w-]+)/, (_, x) => { id = x; return ""; });
   const [tag, ...classes] = spec.split(".");
   const node = document.createElement(tag || "div");
+  if (id) node.id = id;
   if (classes.length) node.className = classes.join(" ");
   if (attrs && (typeof attrs !== "object" || attrs instanceof Node || Array.isArray(attrs))) {
     children.unshift(attrs);
@@ -75,6 +78,7 @@ export function h(spec, attrs, ...children) {
     if (k.startsWith("on")) node.addEventListener(k.slice(2), v);
     else if (k === "class") node.className += ` ${v}`;
     else if (k === "style" && typeof v === "object") Object.assign(node.style, v);
+    else if (k === "dataset") Object.assign(node.dataset, v);
     else if (k in node && k !== "list") node[k] = v;
     else node.setAttribute(k, v === true ? "" : v);
   }
@@ -88,3 +92,27 @@ export function h(spec, attrs, ...children) {
 /** 위험 단계 -> 한국어. */
 export const RISK_KO = { safe: "안전", caution: "주의", danger: "위험" };
 export const riskKo = (r) => RISK_KO[r] || "판단 보류";
+
+/** 받침에 맞는 조사: josa("가옥거리", "로") -> "가옥거리로", josa("구룡포항", "로") -> "구룡포항으로". 한글이 아니면 앞의 것. */
+export function josa(word, kind) {
+  const w = String(word ?? "");
+  const c = w.charCodeAt(w.length - 1);
+  const hangul = c >= 0xac00 && c <= 0xd7a3;
+  const jong = hangul ? (c - 0xac00) % 28 : 0;
+  const pairs = { 로: ["로", "으로"], 가: ["가", "이"], 는: ["는", "은"], 를: ["를", "을"], 와: ["와", "과"] };
+  const [a, b] = pairs[kind] || [kind, kind];
+  if (kind === "로") return w + (jong === 0 || jong === 8 ? a : b); // ㄹ 받침은 "로"
+  return w + (jong === 0 ? a : b);
+}
+
+/** 분 -> "1시간 20분" / "15분". */
+export function fmtMinutes(min) {
+  const m = Math.max(0, Math.round(min));
+  if (m < 60) return `${m}분`;
+  return `${Math.floor(m / 60)}시간${m % 60 ? ` ${m % 60}분` : ""}`;
+}
+
+/** node 의 자식을 바꾼다 (null·false 는 건너뜀 — replaceChildren 은 null 을 "null" 글자로 넣는다). */
+export function fill(node, ...children) {
+  node.replaceChildren(...children.flat().filter((c) => c != null && c !== false));
+}

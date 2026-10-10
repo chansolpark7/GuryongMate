@@ -1,5 +1,6 @@
 // 게이트웨이 API 호출 (로그인·토큰 갱신·관리 토큰). 토큰·비밀번호는 URL·콘솔 로그에 남기지 않는다.
 // 설정·토큰은 이 브라우저의 localStorage 에만 둔다 (docs/console/README.md §1.2).
+import { S, emit } from "./store.js";
 
 const KEY = {
   base: "gm.console.base",
@@ -57,6 +58,7 @@ class Api {
   setAdminToken(token) {
     this.adminToken = (token || "").trim();
     save(KEY.admin, this.adminToken);
+    if (this.adminToken && S.adminNeeded) { S.adminNeeded = false; emit("conn"); }
   }
   setTokens(t) {
     this.tokens = t ? { access_token: t.access_token, refresh_token: t.refresh_token, user: t.user } : null;
@@ -67,6 +69,11 @@ class Api {
     save(KEY.devUser, this.devUser);
   }
   get signedIn() { return !!(this.tokens || this.devUser); }
+  /** 로그인 아이디 (계정 초기화 확인용). */
+  get loginId() {
+    if (this.tokens) return this.tokens.user?.login_id || "";
+    return this.devUser || "";
+  }
   get userLabel() {
     if (this.tokens) return this.tokens.user?.login_id || this.tokens.user?.display_name || this.tokens.user?.id || "로그인됨";
     if (this.devUser) return `${this.devUser} (X-User-Id)`;
@@ -123,13 +130,18 @@ class Api {
     if (text) {
       try { data = JSON.parse(text); } catch { data = text; }
     }
-    if (!resp.ok) throw parseError(resp.status, data);
+    if (!resp.ok) {
+      const err = parseError(resp.status, data);
+      if (isAdminOnly(err) && !S.adminNeeded) { S.adminNeeded = true; emit("conn"); }
+      throw err;
+    }
     return data;
   }
 
   get(path) { return this.req("GET", path); }
   post(path, body) { return this.req("POST", path, body === undefined ? {} : body); }
   put(path, body) { return this.req("PUT", path, body); }
+  del(path) { return this.req("DELETE", path); }
 
   async login(loginId, password) {
     const t = await this.req("POST", "/auth/login", { login_id: loginId, password });
@@ -157,9 +169,9 @@ export function isAdminOnly(e) {
 
 /** 오류를 화면용 한 줄로. */
 export function errText(e) {
-  if (isAdminOnly(e)) return "관리 토큰이 필요한 API 입니다 — 설정(⚙)에서 관리 토큰을 입력하세요";
+  if (isAdminOnly(e)) return "관리 토큰이 필요해요 — 👤 → 설정에서 관리 토큰을 입력하세요";
   if (e instanceof ApiError) {
-    if (e.code === "trip_not_active") return "여행을 먼저 시작하세요 (trip_not_active)";
+    if (e.code === "trip_not_active") return "여행을 먼저 시작하세요";
     if (e.code === "sim_disabled") return "가상 상황 꺼짐 — 서버에 SAFETY_SIM_ENABLED=true 필요";
     return `${e.message}${e.code && e.code !== e.message && !/^\d+$/.test(e.code) ? ` (${e.code})` : e.status ? ` (${e.status})` : ""}`;
   }

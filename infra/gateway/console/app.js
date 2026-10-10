@@ -1,14 +1,19 @@
-// 구룡메이트 데모 관제 대시보드 — 시작·로그인·설정·폴링. 명세: docs/console/README.md
+// 구룡메이트 데모 관제 대시보드 — 시작·로그인·설정·폴링. 명세: docs/console/README.md, 개편: docs/console/redesign.md
 import { api, ApiError, errText } from "./api.js";
 import { S, emit, tripActive } from "./store.js";
 import { loadAlerts, loadConn, loadEvents, loadPlans, loadSafety, loadSim, loadTrip, selectPlan } from "./data.js";
-import { reloadAll } from "./actions.js";
+import { reloadAll, stopMotion, stopPlay } from "./actions.js";
 import { initMap, invalidate } from "./map.js";
-import { initPanels, renderConnDetail } from "./panels.js";
+import { initTopbar, renderAlertbar } from "./topbar.js";
+import { initOverlays } from "./overlays.js";
+import { initWeather } from "./weather.js";
+import { initTimeline } from "./timeline.js";
+import { initFeed } from "./feed.js";
+import { initDev, openDev } from "./devdrawer.js";
+import { openReset } from "./reset.js";
 import { toast } from "./ui.js";
 
 const $ = (id) => document.getElementById(id);
-const PANEL_KEY = "gm.console.panelHidden";
 
 // ---------- 폴링 ----------
 
@@ -29,7 +34,7 @@ function onPollError(e) {
   if (e instanceof ApiError && e.status === 401 && !authPrompted) {
     authPrompted = true;
     api.setTokens(null);
-    openLogin("로그인이 만료됐습니다. 다시 로그인하세요.");
+    openLogin("로그인이 만료됐어요. 다시 로그인하세요.");
   }
 }
 
@@ -65,14 +70,25 @@ function openLogin(msg) {
 
 async function afterSignIn() {
   authPrompted = false;
-  $("user-label").textContent = api.userLabel;
+  $("user-label").textContent = api.loginId || api.userLabel || "-";
   try {
     await loadPlans();
   } catch (e) {
-    if (e instanceof ApiError && e.status === 401) { openLogin("로그인이 필요합니다."); return; }
+    if (e instanceof ApiError && e.status === 401) { openLogin("로그인이 필요해요."); return; }
     toast(`계획 목록 실패: ${errText(e)}`, "error");
   }
   await reloadAll();
+}
+
+async function logout() {
+  stopMotion();
+  stopPlay();
+  await api.logout();
+  selectPlan(null, false);
+  S.plans = [];
+  emit("plans");
+  $("user-label").textContent = "-";
+  openLogin();
 }
 
 function initDialogs() {
@@ -89,7 +105,7 @@ function initDialogs() {
       await afterSignIn();
     } catch (e) {
       $("login-error").hidden = false;
-      $("login-error").textContent = e.status === 401 ? "아이디 또는 비밀번호가 맞지 않습니다" : errText(e);
+      $("login-error").textContent = e.status === 401 ? "아이디 또는 비밀번호가 맞지 않아요" : errText(e);
     } finally {
       $("btn-login").disabled = false;
     }
@@ -105,7 +121,7 @@ function initDialogs() {
       api.setDevUser("");
       $("login-error").hidden = false;
       $("login-error").textContent = e.status === 401
-        ? "이 서버는 로그인이 필요합니다 (AUTH_REQUIRED=true) — 비밀번호로 로그인하세요" : errText(e);
+        ? "이 서버는 로그인이 필요해요 (AUTH_REQUIRED=true) — 비밀번호로 로그인하세요" : errText(e);
       return;
     }
     $("dlg-login").close();
@@ -115,22 +131,11 @@ function initDialogs() {
   $("btn-login-settings").addEventListener("click", () => openSettings());
   $("dlg-login").addEventListener("cancel", (ev) => { if (!api.signedIn) ev.preventDefault(); });
 
-  $("btn-logout").addEventListener("click", async () => {
-    await api.logout();
-    selectPlan(null, false);
-    S.plans = [];
-    emit("plans");
-    $("user-label").textContent = "-";
-    openLogin();
-  });
-
-  $("btn-settings").addEventListener("click", openSettings);
   $("btn-admin-clear").addEventListener("click", () => {
     api.setAdminToken("");
     $("set-admin").value = "";
     renderAdminState();
-    renderConnDetail();
-    toast("관리 토큰을 지웠습니다");
+    toast("관리 토큰을 지웠어요");
   });
   $("settings-form").addEventListener("submit", async (ev) => {
     const action = ev.submitter?.value;
@@ -141,32 +146,27 @@ function initDialogs() {
     if ($("set-admin").value) api.setAdminToken($("set-admin").value);
     $("set-admin").value = "";
     renderAdminState();
-    toast("설정을 저장했습니다");
+    renderAlertbar();
+    toast("설정을 저장했어요");
     if (changedBase) {
+      stopMotion();
+      stopPlay();
       api.setTokens(null);
       api.setDevUser("");
       selectPlan(null, false);
       S.zones = [];
       await loadConn().catch(() => {});
-      openLogin("서버를 바꿨습니다. 다시 로그인하세요.");
+      openLogin("서버를 바꿨어요. 다시 로그인하세요.");
     } else {
       await Promise.allSettled([loadConn(), reloadAll()]);
     }
   });
-
-  $("plan-select").addEventListener("change", (ev) => {
-    const id = Number(ev.target.value) || null;
-    selectPlan(id);
-  });
-
-  $("btn-panel").addEventListener("click", () => setPanelHidden(!document.body.classList.contains("panel-hidden")));
 }
 
 function openSettings() {
   $("set-base").value = api.base === location.origin ? "" : api.base;
   $("set-admin").value = "";
   renderAdminState();
-  renderConnDetail();
   $("dlg-settings").showModal();
 }
 
@@ -174,21 +174,17 @@ function renderAdminState() {
   $("admin-state").textContent = api.adminToken ? "지금: 입력됨" : "지금: 없음";
 }
 
-function setPanelHidden(hidden) {
-  document.body.classList.toggle("panel-hidden", hidden);
-  $("btn-panel").textContent = hidden ? "◂ 패널" : "패널 ▸";
-  $("btn-panel").setAttribute("aria-expanded", String(!hidden));
-  try { localStorage.setItem(PANEL_KEY, hidden ? "1" : "0"); } catch { /* 무시 */ }
-  setTimeout(invalidate, 50);
-}
-
 // ---------- 시작 ----------
 
 async function main() {
   initMap();
-  initPanels();
+  initTopbar({ openSettings, openReset, openDev, logout });
+  initOverlays();
+  initWeather();
+  initTimeline();
+  initFeed();
+  initDev();
   initDialogs();
-  try { if (localStorage.getItem(PANEL_KEY) === "1") setPanelHidden(true); } catch { /* 무시 */ }
   window.addEventListener("resize", () => invalidate());
 
   await Promise.allSettled([loadConn(), loadSim(), loadSafety()]);

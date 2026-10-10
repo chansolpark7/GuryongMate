@@ -1,0 +1,39 @@
+{
+  "title": "엄마랑 구룡포",
+  "start_date": "2026-10-10",
+  "day_start": "12:30",
+  "day_end": "18:00",
+  "items": [
+    {
+      "place_id": "kto-1909659",
+      "stay_minutes": 60
+    },
+    {
+      "place_id": "kto-2610501",
+      "stay_minutes": 50
+    },
+    {
+      "place_id": "kto-2660046",
+      "stay_minutes": 60
+    },
+    {
+      "place_id": "poi-gr-breakwater-north",
+      "stay_minutes": 40
+    },
+    {
+      "place_id": "kto-2834344",
+      "stay_minutes": 45,
+      "travel_mode": "car"
+    }
+  ],
+  "constraints": [
+    {
+      "type": "end_before",
+      "params": {
+        "time": "18:00"
+      },
+      "hard": true,
+      "note": "18시 전에 끝내기"
+    }
+  ]
+}
