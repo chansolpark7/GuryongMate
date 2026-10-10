@@ -8,7 +8,6 @@ const $ = (id) => document.getElementById(id);
 const DAY_MS = 24 * 3600e3;
 const SOURCE_KO = { sensors: "센서", breakwater: "방파제 CCTV", uv: "자외선", forecast: "예보", warnings: "특보", tide: "조위" };
 
-let chosen = null; // 고른 날씨 (끝 시각 선택 중)
 let detailsOpen = false;
 let scanText = null;
 let choiceTime = null;
@@ -20,8 +19,10 @@ export function initWeather() {
   render();
 }
 
-/** 타임라인에 그릴 날씨 (S.arm). timeline.js 가 띠 위를 끌면 쓴다. */
+/** 날씨 그리기 도구 (S.arm = 종류, null = 끔). 날씨 아이콘을 고르면 켜지고, 같은 아이콘·Esc 로 끈다.
+ * 켜져 있으면 타임라인 날씨 줄을 끌어 그 구간을 그린다 (timeline.js). ☀️ 평상시는 지우개. */
 export function arm(kind) {
+  if (S.arm === kind) return;
   S.arm = kind;
   emit("arm");
 }
@@ -37,7 +38,7 @@ function render() {
   const live = !sim || sim.mode === "live";
   // 내용이 같으면 다시 만들지 않는다 (몇 초마다 다시 만들면 누르는 중인 버튼이 사라져 클릭이 빠진다)
   const st = S.status;
-  const sig = JSON.stringify([open, live, ok, S.simDisabled, sim?.scenario, sim?.switchable, chosen, S.arm, scanText,
+  const sig = JSON.stringify([open, live, ok, S.simDisabled, sim?.scenario, sim?.switchable, S.arm, scanText,
     st && [st.warnings, st.preliminary_warnings, st.next_hours, st.zones.map((z) => z.risk), st.data_status && Object.values(st.data_status).map((v) => v.ok)],
     S.avoid?.zones?.length]);
   if (sig === lastSig && box.firstChild) return;
@@ -62,19 +63,19 @@ function render() {
 
   const activeKind = !live ? sim.scenario : null;
   const icons = h(`div.w-icons${live ? ".dim" : ""}`,
-    ...Object.entries(KIND_META).map(([k, m]) => h(`button.w-icon${activeKind === k ? ".on" : ""}${chosen === k ? ".chosen" : ""}${S.arm === k ? ".armed" : ""}`, {
+    ...Object.entries(KIND_META).map(([k, m]) => h(`button.w-icon${activeKind === k ? ".on" : ""}${S.arm === k ? ".armed" : ""}`, {
       disabled: !ok,
-      title: live ? `${m.ko} — 가상 시나리오로 바꾸고 적용` : m.ko,
-      "aria-pressed": String(chosen === k),
-      onclick: () => { chosen = chosen === k ? null : k; if (S.arm) arm(null); render(); },
+      title: `${m.ko} — ${k === "calm" ? "타임라인 날씨 줄을 끌어 지우기" : "타임라인 날씨 줄을 끌어 그리기"} 또는 지금부터 시간 고르기${live ? " (가상 시나리오로 바뀜)" : ""}`,
+      "aria-pressed": String(S.arm === k),
+      onclick: () => arm(S.arm === k ? null : k),
     }, h("span.emo", m.icon), h("span.lbl", m.ko))));
 
   fill(box, head, seg,
     live ? h("p.w-note", S.simDisabled ? "실제 데이터 (가상 상황 꺼짐)" : "지금 구룡포 실제 데이터 (E-UM 센서·CCTV·기상청)") : null,
     icons,
-    chosen ? choicePanel(chosen) : null,
-    S.arm ? h("p.w-armed", `아래 타임라인 날씨 띠 위를 끌어 ${kindMeta(S.arm).icon} ${kindMeta(S.arm).ko} 구간을 그리세요 · `,
-      h("button.link", { onclick: () => arm(null) }, "취소")) : null,
+    S.arm ? choicePanel(S.arm) : null,
+    S.arm ? h("p.w-armed", `✏️ 그리기 도구 켜짐 — 아래 타임라인 날씨 줄을 끌어 ${kindMeta(S.arm).icon} ${kindMeta(S.arm).ko}${S.arm === "calm" ? "으로 지우세요" : " 구간을 그리세요"} · `,
+      h("button.link", { onclick: () => arm(null) }, "끄기 (Esc)")) : null,
     scanText ? h("p.w-busy", `⟳ ${scanText}`) : null,
     details());
 }
@@ -83,7 +84,7 @@ function render() {
 function choicePanel(kind) {
   const m = kindMeta(kind);
   const now = simNow();
-  const go = (end) => { chosen = null; render(); addWeather(kind, simNow(), end); };
+  const go = (end) => { arm(null); addWeather(kind, simNow(), end); };
   // 몇 초마다 다시 그리므로 입력칸은 고른 동안 같은 것을 쓴다 (입력 중인 값이 사라지지 않게)
   if (!choiceTime || choiceTime.dataset.kind !== kind) {
     choiceTime = h("input", { type: "time", "aria-label": "끝 시각", value: hm(now + 60 * 60e3) });
@@ -106,9 +107,7 @@ function choicePanel(kind) {
         onclick: () => go(kind === "calm" ? Infinity : simNow() + CONTINUE_HOURS * 3600e3),
       }, "계속")),
     h("div.w-row",
-      h("span.muted.small", "끝"), time, h("button.btn", { onclick: at }, "적용"),
-      h("span.grow"),
-      h("button.link", { title: "아래 타임라인의 날씨 띠 위를 끌어서 구간을 정해요", onclick: () => { chosen = null; arm(kind); } }, "타임라인에 그리기")));
+      h("span.muted.small", "끝"), time, h("button.btn", { onclick: at }, "적용")));
 }
 
 function counts() {

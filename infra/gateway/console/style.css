@@ -298,17 +298,20 @@ body.feed-closed .feed-rail {
 .feed-rail .badge[hidden] { display: none; }
 
 /* ---------- 하루 타임라인 (하단) ---------- */
-#day { background: var(--surface); border-top: 1px solid var(--line); padding: 6px 14px 10px; user-select: none; }
+#day { position: relative; z-index: 1100; background: var(--surface); border-top: 1px solid var(--line); padding: 6px 14px 10px; user-select: none; }
 .day-head { display: flex; align-items: center; gap: 6px; min-height: 36px; flex-wrap: wrap; }
 .day-label { font-size: 15px; min-width: 76px; text-align: center; }
 .armed-hint { font-size: 13px; color: var(--primary); font-weight: 600; }
-.track { display: grid; grid-template-columns: 40px 1fr; grid-template-rows: 22px 34px 26px; column-gap: 8px; margin: 2px 0 4px; touch-action: none; }
+/* 줄: 눈금자(시간 전용) · 일정(누르기) · 날씨(편집 전용, 손잡이 잡기 쉽게 30px) */
+.track { position: relative; display: grid; grid-template-columns: 40px 1fr; grid-template-rows: 24px 34px 30px; column-gap: 8px; margin: 2px 0 4px; touch-action: none; }
 .lane-label { font-size: 11px; color: var(--text3); align-self: center; text-align: right; }
+.lane-label.l0 { grid-row: 1; }
 .lane-label.l1 { grid-row: 2; }
 .lane-label.l2 { grid-row: 3; }
-.lanes { grid-column: 2; grid-row: 1 / span 3; position: relative; display: grid; grid-template-rows: 22px 34px 26px; cursor: ew-resize; }
-.scale { position: relative; border-bottom: 1px solid var(--line); }
-.tick { position: absolute; bottom: 0; height: 5px; border-left: 1px solid var(--rail); }
+.lanes { grid-column: 2; grid-row: 1 / span 3; position: relative; display: grid; grid-template-rows: 24px 34px 30px; }
+.scale { position: relative; border-bottom: 1px solid var(--line); cursor: pointer; border-radius: 6px 6px 0 0; }
+.scale:hover { background: var(--field); }
+.tick { position: absolute; bottom: 0; height: 5px; border-left: 1px solid var(--rail); pointer-events: none; }
 .tick.major { height: 8px; border-left-color: var(--text3); }
 .tick.major::after {
   content: attr(data-l); position: absolute; bottom: 8px; transform: translateX(-50%); font-size: 11px; color: var(--text3); white-space: nowrap;
@@ -327,29 +330,78 @@ body.feed-closed .feed-rail {
 .blk.st-done .n { background: var(--text3); }
 .blk.st-here, .blk.st-visiting { background: var(--primary); color: #fff; border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-soft); }
 .blk.st-here .n, .blk.st-visiting .n { background: #fff; color: var(--primary); }
-.wband { position: relative; border-radius: 8px; background: var(--success-soft); margin-bottom: 2px; }
+.wband { position: relative; border-radius: 8px; background: var(--success-soft); margin-bottom: 2px; cursor: default; }
 .wband.off { opacity: 0.45; }
 .wband.arming { outline: 2px dashed var(--primary); outline-offset: 1px; cursor: crosshair; }
-.wseg, .draw-ghost {
+.wseg {
   position: absolute; top: 0; bottom: 0; border-radius: 8px; color: #fff; font-size: 12px; font-weight: 700;
-  display: flex; align-items: center; justify-content: center; overflow: hidden; white-space: nowrap; cursor: pointer;
+  display: flex; align-items: center; justify-content: center; white-space: nowrap; cursor: grab;
 }
-.wseg span { overflow: hidden; text-overflow: ellipsis; padding: 0 4px; }
-.draw-ghost { opacity: 0.6; pointer-events: none; border: 2px dashed #fff; }
-.draw-ghost[hidden] { display: none; }
+.wseg .lbl { overflow: hidden; text-overflow: ellipsis; padding: 0 10px; pointer-events: none; }
+.wseg.sel { box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--text); z-index: 2; }
+/* 끝 손잡이: 히트 영역 12px (구간 밖으로 4px), 보이는 막대는 가운데 3px */
+.wseg .hdl { position: absolute; top: -2px; bottom: -2px; width: 12px; cursor: col-resize; z-index: 1; }
+.wseg .hdl.l { left: -4px; }
+.wseg .hdl.r { right: -4px; }
+.wseg .hdl::after {
+  content: ""; position: absolute; top: 7px; bottom: 7px; left: 4.5px; width: 3px; border-radius: 2px; background: rgba(255, 255, 255, 0.85);
+  opacity: 0; transition: opacity 0.12s;
+}
+.wseg:hover .hdl::after, .wseg.sel .hdl::after, .wseg.editing .hdl::after { opacity: 1; }
+.wseg.editing { box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--ai); z-index: 2; }
+.wband.arming .wseg { cursor: crosshair; }
+.wband.arming .hdl { display: none; }
+.band-hint {
+  position: absolute; inset: 0; display: grid; place-items: center; pointer-events: none;
+  font-size: 12px; font-weight: 700; color: var(--primary);
+}
+.band-hint.dim { color: var(--text3); font-weight: 500; }
+.drag-tip {
+  position: absolute; top: 30px; transform: translateX(-50%); z-index: 5; pointer-events: none;
+  background: var(--text); color: var(--surface); font-size: 12px; font-weight: 700; padding: 3px 8px; border-radius: 8px;
+  white-space: nowrap; font-variant-numeric: tabular-nums; box-shadow: var(--shadow-float);
+}
+.drag-tip[hidden] { display: none; }
 .k-storm { background: var(--k-storm); }
 .k-flood { background: var(--k-flood); }
 .k-wind { background: var(--k-wind); }
 .k-rain { background: var(--k-rain); }
 .k-calm { background: var(--success); }
+/* 바늘: 선은 보이기만 (아래 일정·날씨 줄이 이벤트를 받는다), 잡을 수 있는 건 눈금자의 머리뿐 */
 .needle { position: absolute; top: 0; bottom: -2px; width: 0; z-index: 3; pointer-events: none; }
 .needle[hidden] { display: none; }
-.needle .line { position: absolute; top: 18px; bottom: 0; left: -1px; width: 2px; background: var(--ai); }
+.needle .line { position: absolute; top: 20px; bottom: 0; left: -1px; width: 2px; background: var(--ai); pointer-events: none; }
 .needle .knob {
-  position: absolute; top: -2px; left: 0; transform: translateX(-50%); background: var(--ai); color: #fff; border-radius: 8px;
-  font-size: 12px; font-weight: 800; padding: 1px 7px; font-variant-numeric: tabular-nums; box-shadow: var(--shadow-card); white-space: nowrap;
+  position: absolute; top: 0; left: 0; transform: translateX(-50%); background: var(--ai); color: #fff; border-radius: 9px;
+  font-size: 12px; font-weight: 800; padding: 2px 8px; font-variant-numeric: tabular-nums; box-shadow: var(--shadow-card); white-space: nowrap;
+  pointer-events: auto; cursor: ew-resize; touch-action: none;
 }
+.needle .knob::before { content: ""; position: absolute; inset: -4px -6px; } /* 잡기 쉽게 */
 .needle.dragging .knob { transform: translateX(-50%) scale(1.12); }
+/* 선택한 구간의 작은 창 (날씨 줄 위) */
+.seg-panel {
+  position: absolute; bottom: calc(100% + 8px); transform: translateX(-50%); z-index: 6; width: 340px; box-sizing: border-box;
+  background: var(--surface); color: var(--text); border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow-float);
+  padding: 8px 10px; display: grid; gap: 6px;
+}
+.sp-head { display: flex; align-items: center; gap: 4px; font-size: 13px; }
+.sp-head b { font-size: 14px; }
+.icon-btn.sm { width: 28px; height: 28px; font-size: 16px; }
+.sp-kinds { display: flex; gap: 4px; }
+.sp-kind {
+  flex: 1; height: 36px; border-radius: 10px; border: 1.5px solid var(--line); background: var(--surface); font-size: 18px; cursor: pointer;
+}
+.sp-kind:hover { background: var(--field); }
+.sp-kind.on { border-color: var(--ai); background: var(--ai-soft); }
+.sp-row { display: flex; align-items: center; gap: 6px; }
+.sp-row input[type=time] { width: 116px; min-height: 32px; min-width: 0; }
+/* 끄는 동안 커서 고정 */
+body[data-drag] * { user-select: none; }
+body[data-drag=needle], body[data-drag=needle] *, body[data-drag=ruler], body[data-drag=ruler] * { cursor: ew-resize !important; }
+body[data-drag=start], body[data-drag=start] *, body[data-drag=end], body[data-drag=end] * { cursor: col-resize !important; }
+body[data-drag=move], body[data-drag=move] * { cursor: grabbing !important; }
+body[data-drag=draw], body[data-drag=draw] * { cursor: crosshair !important; }
+.btn.follow.on { background: var(--primary-soft); color: var(--primary); border-color: var(--primary); }
 .day-ctrl { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .day-ctrl select.speed { min-height: 36px; width: 74px; }
 

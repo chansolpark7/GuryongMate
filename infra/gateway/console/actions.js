@@ -94,18 +94,16 @@ export async function waitClock(targetMs, limitMs = 8000) {
 export function startPlay(speed = prefs.playSpeed) {
   if (S.play || !canSim()) return;
   if (S.motion) { toast("이동 중에는 재생할 수 없어요. [멈춤] 후 다시 하세요", "warn"); return; }
-  const play = { speed, stop: false };
+  // t0·r0: 화면 시각은 매 프레임 t0 + (지금 - r0) × 배속 (store.simNow), 서버에는 1초마다 같은 값을 PUT
+  const play = { speed, stop: false, t0: simNow(), r0: performance.now() };
   S.play = play;
   emit("play");
   (async () => {
-    const t0 = simNow();
-    const r0 = performance.now();
     try {
       while (!play.stop) {
         await sleep(1000);
         if (play.stop) break;
-        const target = t0 + (performance.now() - r0) * play.speed;
-        await putSim({ now: kstIso(target) });
+        await putSim({ now: kstIso(play.t0 + (performance.now() - play.r0) * play.speed) });
       }
     } catch (e) {
       toast(`재생 멈춤: ${errText(e)}`, isAdminOnly(e) ? "admin" : "error");
@@ -117,16 +115,24 @@ export function startPlay(speed = prefs.playSpeed) {
   })();
 }
 
-export function stopPlay() {
+/** 재생 멈춤. sync: 화면에 보이던 시각을 서버에도 한 번 맞춘다 (■ 멈춤 버튼). 다른 조작이 곧 시각을 바꿀 때는 false. */
+export function stopPlay({ sync = false } = {}) {
   if (S.play) {
+    const t = simNow();
     S.play.stop = true;
     S.play = null;
     emit("play");
+    if (sync) guard("재생 멈춤", () => putSim({ now: kstIso(t) }));
   }
 }
 
 export function setPlaySpeed(speed) {
-  if (S.play) S.play.speed = speed;
+  const p = S.play;
+  if (!p) return;
+  // 지금 보이는 시각에서 새 배속으로 이어간다 (t0 에서 다시 계산하면 시각이 튄다)
+  p.t0 = p.t0 + (performance.now() - p.r0) * p.speed;
+  p.r0 = performance.now();
+  p.speed = speed;
 }
 
 // ---------- 안전 ----------
@@ -150,17 +156,63 @@ export function setScenario(name, untilMs = null) {
   });
 }
 
-/** 🔒 날씨 시간표 전체 교체 [{kind, start, end}]. live 면 sourceMock 으로 가상 시나리오로 함께 바꿀 수 있다. */
-export function setTimeline(timeline, label, { sourceMock = false } = {}) {
+// 겹침이 세면 앞의 종류가 차지한다 (서버 normalize_timeline 과 같은 규칙, 미리보기용)
+const KIND_PRIORITY = ["storm", "flood", "wind", "rain"];
+
+/** 시간표 정리 (서버 backend/app/safety/sources.py normalize_timeline 과 같다): 겹친 부분은 센 종류가 차지,
+ * 같은 종류가 겹치거나 맞닿으면 합침, 길이 0 제거, 시작 순. 입력·출력 [{kind, a, b}] (ms). */
+export function normalizeTimeline(segs) {
+  const edges = [...new Set(segs.flatMap((x) => [x.a, x.b]))].sort((p, q) => p - q);
+  const out = [];
+  for (let i = 0; i + 1 < edges.length; i++) {
+    const a = edges[i];
+    const b = edges[i + 1];
+    let kind = null;
+    for (const x of segs) {
+      if (x.a <= a && a < x.b && (kind == null || KIND_PRIORITY.indexOf(x.kind) < KIND_PRIORITY.indexOf(kind))) kind = x.kind;
+    }
+    if (kind == null) continue;
+    const last = out[out.length - 1];
+    if (last && last.kind === kind && last.b === a) last.b = b;
+    else out.push({ kind, a, b });
+  }
+  return out;
+}
+
+/** 서버 시간표 -> [{kind, a, b}] (ms). */
+export const timelineMs = (tl = S.sim?.timeline || []) => tl.map((x) => ({ kind: x.kind, a: ms(x.start), b: ms(x.end) }));
+const timelineIso = (segs) => segs.map((x) => ({ kind: x.kind, start: kstIso(x.a), end: kstIso(x.b) }));
+
+let undoTimeline = null; // 이 탭이 마지막으로 바꾸기 전 시간표 (되돌리기 한 단계) {timeline, label}
+export const canUndo = () => !!undoTimeline;
+
+/** 🔒 날씨 시간표 전체 교체 [{kind, start, end}]. live 면 sourceMock 으로 가상 시나리오로 함께 바꿀 수 있다.
+ * 성공하면 바꾸기 전 시간표를 되돌리기 한 단계로 기억한다 (undo: true 는 되돌리기 자신이라 기억하지 않음). */
+export function setTimeline(timeline, label, { sourceMock = false, undo = false } = {}) {
   return guard("날씨 바꾸기", async () => {
+    const before = (S.sim?.timeline || []).map((x) => ({ kind: x.kind, start: x.start, end: x.end }));
     const body = { timeline };
     if (sourceMock && S.sim?.mode === "live" && S.sim?.switchable) body.source = "mock";
     await putSim(body);
+    undoTimeline = undo ? null : { timeline: before, label };
+    emit("undo");
     toast(label);
     if (S.sim?.mode === "sim") await afterWeather();
     else await loadSafety();
     return true;
   });
+}
+
+/** [{kind, a, b}] (ms) 를 정리해서 저장. */
+export function saveTimeline(segs, label, opts) {
+  return setTimeline(timelineIso(normalizeTimeline(segs)), label, opts);
+}
+
+/** 되돌리기 한 단계: 직전 시간표로 PUT. */
+export function undoWeather() {
+  if (!undoTimeline) { toast("되돌릴 날씨 변경이 없어요", "warn"); return Promise.resolve(); }
+  const u = undoTimeline;
+  return setTimeline(u.timeline, `↶ 되돌림: ${u.label}`, { undo: true });
 }
 
 /** 날씨를 바꾼 뒤: 안전 상황 다시 읽기 + (기본) 바로 안전 점검 + 틱. 개발자 정보에서 끌 수 있다. */
@@ -169,11 +221,11 @@ async function afterWeather() {
   if (prefs.autoScan) await scanAndTick({ quiet: true });
 }
 
-const segLabel = (kind, a, b) =>
+export const segLabel = (kind, a, b) =>
   `${kindMeta(kind).icon} ${kindMeta(kind).ko} ${fmtKst(a, { date: false, seconds: false })}~${Number.isFinite(b) ? fmtKst(b, { date: false, seconds: false }) : ""}`;
 
 /** 구간 [a, b) 를 시간표에서 비운다 (걸치는 구간은 잘라서 남긴다). b = Infinity 면 a 뒤 전부. */
-function cut(timeline, a, b) {
+export function cut(timeline, a, b) {
   const out = [];
   for (const x of timeline) {
     const s = ms(x.start);
@@ -192,7 +244,7 @@ export function addWeather(kind, a, b) {
     return setTimeline(cut(tl, a, b), `☀️ 평상시 ${fmtKst(a, { date: false, seconds: false })}부터${Number.isFinite(b) ? `~${fmtKst(b, { date: false, seconds: false })}` : ""}`,
       { sourceMock: true });
   }
-  return setTimeline([...tl, { kind, start: kstIso(a), end: kstIso(b) }], `${segLabel(kind, a, b)} 추가`, { sourceMock: true });
+  return saveTimeline([...timelineMs(tl), { kind, a, b }], `${segLabel(kind, a, b)} 추가`, { sourceMock: true });
 }
 
 export function deleteSegment(index) {
@@ -200,15 +252,6 @@ export function deleteSegment(index) {
   const x = tl[index];
   if (!x) return Promise.resolve();
   return setTimeline(tl.filter((_, j) => j !== index), `${segLabel(x.kind, ms(x.start), ms(x.end))} 삭제`);
-}
-
-export function setSegmentEnd(index, endMs) {
-  const tl = S.sim?.timeline || [];
-  const x = tl[index];
-  if (!x) return Promise.resolve();
-  if (endMs <= ms(x.start)) { toast("끝 시각은 시작보다 뒤여야 해요", "warn"); return Promise.resolve(); }
-  const next = tl.map((y, j) => (j === index ? { kind: y.kind, start: y.start, end: kstIso(endMs) } : y));
-  return setTimeline(next, `${segLabel(x.kind, ms(x.start), endMs)} 로 바꿈`);
 }
 
 const busyFns = [];
@@ -359,7 +402,9 @@ export function teleport(lat, lng, label = null) {
 async function play(points, motion) {
   const speed = prefs.speed;
   const t0 = points[0]?.t ?? simNow();
-  S.motion = { stop: false, sent: 0, ignored: 0, total: points.length, done: 0, t0, t: t0, end: points.at(-1)?.t ?? t0, ...motion };
+  // clock: 화면용 가상 시각 = t + (지금 - at) × speed, 다음 전송 점 시각(max)에서 멈춘다 (store.simNow). 지도 마커도 이 시각으로 path 위를 움직인다
+  S.motion = { stop: false, sent: 0, ignored: 0, total: points.length, done: 0, t0, t: t0, end: points.at(-1)?.t ?? t0, speed,
+    clock: speed > 0 ? { t: t0, at: performance.now(), max: t0 } : null, ...motion };
   emit("motion");
   let simOk = !S.simDisabled;
   try {
@@ -380,6 +425,7 @@ async function play(points, motion) {
         if (S.motion.stop) break;
         if (prevT != null) {
           const wait = (p.t - prevT) / speed;
+          S.motion.clock = { t: prevT, at: performance.now(), max: p.t };
           const until = performance.now() + wait;
           while (performance.now() < until && !S.motion.stop) await sleep(Math.min(200, until - performance.now()));
           if (S.motion.stop) break;
@@ -397,6 +443,7 @@ async function play(points, motion) {
         const r = await api.post(`/trip/plans/${S.planId}/location`, point(p.lat, p.lng, p.t));
         S.motion.done += 1;
         S.motion.t = p.t;
+        S.motion.clock = { t: p.t, at: performance.now(), max: p.t };
         applyLocation(r, motion.kind);
       }
     }
@@ -445,18 +492,22 @@ export function travel(lat, lng, mode = "walk", label = null) {
     const perMin = mode === "car" ? CAR_M_PER_MIN : WALK_M_PER_MIN;
     const pts = resample(line, step);
     const t0 = startTime();
-    let t = t0;
-    let prev = from;
-    const out = [];
-    for (const p of pts) {
-      t += (dist(prev, p) / perMin) * 60e3;
-      prev = p;
-      out.push({ lat: p[0], lng: p[1], t: Math.round(t / 1000) * 1000 });
+    // 시각은 경로선을 따라 걸은 거리로 (점 사이 직선이 아니라) — 화면 마커가 같은 기준으로 path 위를 움직인다
+    const msPerM = 60e3 / perMin;
+    const path = [{ ll: line[0], t: t0 }];
+    let walked = 0;
+    for (let i = 1; i < line.length; i++) {
+      walked += dist(line[i - 1], line[i]);
+      path.push({ ll: line[i], t: t0 + walked * msPerM });
     }
+    const out = pts.map((p, i) => ({
+      lat: p[0], lng: p[1], t: Math.round((t0 + Math.min((i + 1) * step, walked) * msPerM) / 1000) * 1000,
+    }));
+    if (out.length) out[out.length - 1].t = Math.round(path.at(-1).t / 1000) * 1000;
     // 같은 초로 반올림된 점은 하나만
     const uniq = out.filter((p, i) => i === 0 || p.t > out[i - 1].t || i === out.length - 1);
-    const meters = Math.round(line.reduce((s, p, i) => (i ? s + dist(line[i - 1], p) : 0), 0));
-    await play(uniq, { kind: mode, label, meters, line });
+    const meters = Math.round(walked);
+    await play(uniq, { kind: mode, label, meters, line, path });
   });
 }
 

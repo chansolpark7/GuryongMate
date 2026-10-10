@@ -23,8 +23,9 @@ export const S = {
   events: new Map(), // id -> Event
   alerts: [],
   // 이 대시보드에만 있는 상태
-  motion: null, // 진행 중인 이동 {kind, label, stop, sent, ignored, total, done, t0, t, end}
-  play: null, // 시간 재생 {speed, stop}
+  motion: null, // 진행 중인 이동 {kind, label, stop, sent, ignored, total, done, t0, t, end, speed, clock, line, path}
+  play: null, // 시간 재생 {speed, stop, t0, r0}
+  arm: null, // 날씨 그리기 도구 (종류, null = 꺼짐)
   locLog: [], // 최근 위치 전송 결과 (개발자 정보) [{at, kind, accepted, ignored, events}]
 };
 
@@ -44,8 +45,13 @@ export function on(topics, fn) {
   }
 }
 
-/** 지금 가상 시각 (ms). safety 시각(받은 뒤 흐른 시간 포함) → 없으면 trip 의 지금 → 없으면 실제 시각. */
+/** 지금 가상 시각 (ms). 걷는 중·재생 중이면 그 배속으로 흐르는 화면 시각 (서버에는 점마다·1초마다 같은 값을 PUT) →
+ * safety 시각(받은 뒤 흐른 시간 포함) → 없으면 trip 의 지금 → 없으면 실제 시각. 매 프레임 불러도 된다. */
 export function simNow() {
+  const c = S.motion?.clock;
+  if (c) return Math.min(c.max, c.t + (performance.now() - c.at) * S.motion.speed);
+  const p = S.play;
+  if (p) return p.t0 + (performance.now() - p.r0) * p.speed;
   if (S.sim) return Date.parse(S.sim.now) + (performance.now() - S.simAt);
   if (S.trip) return Date.parse(S.trip.now) + (performance.now() - S.tripAt);
   return Date.now();
@@ -83,6 +89,7 @@ const PREF_DEFAULT = {
   playSpeed: 20, // ▶ 재생 배속
   feedOpen: null, // 오른쪽 피드 (null = 화면 폭으로 정함)
   weatherOpen: true,
+  follow: false, // 걷는 중 지도가 사용자를 따라감
 };
 
 export const prefs = (() => {
