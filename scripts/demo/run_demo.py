@@ -112,6 +112,16 @@ class Demo:
         self.state_file.write_text(json.dumps({"url": self.url, "login": self.a.login, **self.p.__dict__},
                                               ensure_ascii=False, indent=1), encoding="utf-8")
 
+    def adopt_plan(self) -> None:
+        """진행 상태의 계획이 서버에 없으면 (대시보드 계정 초기화 [데모 시작 상태로] 등, docs/console/redesign.md §3)
+        이 사용자의 계획이 하나일 때 그 계획으로 이어간다 (준비 단계를 마친 상태로)."""
+        plans = self.c.list_plans()
+        if any(p["id"] == self.p.plan_id for p in plans) or len(plans) != 1:
+            return
+        pl = plans[0]
+        print(f"{DIM}  진행 상태의 계획(#{self.p.plan_id})이 없어 이 사용자의 계획 #{pl['id']} '{pl['title']}' 로 이어갑니다.{RESET}")
+        self.p = Progress(plan_id=pl["id"], done=["prep"])
+
     # ---------- 공통 ----------
     @property
     def plan(self) -> int:
@@ -712,6 +722,7 @@ class Demo:
                 raise SystemExit(f"단계가 없습니다: {sid} ({', '.join(ids)})")
         if self.a.from_step:
             self.load()
+            self.adopt_plan()
             i = ids.index(self.a.from_step)
         fast = ids.index(self.a.fast_to) if self.a.fast_to else -1
         speeds = (self.a.speed, self.a.stay_speed)
