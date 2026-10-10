@@ -128,7 +128,7 @@ function drawPlan() {
         actionButtons(it.place.lat, it.place.lng, it.place.title));
       L.popup({ minWidth: 220 }).setLatLng([it.place.lat, it.place.lng]).setContent(content).openOn(map);
     });
-    m.bindTooltip(`${label}. ${it.place.title}`, { direction: "top", offset: [0, -12] });
+    m.bindTooltip(`${label}. ${esc(it.place.title)}`, { direction: "top", offset: [0, -12] });
     layers.plan.addLayer(m);
   }
 }
