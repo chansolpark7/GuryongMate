@@ -75,6 +75,8 @@ class AgentSettings(BaseSettings):
     # 가이드 준비 작업 (docs/docent/README.md §3.3)
     guide_max_steps: int = Field(6, description="장소 하나의 LLM 호출 최대 횟수 (마지막 호출은 도구 없이 노트 JSON 강제)")
     guide_passages: int = Field(6, description="장소마다 미리 찾아 주는 근거 조각 수")
+    guide_auto: bool = Field(True, description="자동 준비 (docs/docent/README.md §3.2): 제안 승인·추천 추가 뒤, 여행 시작·도착 때(trip) "
+                                               "노트가 없는 장소를 백그라운드로 준비. 끄면 [가이드 준비] 버튼으로만")
 
 
 settings = AgentSettings()

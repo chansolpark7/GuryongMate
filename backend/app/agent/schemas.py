@@ -110,6 +110,8 @@ class GuidePrepareRequest(Strict):
 
     place_ids: list[str] | None = Field(None, max_length=50, description="이 장소만 (일정에 있어야 한다)")
     force: bool = Field(False, description="true 면 ready 노트도 다시 만든다")
+    auto: bool = Field(False, description="자동 준비 (trip 이 부른다): 노트가 ready·pending·preparing·failed 인 장소는 건너뛰고, "
+                                          "일정에 없는 place_ids 는 무시한다. AGENT_GUIDE_AUTO=false 면 아무것도 하지 않는다")
 
 
 class GuidePlaceProgress(BaseModel):
@@ -137,6 +139,7 @@ class GuideJobView(BaseModel):
     started_at: datetime
     finished_at: datetime | None = None
     usage: dict[str, int] = Field(description="작업 전체 LLM 토큰 사용량 (input, cached, output, reasoning, calls)")
+    queued: list[str] = Field([], description="이 작업이 끝난 뒤 이어서 준비할 place_id (작업 중에 들어온 요청)")
 
 
 class AgentInfo(BaseModel):

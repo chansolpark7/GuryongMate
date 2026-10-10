@@ -7,3 +7,5 @@ os.environ["TRIP_TICK_SEC"] = "0"  # trip 백그라운드 틱도 끈다 (compose
 for _kind in ("CHAT", "EVENT", "GUIDE"):  # 운영 설정(backend.env)의 LLM 호출 수 제한은 끈다 (test_limits 가 직접 켠다)
     for _win in ("HOUR", "DAY"):
         os.environ[f"AGENT_LIMIT_{_kind}_{_win}"] = "0"
+# 가이드 자동 준비는 끈다 (제안 승인 뒤 백그라운드 작업이 대본 LLM 을 먹지 않게. test_guide_auto 가 직접 켠다)
+os.environ["AGENT_GUIDE_AUTO"] = "false"

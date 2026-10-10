@@ -1,15 +1,17 @@
 """Agent API. 앱은 어떤 LLM 이 돌고 있는지 몰라도 이 API 만 호출하면 된다. 명세: docs/agent/README.md
 
 흐름: 세션 생성(plan_id) -> chat (SSE) -> 카드 수신(제안·추천) -> 카드 동작(accept/reject/repropose, add/remove)
-가이드 준비: POST /agent/plans/{plan_id}/guide/prepare -> 202 작업 -> GET …/guide/jobs/{job_id} (대화 세션과 별개)
+가이드 준비: POST /agent/plans/{plan_id}/guide/prepare -> 202 작업 -> GET …/guide/jobs/{job_id} (대화 세션과 별개).
+  제안 승인·추천 추가 뒤에는 노트가 없는 장소를 자동으로 준비한다 (trip 은 여행 시작·도착 때 auto 로 부른다)
 여행 중에는 trip 이 선제 턴(events)을 부르고, 모든 턴이 동행 모드(현재 상황 블록)로 돈다.
 오류는 {"detail": {"code", "message", ...}} 형식이고, planner 가 거부한 오류는 코드·추가 필드를 그대로 전달한다.
 """
+import asyncio
 import json
 import logging
 import time
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from datetime import timedelta
 from typing import Annotated
@@ -24,6 +26,7 @@ from sqlalchemy.orm import Session
 
 from app.agent import guide, limits
 from app.agent.api import ApiError, ServiceApi, get_http
+from app.agent.config import settings
 from app.agent.errors import AgentError, AgentRoute
 from app.agent.harness import STEP_TITLE, add_note, run_turn
 from app.agent.prompts import event_message
@@ -316,9 +319,10 @@ async def _own_recommendation(api: ServiceApi, s: AgentSession, rec_id: int, can
 
 
 @router.post("/sessions/{session_id}/proposals/{proposal_id}/accept")
-async def accept(session_id: str, proposal_id: int, db: DbSession, user_id: UserId, auth: Auth, http: Http,
+async def accept(session_id: str, proposal_id: int, db: DbSession, user_id: UserId, auth: Auth, http: Http, llm: Llm,
                  body: Annotated[AcceptRequest | None, Body()] = None) -> dict:
-    """제안 승인. 응답은 planner {proposal, plan}. 제안 이후 일정이 바뀌었으면 409 base_changed 를 그대로 전달."""
+    """제안 승인. 응답은 planner {proposal, plan}. 제안 이후 일정이 바뀌었으면 409 base_changed 를 그대로 전달.
+    승인되면 노트가 없는 장소의 가이드를 백그라운드로 준비한다 (응답은 기다리지 않음)."""
     s = _get_session(db, user_id, session_id)
     async with _hold(session_id):
         api = ServiceApi(http, auth)
@@ -327,6 +331,7 @@ async def accept(session_id: str, proposal_id: int, db: DbSession, user_id: User
         result = await api.accept_proposal(s.plan_id, proposal_id, mode)
         how = "카드의 일정 그대로 덮어써 " if result["proposal"]["decision"] == "overwritten" else ""
         await to_thread.run_sync(add_note, session_id, f"사용자가 제안 #{proposal_id} 을 승인해 {how}일정에 반영됐습니다.")
+    _start_auto_prepare(s.plan_id, user_id, auth, http, llm, f"제안 #{proposal_id} 승인")
     return result
 
 
@@ -358,7 +363,7 @@ async def repropose(session_id: str, proposal_id: int, db: DbSession, user_id: U
 
 
 async def _candidate(session_id: str, rec_id: int, cand_id: int, action: str, db: Session, user_id: str,
-                     auth: dict[str, str], http: httpx.AsyncClient) -> dict:
+                     auth: dict[str, str], http: httpx.AsyncClient, llm: LLMProvider) -> dict:
     s = _get_session(db, user_id, session_id)
     async with _hold(session_id):
         api = ServiceApi(http, auth)
@@ -367,21 +372,23 @@ async def _candidate(session_id: str, rec_id: int, cand_id: int, action: str, db
         title = (cand.get("place") or {}).get("title", cand["place_id"])
         verb = "일정에 추가했습니다" if action == "add" else "일정에서 뺐습니다"
         await to_thread.run_sync(add_note, session_id, f"사용자가 추천 #{rec_id} 의 '{title}'({cand['day']}일차)를 {verb}.")
+    if action == "add":
+        _start_auto_prepare(s.plan_id, user_id, auth, http, llm, f"추천 #{rec_id} 추가")
     return result
 
 
 @router.post("/sessions/{session_id}/recommendations/{recommendation_id}/candidates/{candidate_id}/add")
 async def add_candidate(session_id: str, recommendation_id: int, candidate_id: int, db: DbSession, user_id: UserId,
-                        auth: Auth, http: Http) -> dict:
-    """추천 후보를 일정에 추가. 응답은 planner {recommendation, plan}."""
-    return await _candidate(session_id, recommendation_id, candidate_id, "add", db, user_id, auth, http)
+                        auth: Auth, http: Http, llm: Llm) -> dict:
+    """추천 후보를 일정에 추가. 응답은 planner {recommendation, plan}. 추가한 장소의 가이드는 백그라운드로 준비한다."""
+    return await _candidate(session_id, recommendation_id, candidate_id, "add", db, user_id, auth, http, llm)
 
 
 @router.post("/sessions/{session_id}/recommendations/{recommendation_id}/candidates/{candidate_id}/remove")
 async def remove_candidate(session_id: str, recommendation_id: int, candidate_id: int, db: DbSession,
-                           user_id: UserId, auth: Auth, http: Http) -> dict:
+                           user_id: UserId, auth: Auth, http: Http, llm: Llm) -> dict:
     """추천 후보를 일정에서 뺀다. 응답은 planner {recommendation, plan}."""
-    return await _candidate(session_id, recommendation_id, candidate_id, "remove", db, user_id, auth, http)
+    return await _candidate(session_id, recommendation_id, candidate_id, "remove", db, user_id, auth, http, llm)
 
 
 # ---------- 가이드 준비 (docs/docent/README.md §3.3) ----------
@@ -389,34 +396,99 @@ async def remove_candidate(session_id: str, recommendation_id: int, candidate_id
 GUIDE_TOKEN_TTL = timedelta(hours=2)  # 작업이 길어도 받은 토큰 만료와 상관없이 끝나게
 
 
+# 자동 준비가 건너뛰는 노트 상태: 이미 있음·준비 중. failed 는 자동으로 다시 시도하지 않는다 (앱의 [다시 시도]로만)
+AUTO_SKIP = ("ready", "pending", "preparing", "failed")
+_auto_tasks: set[asyncio.Task] = set()  # 백그라운드 자동 준비 (GC 로 사라지지 않게 참조를 잡아 둔다)
+
+
+async def _prepare(plan_id: int, user_id: str, auth: dict[str, str], http: httpx.AsyncClient, llm: LLMProvider,
+                   consume: Callable[[], None], place_ids: list[str] | None = None, force: bool = False,
+                   auto: bool = False) -> guide.GuideJob:
+    """가이드 준비 요청 (엔드포인트·자동 준비 공통). 계획당 작업 하나: 진행 중이면 빠진 장소를 그 작업 뒤에 잇고 그 작업을 돌려준다.
+    대상: place_ids(일정에 있어야 함, auto 면 없는 것은 무시) 또는 일정의 모든 장소 중 지금 준비 중·대기 중이 아닌 곳.
+    force 가 아니면 ready 노트는 건너뛴다 (auto 면 AUTO_SKIP 모두). 새로 준비할 곳이 있을 때만 consume(호출 수 제한)을 부른다."""
+    api = ServiceApi(http, auth)
+    plan = await api.get_plan(plan_id)  # 존재·소유 확인 (404 plan_not_found 전달)
+    running = guide.running_job(plan_id)
+    if running is not None and running.user_id != user_id:  # 계획 주인만 여기까지 온다. 혹시 모를 경우를 막는다
+        raise AgentError(409, "guide_busy", "이 계획의 가이드를 준비하는 중입니다.")
+    places = guide.plan_places(plan)
+    if place_ids is not None:
+        missing = sorted(set(place_ids) - {p["place_id"] for p in places})
+        if missing and not auto:
+            raise AgentError(422, "place_not_in_plan", "일정에 없는 장소입니다.", place_ids=missing)
+        places = [p for p in places if p["place_id"] in set(place_ids)]
+    if places and not force:
+        skip = AUTO_SKIP if auto else ("ready",)
+        status = {n["place_id"]: n["status"] for n in await api.list_notes(plan_id)}
+        places = [p for p in places if status.get(p["place_id"]) not in skip]
+    # 여기부터 작업 등록·이어서 할 장소 등록까지는 await 없이 (동시에 온 승인 뒤 자동 준비·버튼이 작업을 둘 만들지 않게)
+    running = guide.running_job(plan_id)
+    busy = guide.busy_places(plan_id)
+    places = [p for p in places if p["place_id"] not in busy]
+    if not places:
+        return running or guide.start(plan_id, user_id, [], llm, api)  # 진행 중인 작업, 없으면 바로 끝난 빈 작업
+    consume()  # 새 작업(또는 이어서 할 장소)만 센다 (AGENT_LIMIT_GUIDE_*). 넘으면 429
+    job_auth = {"Authorization": f"Bearer {issue_token(user_id, GUIDE_TOKEN_TTL)}"} if "Authorization" in auth else auth
+    job_api = ServiceApi(http, job_auth)
+    if running is not None:
+        guide.enqueue(plan_id, user_id, places, llm, job_api)
+        job = running
+        log.info("guide plan=%s job=%s 진행 중 -> 끝난 뒤 이어서 %d곳%s", plan_id, running.id[:8], len(places),
+                 " (자동)" if auto else "")
+    else:
+        job = guide.register(plan_id, user_id, places)
+        log.info("guide plan=%s job=%s 시작: %d곳%s", plan_id, job.id[:8], len(places), " (자동)" if auto else "")
+    try:
+        for p in places:  # 앱이 바로 '대기'로 보이게 먼저 표시 (이전 본문은 docent 가 남긴다)
+            await api.put_note(plan_id, p["place_id"], {"status": "pending"})
+    finally:  # 표시에 실패해도 등록한 작업은 돌린다 (장소마다 preparing 부터 다시 저장한다)
+        if job is not running:
+            guide.launch(job, llm, job_api)
+    return job
+
+
+def _consume_guide(user_id: str) -> None:
+    with SessionLocal() as db:
+        limits.consume(db, user_id, "guide")
+
+
+async def _auto_prepare(plan_id: int, user_id: str, auth: dict[str, str], http: httpx.AsyncClient, llm: LLMProvider,
+                        why: str) -> None:
+    """자동 준비 (docs/docent/README.md §3.2). 어떤 오류도 사용자 요청에 번지지 않게 로그만 남긴다."""
+    try:
+        await _prepare(plan_id, user_id, auth, http, llm, lambda: _consume_guide(user_id), auto=True)
+    except AgentError as e:
+        log.info("guide plan=%s 자동 준비(%s) 건너뜀: %s %s", plan_id, why, e.code, e.message)
+    except ApiError as e:
+        log.warning("guide plan=%s 자동 준비(%s) 실패: %s", plan_id, why, e)
+    except Exception:
+        log.exception("guide plan=%s 자동 준비(%s) 중 오류", plan_id, why)
+
+
+def _start_auto_prepare(plan_id: int, user_id: str, auth: dict[str, str], http: httpx.AsyncClient, llm: LLMProvider,
+                        why: str) -> None:
+    """응답을 기다리게 하지 않게 백그라운드로 (제안 승인·추천 추가 뒤)."""
+    if not settings.guide_auto:
+        return
+    task = asyncio.create_task(_auto_prepare(plan_id, user_id, auth, http, llm, why))
+    _auto_tasks.add(task)
+    task.add_done_callback(_auto_tasks.discard)
+
+
 @router.post("/plans/{plan_id}/guide/prepare", response_model=GuideJobView, status_code=202)
 async def prepare_guide(plan_id: int, db: DbSession, user_id: UserId, auth: Auth, http: Http, llm: Llm,
                         body: Annotated[GuidePrepareRequest | None, Body()] = None) -> dict:
-    """계획의 장소마다 맞춤 가이드 노트를 백그라운드로 만든다. 계획당 작업 하나: 진행 중이면 그 작업을 돌려준다.
-    대상: place_ids(일정에 있어야 함) 또는 일정의 모든 장소. force 가 아니면 이미 ready 인 노트는 건너뛴다."""
+    """계획의 장소마다 맞춤 가이드 노트를 백그라운드로 만든다. 계획당 작업 하나: 진행 중이면 그 작업을 돌려주고,
+    그 작업에 없는 대상은 끝난 뒤 이어서 준비한다(queued). 대상: place_ids(일정에 있어야 함) 또는 일정의 모든 장소.
+    force 가 아니면 이미 ready 인 노트는 건너뛴다. auto(trip 의 여행 시작·도착)면 노트가 있거나 실패한 곳도 건너뛴다."""
     body = body or GuidePrepareRequest()
-    api = ServiceApi(http, auth)
-    plan = await api.get_plan(plan_id)  # 존재·소유 확인 (404 plan_not_found 전달)
-    if (job := guide.running_job(plan_id)) is not None:
-        if job.user_id != user_id:  # 계획 주인만 여기까지 온다. 혹시 모를 경우를 막는다
-            raise AgentError(409, "guide_busy", "이 계획의 가이드를 준비하는 중입니다.")
-        return job.view()
-    places = guide.plan_places(plan)
-    if body.place_ids is not None:
-        missing = sorted(set(body.place_ids) - {p["place_id"] for p in places})
-        if missing:
-            raise AgentError(422, "place_not_in_plan", "일정에 없는 장소입니다.", place_ids=missing)
-        places = [p for p in places if p["place_id"] in set(body.place_ids)]
-    if not body.force:
-        ready = {n["place_id"] for n in await api.list_notes(plan_id) if n["status"] == "ready"}
-        places = [p for p in places if p["place_id"] not in ready]
-    if places:
-        limits.consume(db, user_id, "guide")  # 새 작업만 센다 (AGENT_LIMIT_GUIDE_*)
-    for p in places:  # 앱이 바로 '대기'로 보이게 먼저 표시 (이전 본문은 docent 가 남긴다)
-        await api.put_note(plan_id, p["place_id"], {"status": "pending"})
-    job_auth = {"Authorization": f"Bearer {issue_token(user_id, GUIDE_TOKEN_TTL)}"} if "Authorization" in auth else auth
-    job = guide.start(plan_id, user_id, places, llm, ServiceApi(http, job_auth))
-    log.info("guide plan=%s job=%s 시작: %d곳", plan_id, job.id[:8], len(places))
+    if body.auto and not settings.guide_auto:  # 자동 준비를 끔 -> 계획 확인만 하고 빈 작업
+        api = ServiceApi(http, auth)
+        await api.get_plan(plan_id)
+        return (guide.running_job(plan_id) or guide.start(plan_id, user_id, [], llm, api)).view()
+    job = await _prepare(plan_id, user_id, auth, http, llm, lambda: limits.consume(db, user_id, "guide"),
+                         body.place_ids, body.force, body.auto)
     return job.view()
 
 

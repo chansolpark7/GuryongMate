@@ -94,11 +94,25 @@ class GuideJob:
                 "finished": len(finished), "ready": sum(1 for p in finished if p["status"] == "ready"),
                 "failed": sum(1 for p in finished if p["status"] == "failed"), "current": self.current,
                 "eta_sec": round(left * per) if self.status == "running" else 0, "places": self.places,
-                "started_at": self.started_at, "finished_at": self.finished_at, "usage": self.usage}
+                "started_at": self.started_at, "finished_at": self.finished_at, "usage": self.usage,
+                "queued": queued_places(self.plan_id) if self.status == "running" else []}
 
 
 # 작업 id -> 작업. 계획마다 진행 중인 작업은 하나 (프로세스 단위)
 _jobs: dict[str, GuideJob] = {}
+
+
+@dataclass
+class _Followup:
+    """진행 중인 작업이 끝난 뒤 이어서 준비할 장소 (작업 중에 들어온 요청. 노트는 이미 pending 으로 저장돼 있다)."""
+    user_id: str
+    places: dict[str, str]  # place_id -> title (들어온 순서)
+    llm: LLMProvider
+    api: ServiceApi
+
+
+# 계획 -> 이어서 준비할 장소 (docs/docent/README.md §3.2)
+_followups: dict[int, _Followup] = {}
 
 
 def _prune() -> None:
@@ -116,6 +130,30 @@ def get_job(job_id: str) -> GuideJob | None:
     return _jobs.get(job_id)
 
 
+def busy_places(plan_id: int) -> set[str]:
+    """지금 준비 중이거나 준비를 기다리는 장소: 진행 중인 작업의 아직 끝나지 않은 장소 + 이어서 준비할 장소."""
+    job = running_job(plan_id)
+    out = {p["place_id"] for p in job.places if p["status"] in ("pending", "preparing")} if job else set()
+    if (f := _followups.get(plan_id)) is not None:
+        out |= set(f.places)
+    return out
+
+
+def queued_places(plan_id: int) -> list[str]:
+    f = _followups.get(plan_id)
+    return list(f.places) if f else []
+
+
+def enqueue(plan_id: int, user_id: str, places: list[dict], llm: LLMProvider, api: ServiceApi) -> None:
+    """진행 중인 작업이 끝나면 이 장소들로 작업을 하나 더 (계획당 작업 하나 규칙 유지). 인증·LLM 은 마지막 요청 것을 쓴다."""
+    f = _followups.get(plan_id)
+    if f is None:
+        f = _followups[plan_id] = _Followup(user_id, {}, llm, api)
+    f.llm, f.api = llm, api
+    for p in places:
+        f.places.setdefault(p["place_id"], p["title"])
+
+
 def plan_places(plan: dict) -> list[dict]:
     """일정의 장소 (날짜·순서대로, 같은 장소는 한 번, 건너뛴 항목 제외) [{"place_id", "title"}]."""
     out: dict[str, str] = {}
@@ -126,8 +164,9 @@ def plan_places(plan: dict) -> list[dict]:
     return [{"place_id": p, "title": t} for p, t in out.items()]
 
 
-def start(plan_id: int, user_id: str, places: list[dict], llm: LLMProvider, api: ServiceApi) -> GuideJob:
-    """작업을 등록하고 백그라운드로 돌린다. places: [{"place_id", "title"}] (노트는 이미 pending 으로 저장돼 있다)."""
+def register(plan_id: int, user_id: str, places: list[dict]) -> GuideJob:
+    """작업을 등록만 한다 (돌리기 전). 등록과 같은 틱에서 running_job·busy_places 에 보이므로, 확인 뒤 await 없이 부르면
+    동시에 들어온 요청(자동 준비·버튼)이 작업을 하나 더 만들지 않는다. places 가 없으면 바로 끝난 작업."""
     _prune()
     job = GuideJob(id=uuid.uuid4().hex, plan_id=plan_id, user_id=user_id,
                    places=[{"place_id": p["place_id"], "title": p["title"], "status": "pending", "error": "",
@@ -135,9 +174,19 @@ def start(plan_id: int, user_id: str, places: list[dict], llm: LLMProvider, api:
     _jobs[job.id] = job
     if not places:
         job.status, job.finished_at = "done", datetime.now(UTC)
-        return job
-    job.task = asyncio.create_task(_run(job, llm, api))
     return job
+
+
+def launch(job: GuideJob, llm: LLMProvider, api: ServiceApi) -> GuideJob:
+    """등록한 작업을 백그라운드로 돌린다."""
+    if job.status == "running" and job.task is None:
+        job.task = asyncio.create_task(_run(job, llm, api))
+    return job
+
+
+def start(plan_id: int, user_id: str, places: list[dict], llm: LLMProvider, api: ServiceApi) -> GuideJob:
+    """작업을 등록하고 바로 돌린다. places: [{"place_id", "title"}] (노트는 이미 pending 으로 저장돼 있다)."""
+    return launch(register(plan_id, user_id, places), llm, api)
 
 
 async def _run(job: GuideJob, llm: LLMProvider, api: ServiceApi) -> None:
@@ -156,6 +205,9 @@ async def _run(job: GuideJob, llm: LLMProvider, api: ServiceApi) -> None:
                  sum(1 for p in job.places if p["status"] == "ready"), job.usage)
     finally:
         job.current, job.status, job.finished_at = None, "done", datetime.now(UTC)
+        if (f := _followups.pop(job.plan_id, None)) is not None:  # 작업 중에 들어온 장소 -> 이어서 (같은 틱이라 끼어들 틈 없음)
+            nxt = start(job.plan_id, f.user_id, [{"place_id": p, "title": t} for p, t in f.places.items()], f.llm, f.api)
+            log.info("guide plan=%s job=%s 이어서 시작: %d곳", job.plan_id, nxt.id[:8], len(nxt.places))
 
 
 async def _prepare_one(job: GuideJob, p: dict, llm: LLMProvider, api: ServiceApi, memory: str | None,

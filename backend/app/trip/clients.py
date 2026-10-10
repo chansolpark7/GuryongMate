@@ -3,7 +3,8 @@
     planner  GET /planner/plans/{id}, POST …/items/{item_id}/progress, POST …/projection,
              GET …/safety/alerts?status=new, POST …/safety/alerts/{id}/seen
     safety   GET /safety/situation (fingerprint), GET /safety/avoid
-    agent    GET·POST /agent/sessions, POST /agent/sessions/{sid}/events (선제 턴)
+    agent    GET·POST /agent/sessions, POST /agent/sessions/{sid}/events (선제 턴),
+             POST /agent/plans/{id}/guide/prepare (가이드 자동 준비: 여행 시작·도착)
 
 모든 메서드는 auth(요청 헤더)를 받는다: 사용자 요청이면 받은 인증 그대로(ForwardAuth), 백그라운드면 그 사용자의 짧은 토큰.
 테스트는 같은 메서드를 가진 가짜 클래스로 바꾼다 (get_clients).
@@ -66,6 +67,7 @@ class AgentClient(Protocol):
     def latest_session(self, plan_id: int, auth: dict) -> str | None: ...
     def create_session(self, plan_id: int, auth: dict) -> str: ...
     def send_event(self, session_id: str, event: dict, trip: dict, auth: dict) -> dict: ...
+    def prepare_guide(self, plan_id: int, place_ids: list[str] | None, auth: dict) -> dict: ...
 
 
 class HttpPlannerClient(_Http):
@@ -116,6 +118,11 @@ class HttpAgentClient(_Http):
     def send_event(self, session_id, event, trip, auth):
         """선제 턴 (§4.2) -> ChatResult. 응답 중이면 UpstreamError(409 agent_busy)."""
         return self.call("POST", f"/agent/sessions/{session_id}/events", auth, json={"event": event, "trip": trip})
+
+    def prepare_guide(self, plan_id, place_ids, auth):
+        """가이드 자동 준비 (docs/docent/README.md §3.2) -> GuideJobView. 노트가 없는 곳만, 바로 돌아온다 (작업은 agent 백그라운드)."""
+        body = {"auto": True} | ({"place_ids": place_ids} if place_ids is not None else {})
+        return self.call("POST", f"/agent/plans/{plan_id}/guide/prepare", auth, json=body)
 
 
 @dataclass
