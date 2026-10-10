@@ -486,8 +486,10 @@ export function travel(lat, lng, mode = "walk", label = null, { arrive = false }
   return guard(mode === "car" ? "차로 가기" : "걸어가기", async () => {
     const loc = S.trip.location;
     if (!loc) {
+      // 여행을 막 시작해 위치가 없으면 목적지로 순간이동 (재생 파일의 goto 와 같음) → 일정 장소면 아래와 같이 자동 머물기
       toast("지금 위치가 없어 목적지로 순간이동합니다", "warn");
       await teleport(lat, lng, label);
+      if (arrive) await arriveStay(lat, lng, label);
       return;
     }
     const from = [loc.lat, loc.lng];
@@ -523,11 +525,15 @@ export function travel(lat, lng, mode = "walk", label = null, { arrive = false }
     const uniq = out.filter((p, i) => i === 0 || p.t > out[i - 1].t || i === out.length - 1);
     const meters = Math.round(walked);
     const done = await play(uniq, { kind: mode, label, meters, line, path });
-    if (done && arrive && prefs.autoStay && S.planId != null && tripActive()) {
-      await play(stayPoints(lat, lng, startTime(), ARRIVE_STAY_MIN), { kind: "arrive", label, minutes: ARRIVE_STAY_MIN },
-        { until: (r) => r.events.some((e) => e.type === "arrived") });
-    }
+    if (done && arrive) await arriveStay(lat, lng, label);
   });
+}
+
+/** 도착하면 자동으로 머물기 (prefs.autoStay): 같은 좌표로 최대 2분, arrived 가 오면 끝. */
+async function arriveStay(lat, lng, label) {
+  if (!prefs.autoStay || S.planId == null || !tripActive() || !S.trip?.location) return;
+  await play(stayPoints(lat, lng, startTime(), ARRIVE_STAY_MIN), { kind: "arrive", label, minutes: ARRIVE_STAY_MIN },
+    { until: (r) => r.events.some((e) => e.type === "arrived") });
 }
 
 /** 머물기: 같은 좌표로 30초(가상) 간격 점을 N분 동안 (도착 판정은 반경 안 90초 이상). 좌표를 주지 않으면 지금 위치. */
