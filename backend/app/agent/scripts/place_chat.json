@@ -1,0 +1,12 @@
+{
+  "description": "장소 맥락 질문 (앱 가이드 노트 화면, ChatRequest.place_id). 일정 변경 요청이 아니면 그 장소의 노트·근거를 찾아 노트의 짧은 해설로 답한다 (노트가 없으면 근거 조각). when.place 각본은 일반 각본보다 먼저 본다.",
+  "turns": [
+    {"id": "place_question",
+     "when": {"place": ".+", "user": "^(?!.*(바꿔|바꾸|빼 ?줘|빼고|넣어|추가|옮겨|미뤄|늘려|줄여|일정.*짜)).*"},
+     "steps": [
+       {"thinking": "{{place:title}} 가이드 노트를 보며 묻는다. 노트와 근거 조각부터 찾는다.",
+        "tools": [{"name": "get_guide_note", "args": {"place_id": "$place:id"}},
+                  {"name": "search_passages", "args": {"query": "{{place:title}} 이야기", "place_id": "$place:id", "limit": 3}}]},
+       {"text": "**{{place:title}}** 이야기예요.\n\n{{last:get_guide_note.short||last:search_passages.items[0].text}}"}]}
+  ]
+}

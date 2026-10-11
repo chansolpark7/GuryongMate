@@ -399,7 +399,7 @@ def test_style_length_sets_answer_length(client, trip_plan, up):  # noqa: F811
         th.llm.script = [["늦어졌어요. 다른 방법으로 카페를 빼도 돼요."]]
         ok(client.post(f"/agent/sessions/{sid}/events",
                        json={"event": delay_event(pid, items), "trip": trip_state(pid, items)}, headers=H))
-        assert "## 해설 길이" not in system_of(1) and "짧은 세 문장" in th.llm.calls[1][-1]["content"]
+        assert "## 해설 길이" not in system_of(1) and "짧은 세 문단" in th.llm.calls[1][-1]["content"]
         ok(client.patch(f"/docent/memory/{item['id']}", json={"text": "해설은 자세히"}, headers=H))
         chat(client, sid, "더 얘기해줘", [["네."]])
         assert "4~6문장" in system_of(2)

@@ -6,6 +6,7 @@
 4. 변경 도구로 쌓인 초안이 있으면 턴 끝에 planner 에 변경 제안으로 저장한다 (사용자가 승인해야 반영)
 5. 여행 중(trip 상태 active)이면 동행 모드: 현재 상황 블록을 넣고 지난 일은 바꾸지 않는다 (docs/agent/README.md §11)
 6. 모든 턴의 시스템 프롬프트에 docent 메모리 요약을 넣는다. 동행 모드 대화는 가이드 노트·웹 검색(턴당 상한)을 쓴다
+7. 장소 맥락이 있는 질문(place_id, 앱 가이드 노트 화면)은 여행 중이 아니어도 현장 해설처럼 그 장소의 노트·근거부터 찾는다
 
 LLM 응답은 수 분이 걸릴 수 있으므로 DB 는 턴 시작(기록 읽기)과 끝(기록 저장)에만 짧게 쓰고,
 동기 DB 호출은 스레드에서 실행해 이벤트 루프를 막지 않는다.
@@ -193,12 +194,27 @@ async def latest_pending(api: ServiceApi, plan_id: int, session_id: str) -> dict
 
 # ---------- 턴 ----------
 
+async def place_title(api: ServiceApi, plan: dict, place_id: str) -> str:
+    """장소 맥락 질문의 장소 이름: 일정에 있으면 그 제목, 아니면 places 상세, 그것도 못 받으면 place_id."""
+    for d in plan.get("days") or []:
+        for i in d["items"]:
+            if i["place_id"] == place_id and i.get("place"):
+                return i["place"]["title"]
+    try:
+        return (await api.get_place(place_id)).get("title") or place_id
+    except ApiError as e:
+        log.info("place=%s 장소 이름을 받지 못함: %s", place_id, e)
+        return place_id
+
+
 async def run_turn(session_id: str, plan_id: int, user_text: str, llm: LLMProvider, api: ServiceApi, *,
                    repropose: dict | None = None, trip: dict | None = None, fetch_trip: bool = True,
-                   hidden: bool = False) -> AsyncIterator[Event]:
+                   hidden: bool = False, place_id: str | None = None) -> AsyncIterator[Event]:
     """repropose: 다시 만들 제안 (ProposalDetail). 빈 초안에서 시작하고, 새 제안이 그것을 대체한다.
     trip: 여행 상태 (TripState). fetch_trip 이면 trip 에서 조회한다. active 면 동행 모드.
     hidden: 사용자 메시지를 화면에 보이지 않게 저장 (선제 턴의 '[이벤트] …').
+    place_id: 사용자가 그 장소의 가이드 노트를 보며 묻는다 (앱). 숨김 맥락 한 줄(사용자 메시지로 남기지 않음) + 현장 해설 도구,
+    그 턴의 메시지(사용자·답)에 place_id 를 남긴다. 세션은 그대로 하나다 (맥락·제안·선제 턴이 이어진다).
 
     대화 기록은 턴이 끝날 때 한 번 저장한다. 오류로 끝나거나 연결이 끊겨도 그때까지의 완결된 기록
     (도구 호출과 결과의 짝이 맞는 부분)과 이미 만든 카드는 저장한다.
@@ -242,15 +258,17 @@ async def run_turn(session_id: str, plan_id: int, user_text: str, llm: LLMProvid
     history = await to_thread.run_sync(_load_history, session_id, settings.history_messages)
     review_on = settings.review_rounds > 0
     pushes_left = settings.review_rounds
-    # 동행 모드 대화(선제 턴 제외)는 현장 해설: 가이드 노트와 웹 검색(턴당 상한). 내장 검색이 없는 공급자는 docent 검색 함수 도구
-    docent = bool(trip) and not hidden
+    # 동행 모드 대화(선제 턴 제외)와 장소 맥락 질문은 현장 해설: 가이드 노트와 웹 검색(턴당 상한). 내장 검색이 없는 공급자는 docent 검색 함수 도구
+    docent = (bool(trip) or place_id is not None) and not hidden
+    place = {"place_id": place_id, "title": await place_title(api, toolbox.last_plan, place_id)} if place_id else None
     builtin_web = supports_web_search(llm)
     toolbox.web_limit = max(0, settings.web_search_per_turn) if docent else 0
     specs = tool_specs(review_on, proactive=hidden, guide=docent, web_functions=toolbox.web_limit > 0 and not builtin_web)
     memory, style_length = await memory_summary(api, plan_id)
     rules, context = build_system_parts(plan_view, pending, dropped, repropose, review_on, now=now,
                                         simulated=simulated, trip=trip, plan=toolbox.last_plan, memory=memory,
-                                        docent=docent, web_searches=toolbox.web_limit, style_length=style_length)
+                                        docent=docent, web_searches=toolbox.web_limit, style_length=style_length,
+                                        place=place)
     # 기록 편집 금지 공급자(Claude): 시스템 프롬프트는 고정 규칙만 두고(턴이 바뀌어도 같아 캐시된다), 턴마다 바뀌는
     # 맥락(현재 상황·메모리·지금 시각·현재 일정)은 이번 사용자 메시지 뒤 system 메시지로 둔다. 이후로는 덧붙이기만 한다
     append_only = getattr(llm, "append_only", False)
@@ -261,7 +279,7 @@ async def run_turn(session_id: str, plan_id: int, user_text: str, llm: LLMProvid
         messages = [{"role": "system", "content": build_system(
             plan_view, pending, dropped, repropose, review_on, now=now, simulated=simulated, trip=trip,
             plan=toolbox.last_plan, memory=memory, docent=docent, web_searches=toolbox.web_limit,
-            style_length=style_length)},
+            style_length=style_length, place=place)},
             *history, {"role": "user", "content": user_text}]
     new_rows = [AgentMessage(session_id=session_id, role="user", content=user_text, hidden=hidden)]
     complete = 1  # new_rows[:complete] 는 저장해도 되는 완결된 기록 (도구 호출·결과 짝이 맞음)
@@ -277,6 +295,8 @@ async def run_turn(session_id: str, plan_id: int, user_text: str, llm: LLMProvid
             rows.append(AgentMessage(session_id=session_id, role="assistant", content=note or ""))
         rows[-1].steps = steps.items or None
         rows[-1].cards = cards or None
+        for r in rows:  # 장소 맥락 질문: 그 턴의 사용자 메시지와 답 모두 (앱이 장소별로 걸러 보여준다)
+            r.place_id = place_id
         return rows
 
     async def save(note: str | None = None) -> int | None:
@@ -505,7 +525,8 @@ async def run_turn(session_id: str, plan_id: int, user_text: str, llm: LLMProvid
             yield _ev("proposal", **proposal)
         if steps.summary:
             yield _ev("steps_done", count=len(steps.items), summary=steps.summary)
-        log.info("session=%s mode=%s usage %s", sid, "guide" if trip else "plan", usage)
+        log.info("session=%s mode=%s%s usage %s", sid, "guide" if trip else "plan",
+                 f" place={place_id}" if place_id else "", usage)
         yield _ev("done", text=full_text, cards=cards, usage=usage, message_id=message_id,
                   mode="guide" if trip else "plan")
     finally:
