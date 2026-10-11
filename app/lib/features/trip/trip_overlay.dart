@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/models/account.dart';
 import '../../core/theme/app_theme.dart';
+import '../../core/widgets/rich_answer.dart';
 import '../../core/widgets/common.dart';
 import 'trip_controller.dart';
 
@@ -432,7 +433,7 @@ class ProactivePeek extends StatelessWidget {
               const SizedBox(height: 6),
               Padding(
                 padding: const EdgeInsets.only(right: 8),
-                child: Text(event.message, style: AppText.label.copyWith(fontWeight: FontWeight.w500), maxLines: 3, overflow: TextOverflow.ellipsis),
+                child: Text(plainSummary(event.message), style: AppText.label.copyWith(fontWeight: FontWeight.w500), maxLines: 3, overflow: TextOverflow.ellipsis),
               ),
               const SizedBox(height: 4),
               Text('보기 ›', style: AppText.caption.copyWith(color: AppColors.primary, fontWeight: FontWeight.w700)),

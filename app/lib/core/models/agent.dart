@@ -119,10 +119,13 @@ class SessionCard {
 }
 
 class AgentMessage {
-  AgentMessage({required this.id, required this.role, required this.content, this.steps = const [], this.stepsSummary, this.cards = const []});
+  AgentMessage({required this.id, required this.role, required this.content, this.steps = const [], this.stepsSummary, this.cards = const [], this.placeId});
   final int? id;
   final String role; // user | assistant
   final String content;
+
+  /// 현장 가이드(17)에서 나눈 말이면 그 장소 (agent 대화 요청의 place_id). 17 은 이것으로 그 장소 메시지만 보여준다.
+  final String? placeId;
   final List<AgentStep> steps;
   final String? stepsSummary;
   final List<SessionCard> cards;
@@ -134,6 +137,7 @@ class AgentMessage {
         steps: ((j['steps'] as List?) ?? const []).map((e) => AgentStep.fromJson(e as Map<String, dynamic>)).toList(),
         stepsSummary: j['steps_summary'] as String?,
         cards: ((j['cards'] as List?) ?? const []).map((e) => SessionCard.fromJson(e as Map<String, dynamic>)).whereType<SessionCard>().toList(),
+        placeId: j['place_id'] as String?,
       );
 }
 

@@ -139,7 +139,9 @@ class GuryongApi {
   Future<Map<String, dynamic>> agentInfo() async => _m(await client.get('/agent/info'));
 
   /// SSE: start · status · step · thinking · text · proposal · recommendation · steps_done · done · error (agent §3.1)
-  Stream<SseEvent> chat(String sessionId, String message) => client.postSse('/agent/sessions/$sessionId/chat', {'message': message});
+  /// [placeId]: 현장 가이드(17)에서 묻는 말 — 그 장소 맥락으로 답하고 메시지에 place_id 를 남긴다.
+  Stream<SseEvent> chat(String sessionId, String message, {String? placeId}) =>
+      client.postSse('/agent/sessions/$sessionId/chat', {'message': message, 'place_id': ?placeId});
 
   /// 승인 → {proposal, plan}. 409 base_changed · progress_changed · proposal_not_pending · agent_busy 는 ApiException.code 로.
   Future<(ProposalDetail, PlanDetail)> acceptProposal(String sessionId, int proposalId, {bool overwrite = false}) async {

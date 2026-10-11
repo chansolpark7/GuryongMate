@@ -38,9 +38,12 @@ class RecommendationEntry extends ChatCard {
 /// 사용자 메시지 하나와 그에 대한 구룡메이트 응답 (진행 단계 · 답변 · 카드).
 /// 선제 메시지(동행 모드)처럼 사용자 말 없이 시작하면 [user] 가 비어 있다.
 class ChatTurn {
-  ChatTurn(this.user, {this.fromHistory = false});
+  ChatTurn(this.user, {this.fromHistory = false, this.placeId});
   final String user;
   final bool fromHistory;
+
+  /// 현장 가이드(17)에서 그 장소에 대해 나눈 턴 (메시지 place_id). 17 은 이 장소 턴만 보여준다.
+  String? placeId;
 
   /// 진행 영역 맨 위 한 줄 (새 status 가 오면 바꾼다).
   String? status;
@@ -217,13 +220,15 @@ class ChatController extends ChangeNotifier {
     final out = <ChatTurn>[];
     for (final m in messages) {
       if (m.role == 'user') {
-        out.add(ChatTurn(m.content, fromHistory: true)..done = true);
+        out.add(ChatTurn(m.content, fromHistory: true, placeId: m.placeId)..done = true);
         continue;
       }
       if (out.isEmpty || out.last.text.isNotEmpty || out.last.cards.isNotEmpty) {
         out.add(ChatTurn('', fromHistory: true)..done = true);
       }
-      final t = out.last..messageId = m.id;
+      final t = out.last
+        ..messageId = m.id
+        ..placeId ??= m.placeId;
       t.text.write(m.content);
       t.steps.addAll(m.steps);
       if (m.steps.isNotEmpty) t.stepsSummary = m.stepsSummary ?? '${m.steps.length}단계 완료';
@@ -249,13 +254,14 @@ class ChatController extends ChangeNotifier {
     }
   }
 
-  Future<void> send(String message) async {
+  /// [placeId]: 현장 가이드(17)에서 보낸 말 — 같은 세션이라 AI 시트에도 그대로 남는다.
+  Future<void> send(String message, {String? placeId}) async {
     final text = message.trim();
     if (text.isEmpty || busy) return;
     if (sessionId == null) await init();
     final sid = sessionId;
     if (sid == null) return;
-    _run(ChatTurn(text), api.chat(sid, text));
+    _run(ChatTurn(text, placeId: placeId), api.chat(sid, text, placeId: placeId));
   }
 
   /// 36 [현재 일정에 맞춰 다시 제안] / progress_changed [현재 상황에 맞춰 다시 제안].
@@ -368,7 +374,7 @@ class ChatController extends ChangeNotifier {
   void retry(ChatTurn turn) {
     if (busy || turn.user.isEmpty) return;
     turns.remove(turn);
-    send(turn.user);
+    send(turn.user, placeId: turn.placeId);
   }
 
   /// 승인. 409 (base_changed · progress_changed · agent_busy · proposal_not_pending) 는 ApiException 으로 던진다 → proposal_actions.dart.

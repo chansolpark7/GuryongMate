@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:provider/provider.dart';
@@ -10,6 +11,7 @@ import '../../core/app_session.dart';
 import '../../core/format.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/common.dart';
+import '../legal/legal_doc_screen.dart';
 import '../settings/settings_screen.dart';
 
 /// Google OAuth Web 클라이언트 ID (account §3.2 serverClientId). 빌드 때 `--dart-define=GOOGLE_SERVER_CLIENT_ID=…`.
@@ -88,7 +90,7 @@ class _LoginScreenState extends State<LoginScreen> {
               onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const LoginIdScreen())),
             ),
             const SizedBox(height: 16),
-            Text('계속하면 이용약관 및 개인정보처리방침에 동의하게 됩니다', style: AppText.caption, textAlign: TextAlign.center),
+            const _Consent(),
             Center(
               child: TextButton(
                 onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const SettingsScreen(serverOnly: true))),
@@ -492,6 +494,43 @@ class _SignupScreenState extends State<SignupScreen> {
           AppButton(label: '가입하고 시작하기', loading: _busy, onPressed: _idOk && _pwOk && _nameOk ? _submit : null),
         ]),
       ),
+    );
+  }
+}
+
+/// "계속하면 이용약관 및 개인정보처리방침에 동의하게 됩니다" — 두 문서 이름은 밑줄 링크 → 문서 화면.
+class _Consent extends StatefulWidget {
+  const _Consent();
+
+  @override
+  State<_Consent> createState() => _ConsentState();
+}
+
+class _ConsentState extends State<_Consent> {
+  late final _terms = TapGestureRecognizer()..onTap = () => openLegalDoc(context, LegalDoc.terms);
+  late final _privacy = TapGestureRecognizer()..onTap = () => openLegalDoc(context, LegalDoc.privacy);
+
+  @override
+  void dispose() {
+    _terms.dispose();
+    _privacy.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final link = AppText.caption.copyWith(color: AppColors.text2, fontWeight: FontWeight.w700, decoration: TextDecoration.underline, decorationColor: AppColors.text2);
+    return Text.rich(
+      TextSpan(children: [
+        const TextSpan(text: '계속하면 '),
+        TextSpan(text: '이용약관', style: link, recognizer: _terms),
+        const TextSpan(text: ' 및 '),
+        TextSpan(text: '개인정보처리방침', style: link, recognizer: _privacy),
+        const TextSpan(text: '에 동의하게 됩니다'),
+      ]),
+      key: const ValueKey('login-consent'),
+      style: AppText.caption,
+      textAlign: TextAlign.center,
     );
   }
 }
