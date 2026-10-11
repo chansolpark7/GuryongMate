@@ -6,6 +6,7 @@ import 'package:guryong_mate/core/models/safety.dart';
 import 'package:guryong_mate/core/widgets/common.dart';
 import 'package:guryong_mate/features/chat/chat_controller.dart';
 import 'package:guryong_mate/features/planner/plan_controller.dart';
+import 'package:guryong_mate/features/planner/planner_screen.dart';
 import 'package:guryong_mate/features/planner/planner_shell.dart';
 import 'package:provider/provider.dart';
 
@@ -127,6 +128,9 @@ void main() {
     final applied = plan.lastApplied!;
     plan.lastApplied = AppliedProposal(proposal: applied.proposal, before: plan.plan!, at: applied.at);
     plan.setTab(1);
+    // Planner 버튼은 탭이 바뀐 바로 다음 프레임에 사라진다 (Scaffold 퇴장 200ms 동안 남지 않게, 2026-10-12)
+    await tester.pump();
+    expect(find.byType(PlannerFabs).hitTestable(), findsNothing);
     await settle(tester, 4);
     // 승인 직후 [실행 취소] 스낵바(4초)가 아래 버튼 위에 떠 있어 좌표 탭은 스낵바가 받는다 (Planner FAB 가 애니메이션 없이 바로 사라져
     // 스낵바가 맨 아래로 내려옴, 2026-10-12). 아래 '실행 취소' 확인에 스낵바가 필요하므로 버튼 동작을 직접 부른다.
