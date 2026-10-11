@@ -138,18 +138,18 @@ void main() {
     plan.setTab(0);
     await settle(tester, 4);
 
-    // 25 배너 우선순위: 새 안전 경고(needs_action)가 초록 "반영됐어요" 배너보다 먼저
+    // 25 배너: AI 적용 직후 초록 "반영됐어요" 배너는 없다 (2026-10-12 제거 — 이력은 ⋯ → 변경 이력). 새 안전 경고는 그대로 뜬다
     final summary = applied.proposal.summary.trim().split('\n').first;
-    expect(find.text(summary), findsOneWidget, reason: '초록 배너');
+    expect(find.widgetWithText(InkWell, '이력'), findsNothing, reason: '초록 배너 없음');
     plan.alerts = [SafetyAlert.fromJson({'id': 901, 'level': 'danger', 'needs_action': true, 'status': 'new', 'message': '북방파제 강풍 위험', 'changes': []})];
     plan.notifyListeners();
     await settle(tester, 2);
     expect(find.text('북방파제 강풍 위험'), findsOneWidget);
-    expect(find.text(summary), findsNothing);
     plan.alerts = const [];
     plan.notifyListeners();
     await settle(tester, 2);
-    expect(find.text(summary), findsOneWidget, reason: '경고가 없어지면 다시 초록 배너');
+    expect(find.text('북방파제 강풍 위험'), findsNothing);
+    expect(summary, isNotEmpty);
 
     // 08 실행 취소 (승인 직후 스낵바에서만, c9): 승인 전 일정으로 되돌리는 ops
     gw.on('POST /planner/plans/{id}/ops', (r) => Res.json(200, gw.response('create_plan')));

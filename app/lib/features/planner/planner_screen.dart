@@ -239,7 +239,7 @@ String safetyBannerText(SafetyItem s) {
   return '$place ${s.startAt ?? ''} ${riskWord(s.risk)}$reason'.replaceAll('  ', ' ');
 }
 
-/// Context Banner 우선순위 (25): 새 안전 경고(needs_action) > 해제 알림(4초) > AI 적용 직후 > 이날 주의·위험 항목 > 검증 위반 > 없음.
+/// Context Banner 우선순위 (25): 새 안전 경고(needs_action) > 해제 알림(4초) > 이날 주의·위험 항목 > 검증 위반 > 없음.
 /// 해제만 있는 경고(lowered/cleared)는 Green Eased 배너를 4초 보여 주고 사라진다.
 class _ContextBanner extends StatefulWidget {
   const _ContextBanner({required this.controller, required this.plan});
@@ -297,20 +297,7 @@ class _ContextBannerState extends State<_ContextBanner> {
       );
     }
 
-    // AI 적용 직후 (안전 경고·해제 알림보다 뒤, 마지막 AI 변경에서 aiMarkTtl 동안)
-    final applied = c.lastApplied;
-    if (applied != null && c.aiUpdates.isNotEmpty) {
-      final text = applied.proposal.summary.trim().isEmpty ? '구룡메이트 변경안이 일정에 반영됐어요' : applied.proposal.summary.trim().split('\n').first;
-      return _Banner(
-        icon: Icons.check,
-        fg: AppColors.success,
-        bg: AppColors.successSoft,
-        text: text,
-        action: '이력',
-        actionColor: AppColors.success,
-        onAction: () => showProposalHistory(context, c),
-      );
-    }
+    // (AI 적용 직후 초록 배너는 2026-10-12 제거 — 변경 이력은 오른쪽 위 ⋯ → 변경 이력)
 
     // 2. 이날 주의·위험 항목 중 가장 이른 것
     final all = (c.safety?.items ?? const <SafetyItem>[]).where((i) => i.elevated && (i.day == null || i.day == c.day)).toList();
