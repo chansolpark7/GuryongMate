@@ -114,4 +114,29 @@ void main() {
     expect(find.textContaining('${first['end_at']}까지 예정'), findsOneWidget,
         reason: '12:30 에 와도 13:00 고정이면 13:00 에 시작해 체류만큼 머문다 (projection 과 같은 기준)');
   });
+
+  testWidgets('B7 순서 바꿔 마지막 장소에 머무는 중(서버 다음 없음): 건너뛴 앞 항목을 다음으로 그리지 않는다', (tester) async {
+    final r = TripReplay('scene2_arrival', flows: ['f4_arrival_docent.json']);
+    r.advanceTo('12:35:00');
+    final items = ((r.plan['days'] as List).first['items'] as List).cast<Map<String, dynamic>>();
+    for (final i in items) {
+      i
+        ..['status'] = 'planned'
+        ..['arrived_at'] = null;
+    }
+    items.last
+      ..['status'] = 'visiting'
+      ..['arrived_at'] = '12:30';
+    r.state = {
+      ...r.state,
+      'current': {'item_id': items.last['id'], 'state': 'visiting', 'since': '12:30'},
+      'next': null,
+    };
+    await phone(tester);
+    final s = await signedInSession(r.gw, prefs: {'demo_location_mode': true});
+    await tester.pumpWidget(app(s, PlannerShell(planId: r.planId, locationSource: FakeLocationSource())));
+    await settle(tester, 30);
+    expect(find.text('지금 · 12:30 도착'), findsOneWidget);
+    expect(find.text('다음'), findsNothing, reason: '서버(projection)는 지금 장소 뒤에 갈 곳이 없다고 본다');
+  });
 }

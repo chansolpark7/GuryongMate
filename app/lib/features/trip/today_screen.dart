@@ -259,7 +259,8 @@ class _TodayScreenState extends State<TodayScreen> {
     final items = _items(t);
     final done = items.where((i) => i.status == 'done').toList();
     final current = s != null && s.visiting ? t.item(s.currentItemId) : null;
-    final next = t.item(s?.nextItemId) ?? items.where((i) => i.status == 'planned').firstOrNull;
+    // 머무는 중이면 서버(projection)의 다음만 — 순서를 바꿔 뒤 장소에 와 있으면 건너뛴 앞 항목은 '다음'이 아니다 (audit-2026-10-12 B7)
+    final next = t.item(s?.nextItemId) ?? (s?.visiting == true ? null : items.where((i) => i.status == 'planned').firstOrNull);
     final remaining = items.where((i) => i.status == 'planned').toList();
     final moving = s?.moving == true;
     final started = items.any((i) => i.status != 'planned');
