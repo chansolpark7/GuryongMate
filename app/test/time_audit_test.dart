@@ -97,7 +97,7 @@ void main() {
     t.state = visitingState(current: items[0]['id'] as int, next: port, delay: 31);
     expect(EtaChip.violationLabel(t), '18:01 종료 · 규칙 넘음');
     finish();
-  }, skip: true); // 버그 B2
+  });
 
   testWidgets('B4 고정 시작 시각 항목에 일찍 도착: 남은 시간은 고정 시각 + 체류까지 (서버 재계산과 같게)', (tester) async {
     final r = TripReplay('scene2_arrival', flows: ['f4_arrival_docent.json']);
