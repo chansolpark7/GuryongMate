@@ -406,6 +406,7 @@ class _TodayScreenState extends State<TodayScreen> {
                       items: beforeFirst ? items : remaining.where((i) => i.id != next?.id || moving).toList(),
                       total: beforeFirst,
                       end: (t.today?.endAt ?? items.lastOrNull?.endAt),
+                      expected: s.expected,
                       safety: c.safety,
                       selected: popup?.id,
                       onTap: _focus,
@@ -905,6 +906,7 @@ class _RemainingSection extends StatelessWidget {
     required this.items,
     required this.total,
     required this.end,
+    this.expected,
     required this.safety,
     required this.selected,
     required this.onTap,
@@ -914,18 +916,40 @@ class _RemainingSection extends StatelessWidget {
   /// 첫 장소 전: 머리가 "오늘 일정 n곳" (목록은 처음부터 모두).
   final bool total;
   final String? end;
+
+  /// 서버 재계산의 예상 시각 (TripState.expected). 늦으면 '기준 → 예상'으로 보인다 (audit-2026-10-12 D2).
+  final TripExpected? expected;
   final SafetyCheck? safety;
   final int? selected;
 
   /// 행 → 지도에서 그 핀 + 작은 창 (탭 이동 없음).
   final ValueChanged<PlanItem> onTap;
 
+  /// 예상이 기준보다 [lateMin]분 이상 늦은지. 제시간·이르면 기준만 보인다 (지금과 같게).
+  static const lateMin = 5;
+  static bool late(String? planned, String? expected) {
+    final p = toMinutes(planned), e = toMinutes(expected);
+    return p != null && e != null && e - p >= lateMin;
+  }
+
+  /// 늦은 행의 예상 시작 (아니면 null).
+  String? _lateStart(PlanItem i) {
+    final e = expected?.items[i.id]?.start;
+    return late(i.startAt, e) ? e : null;
+  }
+
   @override
-  Widget build(BuildContext context) => Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+  Widget build(BuildContext context) {
+    final lateEnd = late(end, expected?.end) ? expected!.end : null;
+    final endText = end == null ? '' : (lateEnd == null ? ' · $end 종료 예정' : ' · $end → $lateEnd 종료 예상');
+    // 한 행이라도 늦으면 시각 칸을 넓혀 줄을 맞춘다 ("14:47 → 15:27", 390px 에서도 제목만 줄어든다)
+    final anyLate = items.any((i) => _lateStart(i) != null);
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
         // 머리는 요약 한 줄만 — [전체 지도]·[전체 일정 ›] 는 바로 아래 하단 탭(Map·Planner)과 같아 없앴다 (2026-10-11)
         Text(
-          !total && items.isEmpty ? '다음이 마지막 일정이에요${end == null ? '' : ' · $end 종료 예정'}' : '${total ? '오늘 일정' : '남은 일정'} ${items.length}곳${end == null ? '' : ' · $end 종료 예정'}',
-          style: AppText.caption.copyWith(fontWeight: FontWeight.w700),
+          !total && items.isEmpty ? '다음이 마지막 일정이에요$endText' : '${total ? '오늘 일정' : '남은 일정'} ${items.length}곳$endText',
+          key: const ValueKey('remaining-header'),
+          style: AppText.caption.copyWith(fontWeight: FontWeight.w700, color: lateEnd == null ? null : AppColors.warning),
         ),
         const SizedBox(height: 4),
         for (final i in items)
@@ -939,7 +963,7 @@ class _RemainingSection extends StatelessWidget {
               child: Padding(
                 padding: const EdgeInsets.symmetric(vertical: 7, horizontal: 4),
                 child: Row(children: [
-                  SizedBox(width: 50, child: Text(i.startAt ?? '', style: AppText.meta.copyWith(fontWeight: FontWeight.w700, color: AppColors.text2))),
+                  SizedBox(width: anyLate ? 104 : 50, child: _time(i)),
                   Expanded(child: Text(i.title, style: AppText.label, overflow: TextOverflow.ellipsis)),
                   if (safety?.visit(i.id) != null) RiskBadge(item: safety!.visit(i.id)!, compact: true),
                 ]),
@@ -947,6 +971,25 @@ class _RemainingSection extends StatelessWidget {
             ),
           ),
       ]);
+  }
+
+  /// 기준 시작, 늦으면 "기준(흐리게·취소선) → 예상(Amber)".
+  Widget _time(PlanItem i) {
+    final strong = AppText.meta.copyWith(fontWeight: FontWeight.w700, color: AppColors.text2);
+    final e = _lateStart(i);
+    if (e == null) return Text(i.startAt ?? '', style: strong);
+    return Text.rich(
+      key: ValueKey('remaining-time-${i.id}'),
+      TextSpan(children: [
+        TextSpan(text: i.startAt, style: AppText.caption.copyWith(color: AppColors.text3, decoration: TextDecoration.lineThrough)),
+        TextSpan(text: ' → ', style: AppText.caption.copyWith(color: AppColors.text3)),
+        TextSpan(text: e, style: strong.copyWith(color: AppColors.warning)),
+      ]),
+      maxLines: 1,
+      softWrap: false,
+      overflow: TextOverflow.visible,
+    );
+  }
 }
 
 /// Today 남은 일정 아래 한 줄: "가이드 노트 n/m 준비됨 · k곳 다시 준비 필요 ›" / "가이드 노트 준비 중 n/m ›" → 32.

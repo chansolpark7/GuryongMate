@@ -87,8 +87,13 @@
  "current": {"item_id": 12, "state": "visiting", "since": "14:05"},  // visiting: 장소 안 / moving: 이동 중 (item_id = 떠나온 항목) / idle: 시작 전·끝
  "next": {"item_id": 13, "title": "구룡포과메기문화관", "planned_start": "15:00", "eta": "15:12"},
  "delay_minutes": 12,                                                // 다음 일정 기준 예상 지연 (음수 = 여유)
+ "expected": {"end": "18:18",                                        // 그날 예상 종료 (재계산 마지막 일정 종료)
+              "items": {"13": {"start": "15:27", "end": "16:27"}}},  // 오늘 남은 항목(planned·visiting)의 예상 시작·종료
  "session_id": "9288a236…"}
 ```
+- `expected` (2026-10-12, audit D2): `next`·`delay_minutes` 와 같은 재계산(위치·틱의 planner projection, §6.2)에서 그날(`plan.days[day]`)의 `end_at`·남은 항목 `start_at`/`end_at` 을 저장해 둔 것.
+  GET state 는 planner 를 부르지 않고 마지막 값을 돌려준다 (앱이 1~5초마다 부름). 재계산 전이거나 진행 중이 아니면 `null`, 여행일이 끝나면 지운다.
+  앱 Today 남은 일정은 예상이 기준보다 5분 이상 늦을 때만 "기준 → 예상"으로 보인다 (`docs/app/screens/14-today.md`).
 
 ---
 
@@ -408,7 +413,7 @@ POST /planner/plans/{id}/projection        (저장 안 함, 본문·필드 모�
 
 | 테이블 | 내용 |
 |---|---|
-| `trip_day` | plan_id, user_id, day, date, session_id, started_at, ended_at, ended_reason, 마지막 위치(lat, lng, accuracy, recorded_at, source), current_item_id, current_state, current_since, 머무름 판정(cand_item_id, cand_since, outside_since), delay_minutes, next(JSON), 앱 활동(active_at: 위치·이벤트 조회, located_at: 위치), situation(JSON, 상황 해제 판정) |
+| `trip_day` | plan_id, user_id, day, date, session_id, started_at, ended_at, ended_reason, 마지막 위치(lat, lng, accuracy, recorded_at, source), current_item_id, current_state, current_since, 머무름 판정(cand_item_id, cand_since, outside_since), delay_minutes, next(JSON), expected(JSON, TripState.expected — 종료하면 null), 앱 활동(active_at: 위치·이벤트 조회, located_at: 위치), situation(JSON, 상황 해제 판정) |
 | `trip_event` | 3.3 Event 필드 + 원인 키(`cause_key`, 중복 억제용), delivered_at(쿨다운 기준) |
 
 판정용 최근 위치(머무름 계산)는 `trip_day` 에 "반경 안에 처음 들어온 항목·시각(`cand_*`) / 반경 밖으로 처음 나간 시각(`outside_since`)"만 둔다. 전체 궤적은 저장하지 않는다.
