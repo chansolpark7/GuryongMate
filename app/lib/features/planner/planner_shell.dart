@@ -323,6 +323,9 @@ class _PlannerShellState extends State<PlannerShell> {
               if (active) TodayScreen(onEndTrip: _endFlow) else const SizedBox.shrink(),
             ]),
             floatingActionButton: tab == 0 && c.plan != null ? PlannerFabs(hasSuggestion: t.hasSuggestion) : null,
+            // 탭을 바꿀 때 버튼이 화면과 함께 바로 나타나고 사라지게 (기본은 회전·크기 애니메이션이라 화면보다 늦게 따라온다).
+            // 셸 Scaffold 에 둔 이유(스낵바가 뜨면 함께 위로 비켜남)는 그대로다.
+            floatingActionButtonAnimator: FloatingActionButtonAnimator.noAnimation,
             bottomNavigationBar: _BottomNav(
               index: tab,
               companion: active,
