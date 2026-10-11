@@ -43,8 +43,12 @@ class _CompareScreenState extends State<CompareScreen> {
   List<List<LatLng>> _beforeLines = const [];
   List<List<LatLng>> _afterLines = const [];
   int? _highlight; // 하이라이트한 장소 (place_id 해시)
+  final _lines = <int, (List<List<LatLng>>, List<List<LatLng>>)>{}; // 날별 경로선 (기존안, 수정안)
 
   ProposalDetail get p => widget.entry.proposal;
+
+  /// 고른 날 (여러 날 제안이면 날짜 탭). 처음엔 위반 있는 날 → 바뀐 첫날.
+  late int _day = p.changedDays.where((d) => p.errorsOn(d) > 0).firstOrNull ?? p.changedDays.first;
 
   @override
   void initState() {
@@ -73,10 +77,37 @@ class _CompareScreenState extends State<CompareScreen> {
     try {
       _zones = await api.avoidZones();
     } catch (_) {}
-    final day = p.day;
-    _beforeLines = await _routeLines(plan, _remaining(p.before?.dayOf(day)));
-    _afterLines = await _routeLines(plan, _remaining(p.after?.dayOf(day)));
+    await _loadLines(_day);
     if (mounted) setState(() => _loading = false);
+  }
+
+  /// 그날의 경로선 (한 번 그린 날은 다시 묻지 않는다).
+  Future<void> _loadLines(int day) async {
+    final cached = _lines[day];
+    if (cached == null) {
+      if (!mounted) return;
+      final plan = context.read<PlanController>();
+      final b = await _routeLines(plan, _remaining(p.before?.dayOf(day)));
+      final a = await _routeLines(plan, _remaining(p.after?.dayOf(day)));
+      _lines[day] = (b, a);
+    }
+    if (!mounted || day != _day) return;
+    final (b, a) = _lines[day]!;
+    setState(() {
+      _beforeLines = b;
+      _afterLines = a;
+    });
+  }
+
+  void _pickDay(int day) {
+    if (day == _day) return;
+    setState(() {
+      _day = day;
+      _highlight = null;
+      _beforeLines = const [];
+      _afterLines = const [];
+    });
+    _loadLines(day);
   }
 
   List<PlanItem> _remaining(PlanDay? d) => (d?.items ?? const <PlanItem>[]).where((i) => !i.skipped && i.status != 'done' && i.place != null).toList();
@@ -108,11 +139,15 @@ class _CompareScreenState extends State<CompareScreen> {
   @override
   Widget build(BuildContext context) {
     context.watch<ChatController>();
-    final day = p.day;
+    final day = _day;
+    final days = p.changedDays;
     final before = p.before?.dayOf(day), after = p.after?.dayOf(day);
     final doneCount = (after?.items ?? const <PlanItem>[]).where((i) => i.status == 'done').length;
     final rows = _pairRows(_remaining(before), _remaining(after));
-    final changeCount = p.before != null ? buildChangeRows(p).length : p.changes.length;
+    final changeRows = p.before != null ? buildChangeRows(p) : null;
+    final changeCount = changeRows?.length ?? p.changes.length;
+    // 여러 날: 고른 날의 변경 수도 (날이 없는 조건 줄은 전체에만)
+    final dayCount = changeRows?.where((r) => r.day == day).length ?? p.changes.where((c) => c.day == day && c.kind != 'day_end').length;
     return Scaffold(
       backgroundColor: AppColors.surface,
       body: Column(children: [
@@ -120,6 +155,7 @@ class _CompareScreenState extends State<CompareScreen> {
           height: 300 + MediaQuery.paddingOf(context).top,
           child: Stack(children: [
             _CompareMap(
+              key: ValueKey('compare-map-$day'), // 날을 바꾸면 카메라를 그날 장소에 다시 맞춘다
               before: _remaining(before),
               after: _remaining(after),
               beforeLines: _beforeLines,
@@ -131,7 +167,16 @@ class _CompareScreenState extends State<CompareScreen> {
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
                 child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  _TitlePill(count: changeCount, onClose: () => Navigator.of(context).pop()),
+                  _TitlePill(
+                    count: changeCount,
+                    dayCount: days.length > 1 ? dayCount : null,
+                    day: day,
+                    onClose: () => Navigator.of(context).pop(),
+                  ),
+                  if (days.length > 1) ...[
+                    const SizedBox(height: 8),
+                    _DayTabs(proposal: p, days: days, selected: day, onPick: _pickDay),
+                  ],
                   if (p.baseChanged && widget.entry.state == ProposalState.pending) ...[
                     const SizedBox(height: 8),
                     Container(
@@ -149,7 +194,7 @@ class _CompareScreenState extends State<CompareScreen> {
         ),
         Expanded(
           child: ListView(padding: const EdgeInsets.fromLTRB(16, 12, 16, 16), children: [
-            _Metrics(proposal: p, before: before, after: after, beforeSafety: _beforeSafety, afterSafety: _afterSafety, safetyFailed: _safetyFailed),
+            _Metrics(proposal: p, day: day, before: before, after: after, beforeSafety: _beforeSafety, afterSafety: _afterSafety, safetyFailed: _safetyFailed),
             const SizedBox(height: 16),
             if (doneCount > 0) Padding(padding: const EdgeInsets.only(bottom: 8), child: Text('다녀온 곳 $doneCount곳', style: AppText.caption)),
             Row(children: [
@@ -215,9 +260,13 @@ List<_Pair> _pairRows(List<PlanItem> before, List<PlanItem> after) {
 }
 
 class _TitlePill extends StatelessWidget {
-  const _TitlePill({required this.count, required this.onClose});
+  const _TitlePill({required this.count, required this.onClose, this.dayCount, this.day});
   final int count;
   final VoidCallback onClose;
+
+  /// 여러 날 제안: 고른 날의 변경 수 ("Day 2 변경 1건 · 전체 3건").
+  final int? dayCount;
+  final int? day;
 
   @override
   Widget build(BuildContext context) => Container(
@@ -226,10 +275,55 @@ class _TitlePill extends StatelessWidget {
         decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(24), boxShadow: AppShadow.floating),
         child: Row(mainAxisSize: MainAxisSize.min, children: [
           IconButton(tooltip: '닫기', icon: const Icon(Icons.close, size: 20), onPressed: onClose),
-          Column(mainAxisAlignment: MainAxisAlignment.center, crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text('기존안 · 수정안 비교', style: AppText.label.copyWith(fontWeight: FontWeight.w700)),
-            Text('구룡메이트 제안 · 변경 $count건', style: AppText.caption.copyWith(color: AppColors.text2)),
-          ]),
+          Flexible(
+            child: Column(mainAxisAlignment: MainAxisAlignment.center, crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text('기존안 · 수정안 비교', style: AppText.label.copyWith(fontWeight: FontWeight.w700)),
+              Text(dayCount == null ? '구룡메이트 제안 · 변경 $count건' : 'Day $day 변경 $dayCount건 · 전체 $count건',
+                  style: AppText.caption.copyWith(color: AppColors.text2), overflow: TextOverflow.ellipsis),
+            ]),
+          ),
+        ]),
+      );
+}
+
+/// 바뀐 날만 날짜 탭(칩). 위반 있는 날은 Red 점.
+class _DayTabs extends StatelessWidget {
+  const _DayTabs({required this.proposal, required this.days, required this.selected, required this.onPick});
+  final ProposalDetail proposal;
+  final List<int> days;
+  final int selected;
+  final ValueChanged<int> onPick;
+
+  @override
+  Widget build(BuildContext context) => SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(children: [
+          for (final d in days) ...[
+            if (d != days.first) const SizedBox(width: 6),
+            Material(
+              key: ValueKey('compare-day-$d'),
+              color: d == selected ? AppColors.text : AppColors.surface,
+              borderRadius: BorderRadius.circular(16),
+              elevation: 1,
+              child: InkWell(
+                borderRadius: BorderRadius.circular(16),
+                onTap: () => onPick(d),
+                child: Container(
+                  height: 32,
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  alignment: Alignment.center,
+                  child: Row(mainAxisSize: MainAxisSize.min, children: [
+                    Text(dayLabel(proposal, d),
+                        style: AppText.caption.copyWith(color: d == selected ? Colors.white : AppColors.text, fontWeight: FontWeight.w700)),
+                    if (proposal.errorsOn(d) > 0) ...[
+                      const SizedBox(width: 6),
+                      Container(width: 6, height: 6, decoration: const BoxDecoration(color: AppColors.danger, shape: BoxShape.circle)),
+                    ],
+                  ]),
+                ),
+              ),
+            ),
+          ],
         ]),
       );
 }
@@ -249,7 +343,7 @@ class _Legend extends StatelessWidget {
 }
 
 class _CompareMap extends StatelessWidget {
-  const _CompareMap({required this.before, required this.after, required this.beforeLines, required this.afterLines, required this.zones, required this.onPin});
+  const _CompareMap({super.key, required this.before, required this.after, required this.beforeLines, required this.afterLines, required this.zones, required this.onPin});
   final List<PlanItem> before;
   final List<PlanItem> after;
   final List<List<LatLng>> beforeLines;
@@ -310,8 +404,9 @@ class _CompareMap extends StatelessWidget {
 
 /// 지표 3개: 위험한 곳(또는 규칙 위반) · 종료 · 이동. 좋아지면 Green, 나빠지면 Amber.
 class _Metrics extends StatelessWidget {
-  const _Metrics({required this.proposal, required this.before, required this.after, required this.beforeSafety, required this.afterSafety, required this.safetyFailed});
+  const _Metrics({required this.proposal, required this.day, required this.before, required this.after, required this.beforeSafety, required this.afterSafety, required this.safetyFailed});
   final ProposalDetail proposal;
+  final int day;
   final PlanDay? before;
   final PlanDay? after;
   final SafetyCheck? beforeSafety;
@@ -320,12 +415,11 @@ class _Metrics extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final day = proposal.day;
     int errors(PlanDetail? p) => (p?.violations ?? const <Violation>[]).where((v) => v.isError && (v.day == null || v.day == day)).length;
     final rb = beforeSafety?.riskyVisits, ra = afterSafety?.riskyVisits;
     final eb = errors(proposal.before), ea = errors(proposal.after);
     final useSafety = !safetyFailed && rb != null && ra != null && (rb != ra || eb == ea);
-    final (endB, endA) = dayEndChange(proposal);
+    final (endB, endA) = dayEndChange(proposal, day: day);
     final first = useSafety ? _Metric('위험한 곳', '$rb곳', '$ra곳', ra.compareTo(rb)) : _Metric('규칙 위반', '$eb건', '$ea건', ea.compareTo(eb));
     final eFrom = endB ?? before?.endAt, eTo = endA ?? after?.endAt;
     final end = _Metric('종료', eFrom ?? '-', eTo ?? '-', eFrom == null || eTo == null ? 0 : eTo.compareTo(eFrom)); // 일찍 끝나면 좋아짐

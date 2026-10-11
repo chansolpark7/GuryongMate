@@ -407,4 +407,21 @@ class ProposalDetail {
 
   /// 카드가 바꾸는 날 (변경 요약의 day 중 첫 번째, 없으면 1).
   int get day => changes.map((c) => c.day).whereType<int>().firstOrNull ?? 1;
+
+  /// 바뀐 날 전부 (오름차순): 변경 요약의 day + 항목을 다른 날로 옮겼으면 옮기기 전·후 날. 없으면 [day].
+  List<int> get changedDays {
+    final days = <int>{for (final c in changes) if (c.day != null) c.day!};
+    for (final c in changes) {
+      if (c.itemId == null) continue;
+      final b = before?.item(c.itemId!), a = after?.item(c.itemId!);
+      if (b != null) days.add(b.day);
+      if (a != null) days.add(a.day);
+    }
+    return days.isEmpty ? [day] : (days.toList()..sort());
+  }
+
+  bool get multiDay => changedDays.length > 1;
+
+  /// 수정안에서 그날의 규칙 위반(error) 수. 날이 정해지지 않은 위반은 모든 날에 센다 (하루짜리 카드와 같은 규칙).
+  int errorsOn(int day) => (after?.violations ?? const <Violation>[]).where((v) => v.isError && (v.day == null || v.day == day)).length;
 }

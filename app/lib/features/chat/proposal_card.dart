@@ -12,7 +12,7 @@ import 'proposal_actions.dart';
 
 /// 제안 카드의 한 줄 (항목 단위로 묶은 변경).
 class ChangeRow {
-  ChangeRow({required this.badge, required this.title, this.fromText, this.toText, this.reason = '', this.strike = false, this.itemId, this.day});
+  ChangeRow({required this.badge, required this.title, this.fromText, this.toText, this.reason = '', this.strike = false, this.itemId, this.day, this.at});
   final String badge; // 이동 · 교체 · 삭제 · 추가 · 변경 · 조건 · 여행
   final String title;
   final String? fromText;
@@ -21,6 +21,9 @@ class ChangeRow {
   final bool strike;
   final int? itemId;
   final int? day;
+
+  /// 줄 순서용 시각 (여러 날 제안: 날짜 → 시각).
+  final String? at;
 }
 
 /// planner Change 목록 → 카드 줄. 같은 자리의 삭제+추가는 "교체"로 묶는다. day_end 는 Route Impact 박스에서 보여 준다.
@@ -51,6 +54,7 @@ List<ChangeRow> buildChangeRows(ProposalDetail p) {
           reason: ai.memo.isNotEmpty ? ai.memo : '${ai.place?.contentType ?? ''} · ${ai.stayMinutes}분',
           itemId: ai.id,
           day: ai.day,
+          at: ai.startAt ?? b.startAt,
         ));
         break;
       }
@@ -63,9 +67,9 @@ List<ChangeRow> buildChangeRows(ProposalDetail p) {
     final b = before?.item(id), a = after?.item(id);
     final reason = entry.value.map((c) => stripChangePrefix(c.message)).join(' · ');
     if (kinds.contains('added')) {
-      rows.add(ChangeRow(badge: '추가', title: a?.title ?? reason, toText: a?.startAt, reason: a == null ? '' : (a.memo.isNotEmpty ? a.memo : '${a.stayMinutes}분'), itemId: id, day: a?.day));
+      rows.add(ChangeRow(badge: '추가', title: a?.title ?? reason, toText: a?.startAt, reason: a == null ? '' : (a.memo.isNotEmpty ? a.memo : '${a.stayMinutes}분'), itemId: id, day: a?.day, at: a?.startAt));
     } else if (kinds.contains('removed')) {
-      rows.add(ChangeRow(badge: '삭제', title: b?.title ?? reason, fromText: b?.startAt, strike: true, reason: '일정에서 빠져요', itemId: id, day: b?.day));
+      rows.add(ChangeRow(badge: '삭제', title: b?.title ?? reason, fromText: b?.startAt, strike: true, reason: '일정에서 빠져요', itemId: id, day: b?.day, at: b?.startAt));
     } else {
       rows.add(ChangeRow(
         badge: kinds.contains('moved') ? '이동' : '변경',
@@ -74,7 +78,8 @@ List<ChangeRow> buildChangeRows(ProposalDetail p) {
         toText: a?.startAt,
         reason: reason,
         itemId: id,
-        day: a?.day,
+        day: a?.day ?? b?.day,
+        at: a?.startAt ?? b?.startAt,
       ));
     }
   }
@@ -85,7 +90,24 @@ List<ChangeRow> buildChangeRows(ProposalDetail p) {
       rows.add(ChangeRow(badge: '여행', title: stripChangePrefix(c.message)));
     }
   }
-  return rows;
+  if (!p.multiDay) return rows; // 하루짜리는 지금 순서 그대로
+  // 여러 날: 날짜 → 시각 (날이 없는 조건·여행 줄은 맨 뒤, 같은 키는 원래 순서)
+  final order = {for (final (i, r) in rows.indexed) r: i};
+  int key(ChangeRow r) => r.day ?? 1 << 20;
+  return rows
+    ..sort((x, y) {
+      final d = key(x).compareTo(key(y));
+      if (d != 0) return d;
+      final t = (x.at ?? '99:99').compareTo(y.at ?? '99:99');
+      return t != 0 ? t : order[x]!.compareTo(order[y]!);
+    });
+}
+
+/// 날짜 머리 "Day n · M/D(요일)" (여러 날 제안의 변경 목록·비교 화면 탭).
+String dayLabel(ProposalDetail p, int day) {
+  final d = p.after?.dayOf(day) ?? p.before?.dayOf(day);
+  if (d == null) return 'Day $day';
+  return 'Day $day · ${d.date.month}/${d.date.day}${d.weekday.isEmpty ? '' : '(${d.weekday})'}';
 }
 
 (Color, Color) badgeColors(String badge) => switch (badge) {
@@ -96,9 +118,9 @@ List<ChangeRow> buildChangeRows(ProposalDetail p) {
       _ => (AppColors.text2, AppColors.field),
     };
 
-/// "1일차 종료: 17:30 → 17:22" → ("17:30", "17:22")
-(String?, String?) dayEndChange(ProposalDetail p) {
-  final c = p.changes.where((c) => c.kind == 'day_end').firstOrNull;
+/// "1일차 종료: 17:30 → 17:22" → ("17:30", "17:22"). [day] 를 주면 그날의 종료 변경만.
+(String?, String?) dayEndChange(ProposalDetail p, {int? day}) {
+  final c = p.changes.where((c) => c.kind == 'day_end' && (day == null || c.day == day)).firstOrNull;
   if (c == null) return (null, null);
   final m = RegExp(r'([0-9:]+|없음)\s*→\s*([0-9:]+|없음)').firstMatch(c.message);
   if (m == null) return (null, null);
@@ -122,6 +144,8 @@ class ProposalCard extends StatelessWidget {
     final trip = context.read<PlanController>().tripActive;
     final chat = context.read<ChatController>();
     final safetyEvent = chat.proactive.values.any((e) => e.type == 'safety_raised' && e.agent?.proposalId == p.id);
+    final days = p.changedDays;
+    final multi = days.length > 1;
     return Opacity(
       opacity: state == ProposalState.rejected ? 0.7 : 1,
       child: Container(
@@ -135,13 +159,21 @@ class ProposalCard extends StatelessWidget {
             _HeaderChip(state: state, count: count),
           ]),
           const SizedBox(height: 6),
+          // 여러 날을 바꾸면 날짜별로 묶어 머리 "Day n · M/D(요일)" (하루면 머리 없음)
           for (final (i, r) in rows.indexed) ...[
-            if (i > 0) const Divider(height: 1, color: AppColors.line),
+            if (multi && (i == 0 || rows[i - 1].day != r.day))
+              _DayHeader(label: r.day == null ? '여행 전체' : dayLabel(p, r.day!), first: i == 0)
+            else if (i > 0)
+              const Divider(height: 1, color: AppColors.line),
             ChangeRowView(row: r),
           ],
-          // 동행 중 (19·20·22): 종료 시각 행(이전 취소선 → 이후 Purple) + 영향 박스("18:00 전 종료 ✓" / "위험한 곳 1 → 0")
+          // 동행 중 (19·20·22): 종료 시각 행(이전 취소선 → 이후 Purple, 날짜별) + 영향 박스("18:00 전 종료 ✓" / "위험한 곳 1 → 0")
           if (trip && p.before != null && p.after != null) ...[
-            if (dayEndChange(p).$1 != null && dayEndChange(p).$2 != null) ...[const Divider(height: 1, color: AppColors.line), EndRow(proposal: p)],
+            for (final d in days)
+              if (dayEndChange(p, day: d).$1 != null && dayEndChange(p, day: d).$2 != null) ...[
+                const Divider(height: 1, color: AppColors.line),
+                EndRow(proposal: p, day: d, showDay: multi),
+              ],
             if (safetyEvent) SafetyImpact(proposal: p) else RouteImpact(proposal: p, trip: true),
           ] else if (p.before != null && p.after != null)
             RouteImpact(proposal: p),
@@ -157,6 +189,21 @@ class ProposalCard extends StatelessWidget {
       ),
     );
   }
+}
+
+class _DayHeader extends StatelessWidget {
+  const _DayHeader({required this.label, required this.first});
+  final String label;
+  final bool first;
+
+  @override
+  Widget build(BuildContext context) => Container(
+        key: const ValueKey('change-day-header'),
+        margin: EdgeInsets.only(top: first ? 4 : 10),
+        padding: const EdgeInsets.only(bottom: 4),
+        decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: AppColors.line))),
+        child: Text(label, style: AppText.caption.copyWith(color: AppColors.text2, fontWeight: FontWeight.w700)),
+      );
 }
 
 class _Note extends StatelessWidget {
@@ -246,7 +293,7 @@ class ChangeRowView extends StatelessWidget {
   }
 }
 
-/// Route Impact 박스: 이동 시간 변화 · 종료 시각(day_end) · 남은 위반.
+/// Route Impact 박스: 바뀐 날마다 한 줄 — 이동 시간 변화 · 종료 시각(day_end) 또는 남은 위반. 위반 있는 날은 Red.
 class RouteImpact extends StatelessWidget {
   const RouteImpact({super.key, required this.proposal, this.trip = false});
   final ProposalDetail proposal;
@@ -256,49 +303,66 @@ class RouteImpact extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final before = proposal.before!, after = proposal.after!;
-    final day = proposal.day;
-    final b = before.dayOf(day), a = after.dayOf(day);
-    if (a == null) return const SizedBox.shrink();
-    final delta = a.travelMinutes - (b?.travelMinutes ?? 0);
-    final errors = after.violations.where((v) => v.isError && (v.day == null || v.day == day)).length;
-    final (_, endTo) = dayEndChange(proposal);
-    final end = endTo ?? a.endAt;
-    final endBefore = after.constraints.where((c) => c.type == 'end_before' && c.hard).map((c) => '${c.params['time'] ?? ''}').where((t) => t.isNotEmpty).firstOrNull;
-    final endLabel = trip && endBefore != null ? '$endBefore 전 종료' : '$end 종료';
+    final days = proposal.changedDays;
+    final lines = [for (final d in days) _line(d, showDay: days.length > 1)].whereType<Widget>().toList();
+    if (lines.isEmpty) return const SizedBox.shrink();
     return Container(
       margin: const EdgeInsets.only(top: 8),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(color: AppColors.background, borderRadius: BorderRadius.circular(12)),
-      child: Row(children: [
-        const Icon(Icons.route, size: 18, color: AppColors.text2),
-        const SizedBox(width: 8),
-        Text('이동 ', style: AppText.meta),
-        Text('${delta >= 0 ? '+' : ''}$delta분', style: AppText.meta.copyWith(color: AppColors.text, fontWeight: FontWeight.w700)),
-        Flexible(child: Text(' · 총 ${a.travelMinutes}분', style: AppText.caption, overflow: TextOverflow.ellipsis)),
-        const Spacer(),
-        if (errors > 0) ...[
-          const Icon(Icons.warning_amber_rounded, size: 16, color: AppColors.danger),
-          const SizedBox(width: 4),
-          Text('위반 $errors건', style: AppText.caption.copyWith(color: AppColors.danger, fontWeight: FontWeight.w700)),
-        ] else if (end != null) ...[
-          const Icon(Icons.check, size: 16, color: AppColors.success),
-          const SizedBox(width: 4),
-          Text(endLabel, style: AppText.caption.copyWith(color: AppColors.success, fontWeight: FontWeight.w700)),
-        ],
+      child: Column(children: [
+        for (final (i, l) in lines.indexed) ...[if (i > 0) const SizedBox(height: 8), l],
       ]),
     );
+  }
+
+  Widget? _line(int day, {required bool showDay}) {
+    final before = proposal.before!, after = proposal.after!;
+    final b = before.dayOf(day), a = after.dayOf(day);
+    if (a == null) return null;
+    final delta = a.travelMinutes - (b?.travelMinutes ?? 0);
+    final errors = proposal.errorsOn(day);
+    final (_, endTo) = dayEndChange(proposal, day: day);
+    final end = endTo ?? a.endAt;
+    final endBefore = after.constraints.where((c) => c.type == 'end_before' && c.hard).map((c) => '${c.params['time'] ?? ''}').where((t) => t.isNotEmpty).firstOrNull;
+    final endLabel = trip && endBefore != null ? '$endBefore 전 종료' : '$end 종료';
+    return Row(key: ValueKey('route-impact-$day'), children: [
+      // 여러 날이면 아이콘 자리에 "Day n" (위반 있는 날 Red)
+      if (showDay)
+        Text('Day $day  ', style: AppText.meta.copyWith(color: errors > 0 ? AppColors.danger : AppColors.text, fontWeight: FontWeight.w700))
+      else ...[
+        const Icon(Icons.route, size: 18, color: AppColors.text2),
+        const SizedBox(width: 8),
+      ],
+      Text('이동 ', style: AppText.meta),
+      Text('${delta >= 0 ? '+' : ''}$delta분', style: AppText.meta.copyWith(color: AppColors.text, fontWeight: FontWeight.w700)),
+      Flexible(child: Text(' · 총 ${a.travelMinutes}분', style: AppText.caption, overflow: TextOverflow.ellipsis)),
+      const Spacer(),
+      if (errors > 0) ...[
+        const Icon(Icons.warning_amber_rounded, size: 16, color: AppColors.danger),
+        const SizedBox(width: 4),
+        Text('위반 $errors건', style: AppText.caption.copyWith(color: AppColors.danger, fontWeight: FontWeight.w700)),
+      ] else if (end != null) ...[
+        const Icon(Icons.check, size: 16, color: AppColors.success),
+        const SizedBox(width: 4),
+        Text(endLabel, style: AppText.caption.copyWith(color: AppColors.success, fontWeight: FontWeight.w700)),
+      ],
+    ]);
   }
 }
 
 /// 종료 시각 행 (19·20): 배지 "종료" · 이전(취소선) › 이후(Purple Bold).
 class EndRow extends StatelessWidget {
-  const EndRow({super.key, required this.proposal});
+  const EndRow({super.key, required this.proposal, this.day, this.showDay = false});
   final ProposalDetail proposal;
+
+  /// 그날의 종료 변경 (null 이면 첫 종료 변경). [showDay] 면 배지 뒤에 "Day n".
+  final int? day;
+  final bool showDay;
 
   @override
   Widget build(BuildContext context) {
-    final (from, to) = dayEndChange(proposal);
+    final (from, to) = dayEndChange(proposal, day: day);
     return Padding(
       key: const ValueKey('end-row'),
       padding: const EdgeInsets.symmetric(vertical: 10),
@@ -309,6 +373,7 @@ class EndRow extends StatelessWidget {
           child: Text('종료', style: AppText.caption.copyWith(color: AppColors.primary, fontWeight: FontWeight.w700)),
         ),
         const SizedBox(width: 10),
+        if (showDay && day != null) Text('Day $day  ', style: AppText.label.copyWith(color: AppColors.text2, fontWeight: FontWeight.w700)),
         Text(from ?? '-', style: AppText.label.copyWith(color: AppColors.text3, decoration: TextDecoration.lineThrough)),
         const Padding(padding: EdgeInsets.symmetric(horizontal: 6), child: Icon(Icons.chevron_right, size: 16, color: AppColors.text3)),
         Text(to ?? '-', style: AppText.label.copyWith(color: AppColors.ai, fontWeight: FontWeight.w700)),
