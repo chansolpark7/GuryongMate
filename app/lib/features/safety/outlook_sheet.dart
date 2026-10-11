@@ -25,10 +25,10 @@ Future<void> showOutlookSheet(BuildContext context, PlanController c, DateTime d
       ),
     );
 
-const _kinds = [('breakwater', '방파제'), ('flood', '해안 저지대'), ('outdoor', '그 밖의 야외'), ('indoor', '실내')];
+const _kinds = [('breakwater', '방파제'), ('flood', '해안 저지대'), ('coast', '해안'), ('outdoor', '그 밖의 야외'), ('indoor', '실내')];
 const _hours = [9, 10, 11, 12, 13, 14, 15, 16, 17, 18];
 
-String kindName(String k) => switch (k) { 'breakwater' => '방파제', 'flood' => '해안 저지대', 'outdoor' => '야외', _ => '실내' };
+String kindName(String k) => switch (k) { 'breakwater' => '방파제', 'flood' => '해안 저지대', 'coast' => '해안', 'outdoor' => '야외', _ => '실내' };
 
 Color cellColor(String? level, bool info) => switch (level) {
       'danger' => const Color(0xFFF6A6A9),
