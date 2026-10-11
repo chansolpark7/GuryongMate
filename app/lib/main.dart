@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:provider/provider.dart';
@@ -56,7 +57,8 @@ class _GuryongAppState extends State<GuryongApp> {
       title: '구룡메이트',
       navigatorKey: _nav,
       // 동행 중 전역 오버레이(23 위험 구역 경고 · 16 도착 카드 · 토스트 · 선제 미리보기)는 모든 화면·시트 위에 (README §4)
-      builder: withTripOverlay,
+      // 웹을 넓은 화면(데스크톱 브라우저)에서 열면 휴대폰 폭으로 가운데에 (README 「웹 앱」)
+      builder: (context, child) => PhoneFrame(child: withTripOverlay(context, child)),
       debugShowCheckedModeBanner: false,
       theme: buildTheme(),
       scrollBehavior: const AppScrollBehavior(),
@@ -85,4 +87,30 @@ class _Splash extends StatelessWidget {
         backgroundColor: AppColors.surface,
         body: Center(child: AppLogo()),
       );
+}
+
+/// 웹에서 화면이 넓으면 앱을 휴대폰 폭([maxWidth])으로 가운데에 둔다. 시트·대화상자·오버레이도 이 안에 그려진다. 앱(모바일)은 그대로.
+class PhoneFrame extends StatelessWidget {
+  const PhoneFrame({super.key, required this.child, this.enabled = kIsWeb});
+  final Widget child;
+  final bool enabled;
+  static const maxWidth = 440.0;
+
+  @override
+  Widget build(BuildContext context) {
+    final mq = MediaQuery.of(context);
+    if (!enabled || mq.size.width <= maxWidth + 40) return child;
+    return ColoredBox(
+      color: AppColors.background,
+      child: Center(
+        child: DecoratedBox(
+          decoration: const BoxDecoration(boxShadow: [BoxShadow(color: Color(0x1A111827), blurRadius: 32)]),
+          child: SizedBox(
+            width: maxWidth,
+            child: MediaQuery(data: mq.copyWith(size: Size(maxWidth, mq.size.height)), child: ClipRect(child: child)),
+          ),
+        ),
+      ),
+    );
+  }
 }

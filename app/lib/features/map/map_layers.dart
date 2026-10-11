@@ -1,3 +1,6 @@
+import 'dart:async';
+
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
@@ -10,6 +13,13 @@ const guryongpo = LatLng(35.9890, 129.5560);
 
 /// OpenStreetMap 타일 (키 불필요, 데모용). 지도 제공자가 정해지면 여기만 바꾼다.
 TileLayer osmTiles() => TileLayer(urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png', userAgentPackageName: 'com.guryongmate.guryong_mate');
+
+/// 지도 카메라 맞춤·이동을 프레임 뒤에. 웹(CanvasKit)에서는 프레임 뒤 콜백 안에서 바로 옮기면 새 카메라의 타일을 받고도
+/// 지도가 옛 카메라로 남아 회색으로 보였다 (손으로 움직이면 보임) → 웹만 다음 이벤트 루프로 한 번 더 미룬다.
+void afterFrame(VoidCallback f) => WidgetsBinding.instance.addPostFrameCallback((_) => deferOnWeb(f));
+
+/// [afterFrame] 의 웹 쪽: 웹이면 [Timer.run], 앱은 바로 (onMapReady 도 프레임 뒤 콜백이다).
+void deferOnWeb(VoidCallback f) => kIsWeb ? Timer.run(f) : f();
 
 /// 위험 구역 다각형 (28): Red/Amber 18% 채움 + 점선 테두리 + 이름 라벨.
 class ZoneLayer extends StatelessWidget {

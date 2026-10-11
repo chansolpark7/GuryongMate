@@ -236,14 +236,14 @@ class _TodayScreenState extends State<TodayScreen> {
     final started = items.any((i) => i.status != 'planned');
     final allDone = s != null && s.idle && remaining.isEmpty && items.isNotEmpty;
     final beforeFirst = s != null && s.idle && !started && next != null;
-    if (_ready) WidgetsBinding.instance.addPostFrameCallback((_) => mounted ? _fit(t, items) : null);
+    if (_ready) afterFrame(() => mounted ? _fit(t, items) : null);
     _ensureLegs(c, items.where((i) => i.status != 'done' || i == done.lastOrNull).toList());
     final target = _guideTarget(t, items, next, beforeFirst);
     final showGuide = target != null;
     final loc = t.locationOff ? null : _loc(t);
     if (target != null) {
       _ensureGuide(t, target);
-      WidgetsBinding.instance.addPostFrameCallback((_) => mounted ? _fitGuide(target, loc) : null);
+      afterFrame(() => mounted ? _fitGuide(target, loc) : null);
     } else if (_guideFitted != null) {
       _guideFitted = null;
       _fitted = null; // 안내가 끝나면(도착·[×]) 오늘 경로 전체로 한 번 되돌린다
@@ -423,7 +423,7 @@ class _TodayScreenState extends State<TodayScreen> {
         initialZoom: 15.5,
         onMapReady: () {
           _ready = true;
-          _fit(t, items);
+          deferOnWeb(() => mounted ? _fit(t, items) : null);
         },
         onTap: (_, _) {
           if (_popup != null) setState(() => _popup = null);

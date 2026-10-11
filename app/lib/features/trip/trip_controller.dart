@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:clock/clock.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 
@@ -63,7 +64,7 @@ class TripController extends ChangeNotifier with WidgetsBindingObserver {
     required this.session,
     LocationSource? source,
     this.timing = const TripTiming(),
-  }) : source = source ?? GeolocatorSource();
+  }) : source = source ?? (kIsWeb ? const NoDeviceLocation() : GeolocatorSource());
 
   final GuryongApi api;
   final PlanController plan;

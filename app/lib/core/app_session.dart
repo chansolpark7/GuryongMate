@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'dart:io' show Platform;
 
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
@@ -23,7 +22,7 @@ enum AuthStatus { restoring, signedOut, signedIn }
 class AppSession extends ChangeNotifier implements AuthHandler {
   AppSession._(this._prefs, this._store, this._clientFactory) {
     _baseUrl = _prefs.getString(_kBaseUrl) ?? defaultBaseUrl;
-    demoLocationMode = _prefs.getBool(_kDemoLocation) ?? false;
+    demoLocationMode = demoLocationForced || (_prefs.getBool(_kDemoLocation) ?? false);
     _rebuild();
   }
 
@@ -31,7 +30,7 @@ class AppSession extends ChangeNotifier implements AuthHandler {
   static const _kDemoLocation = 'demo_location_mode';
 
   static Future<AppSession> load({http.Client Function()? clientFactory, TokenStore? tokenStore}) async {
-    final s = AppSession._(await SharedPreferences.getInstance(), tokenStore ?? SecureTokenStore(), clientFactory);
+    final s = AppSession._(await SharedPreferences.getInstance(), tokenStore ?? TokenStore.platform(), clientFactory);
     final t = await s._store.read();
     s._access = t.access;
     s._refresh = t.refresh;
@@ -44,11 +43,22 @@ class AppSession extends ChangeNotifier implements AuthHandler {
     return s;
   }
 
-  /// Android 에뮬레이터에서 호스트 PC 는 10.0.2.2 다. Windows 에서는 localhost 가 IPv6 를 먼저 시도해 느리므로 127.0.0.1.
+  /// 공개 테스트 서버 (GCP, docs/deploy/README.md).
+  static const serverUrl = 'http://34.64.209.209:8000';
+
+  /// 빌드 때 `--dart-define=API_BASE=…` (로컬 개발: http://127.0.0.1:8000, Android 에뮬레이터: http://10.0.2.2:8000).
+  static const _apiBase = String.fromEnvironment('API_BASE');
+
+  /// 기본 서버 주소: API_BASE → 웹은 페이지를 내려준 게이트웨이(같은 출처) → 그 밖은 공개 테스트 서버.
+  /// 설정 화면에서 바꾼 값(저장값)이 있으면 그것이 우선한다.
   static String get defaultBaseUrl {
-    if (!kIsWeb && Platform.isAndroid) return 'http://10.0.2.2:8000';
-    return 'http://127.0.0.1:8000';
+    if (_apiBase.isNotEmpty) return _apiBase;
+    if (kIsWeb) return Uri.base.origin;
+    return serverUrl;
   }
+
+  /// 웹은 http 주소에서 브라우저가 위치를 주지 않으므로 항상 데모 위치 모드 (관제 대시보드 /console/ 로 위치를 옮긴다).
+  static const demoLocationForced = kIsWeb;
 
   final SharedPreferences _prefs;
   final TokenStore _store;
@@ -193,6 +203,7 @@ class AppSession extends ChangeNotifier implements AuthHandler {
   }
 
   Future<void> setDemoLocationMode(bool on) async {
+    if (demoLocationForced) return;
     demoLocationMode = on;
     await _prefs.setBool(_kDemoLocation, on);
     notifyListeners();
