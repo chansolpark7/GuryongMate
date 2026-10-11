@@ -1,0 +1,5 @@
+# deploy/deploy.conf 로 복사해서 쓴다 (커밋 안 함). 인자 --vm user@host 가 있으면 그것이 우선
+VM=chansolpark7@34.64.209.209
+VM_DIR=guryongmate          # VM 홈 아래 배포 폴더
+API_PORT=8000               # 게이트웨이 공개 포트 (GCP 방화벽에서 이 포트만 연다)
+# SSH_OPTS="-i ~/.ssh/gcp_key -o ServerAliveInterval=30"

@@ -1,0 +1,76 @@
+{
+  "name": "장면 ② 도착 → 해설 카드",
+  "description": "12:30 일본인 가옥거리에 도착해 90초 머물면 arrived(단계 2) 이벤트와 해설 카드(docent)가 나온다. LLM 없이. 계획: 일본인 가옥거리 12:30 → 구룡포항(점심) 13:40 → 과메기문화관 14:47 → 북방파제 16:00 → 카페파도 16:53(차량) → 17:38 종료, 규칙 end_before 18:00 (hard). docs/app/README.md §6.1",
+  "plan_fixture": "seoyun_mom_1010",
+  "plan": {
+    "title": "엄마랑 구룡포",
+    "start_date": "2026-10-10",
+    "day_start": "12:30",
+    "day_end": "18:00",
+    "items": [
+      {
+        "place_id": "kto-1909659",
+        "stay_minutes": 60
+      },
+      {
+        "place_id": "kto-2610501",
+        "stay_minutes": 50
+      },
+      {
+        "place_id": "kto-2660046",
+        "stay_minutes": 60
+      },
+      {
+        "place_id": "poi-gr-breakwater-north",
+        "stay_minutes": 40
+      },
+      {
+        "place_id": "kto-2834344",
+        "stay_minutes": 45,
+        "travel_mode": "car"
+      }
+    ],
+    "constraints": [
+      {
+        "type": "end_before",
+        "params": {
+          "time": "18:00"
+        },
+        "hard": true,
+        "note": "18시 전에 끝내기"
+      }
+    ]
+  },
+  "start": "2026-10-10T12:25:00+09:00",
+  "scenario": "calm",
+  "steps": [
+    {
+      "expect": {
+        "type": "arrived",
+        "not": true
+      }
+    },
+    {
+      "at": "12:30",
+      "goto": "kto-1909659",
+      "stay": 3
+    },
+    {
+      "expect": {
+        "type": "arrived",
+        "level": 2,
+        "place_id": "kto-1909659",
+        "card": {
+          "kind": "docent",
+          "place_id": "kto-1909659"
+        }
+      }
+    },
+    {
+      "expect": {
+        "type": "delay",
+        "not": true
+      }
+    }
+  ]
+}

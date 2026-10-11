@@ -2,3 +2,10 @@
 infra/** text eol=lf
 *.sh text eol=lf
 Dockerfile text eol=lf
+# 서버로 보내는 배포 스크립트·설정도 LF (CRLF 면 bash 가 깨진다)
+deploy/** text eol=lf
+Dockerfile.prod text eol=lf
+docker-compose*.yml text eol=lf
+# 이미지는 줄바꿈 변환 금지 (위 infra/** 규칙보다 뒤에 둔다 — 대시보드 vendor/leaflet/images)
+*.png binary
+*.jpg binary

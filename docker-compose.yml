@@ -11,6 +11,7 @@ x-backend: &backend
   volumes:
     - ./backend:/srv
     - ./data:/data
+    - ./scripts:/scripts:ro   # 테스트가 재생 파일(scripts/trip/scenes)을 읽는다
   command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir /srv/app
   healthcheck:
     test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
@@ -22,7 +23,18 @@ x-backend-env: &backend-env
   DATABASE_URL: postgresql+psycopg://guryong:guryong@db:5432/guryongmate
   EMBEDDING_URL: http://embedding:80
   PLANNER_PLACES_BASE_URL: http://gateway   # 서비스끼리도 게이트웨이를 통해 호출
+  PLANNER_SAFETY_BASE_URL: http://gateway
+  SAFETY_PLACES_BASE_URL: http://gateway
   AGENT_API_BASE_URL: http://gateway
+  ACCOUNT_API_BASE_URL: http://gateway
+  PLANNER_ROUTING_BASE_URL: http://gateway
+  ROUTING_SAFETY_BASE_URL: http://gateway
+  ROUTING_VALHALLA_URL: http://valhalla:8002
+  TRIP_PLANNER_BASE_URL: http://gateway
+  TRIP_SAFETY_BASE_URL: http://gateway
+  TRIP_AGENT_BASE_URL: http://gateway
+  TRIP_DOCENT_BASE_URL: http://gateway
+  DOCENT_API_BASE_URL: http://gateway
 
 services:
   gateway:
@@ -31,10 +43,17 @@ services:
       - "${API_PORT:-8000}:80"
     volumes:
       - ./infra/gateway/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./infra/gateway/routes.caddy:/etc/caddy/routes.caddy:ro
+      - ./infra/gateway/console:/srv/console:ro   # 데모 관제 대시보드 /console/ (고치고 새로고침)
     depends_on:
       - places
       - planner
       - agent
+      - safety
+      - account
+      - routing
+      - trip
+      - docent
 
   db:
     image: pgvector/pgvector:pg16
@@ -95,6 +114,76 @@ services:
     environment:
       <<: *backend-env
       SERVICE: planner
+      # 안전 상황 확인 주기(초). 바뀌었을 때만 일정을 다시 점검하고 경고를 남긴다. 0 이면 끔
+      PLANNER_SAFETY_WATCH_SEC: ${PLANNER_SAFETY_WATCH_SEC:-60}
+    depends_on:
+      db:
+        condition: service_healthy
+
+  # 구룡포 안전 정보 (E-UM 디지털트윈 실측 + 기상청·해양조사원 예보). 키 없이 쓰려면 SAFETY_SOURCE=mock
+  safety:
+    <<: *backend
+    environment:
+      <<: *backend-env
+      SERVICE: safety
+    depends_on:
+      db:
+        condition: service_healthy
+
+  # 길찾기 엔진 (Valhalla, OSM 포항 영역). 내부 전용, routing 이 호출한다. services/valhalla/ 참고
+  valhalla:
+    build: ./services/valhalla
+    environment:
+      server_threads: 2
+      build_elevation: "True"   # 언덕 회피(use_hills)용 고도. 포항 영역만 받는다
+      build_admins: "False"    # 포항만 잘라서 국가·도 경계가 깨진다. 한국 기본값(우측통행)으로 충분
+      build_time_zones: "False"
+    volumes:
+      - valhalla-data:/custom_files
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8002/status"]
+      interval: 10s
+      timeout: 3s
+      retries: 90   # 첫 실행 시 OSM 다운로드·타일 빌드(수 분) 후 뜬다
+
+  # 길찾기 API (이동시간 행렬·경로·안내 문구·위험 구역 우회). valhalla 가 없으면 직선거리 근사로 응답
+  routing:
+    <<: *backend
+    environment:
+      <<: *backend-env
+      SERVICE: routing
+    depends_on:
+      valhalla:
+        condition: service_started
+
+  # 로그인 (Google·ID/비밀번호), JWT 발급. 다른 서비스는 토큰 서명만 확인한다 (app.core.auth)
+  account:
+    <<: *backend
+    environment:
+      <<: *backend-env
+      SERVICE: account
+    depends_on:
+      db:
+        condition: service_healthy
+
+  # 여행 중 상태·이벤트 (위치 -> 도착·출발·지연·위험 구역 판정, Agent 선제 턴). docs/trip/README.md
+  trip:
+    <<: *backend
+    environment:
+      <<: *backend-env
+      SERVICE: trip
+      # 백그라운드 틱(초): 지연 재판정·안전 경고 수집·선제 턴 큐 전송·자동 종료. 0 이면 끔
+      TRIP_TICK_SEC: ${TRIP_TICK_SEC:-30}
+    depends_on:
+      db:
+        condition: service_healthy
+
+  # 사용자 메모리·가이드 노트 저장, 외부 검색·페이지 읽기 대행 (LLM 없음). docs/docent/README.md
+  docent:
+    <<: *backend
+    environment:
+      <<: *backend-env
+      SERVICE: docent
     depends_on:
       db:
         condition: service_healthy
@@ -114,3 +203,5 @@ volumes:
   pgdata:
   hf-models:
     name: guryongmate-hf-models  # 이름 고정: 모든 worktree 스택이 모델 파일을 공유 (한 번만 다운로드)
+  valhalla-data:
+    name: guryongmate-valhalla   # 이름 고정: OSM·타일을 worktree 끼리 공유 (한 번만 빌드)

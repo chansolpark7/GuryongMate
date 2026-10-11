@@ -1,14 +1,25 @@
 """LLM 공급자 추상화.
 
 - OllamaProvider: Ollama 네이티브 /api/chat (요청마다 컨텍스트 길이 지정). 로컬 기본값
-- OpenAICompatProvider: OpenAI 호환 Chat Completions. ChatGPT, LM Studio, vLLM 등
+- OpenAIResponsesProvider: OpenAI Responses API. ChatGPT 기본값 (GPT-5.x 의 추론 + 도구)
+- OpenAICompatProvider: OpenAI 호환 Chat Completions. LM Studio, vLLM 등 (ChatGPT 도 추론 없이 가능)
+- ClaudeProvider (claude_llm.py): Claude API (anthropic SDK). 기록을 추가만 하는 공급자 (append_only). 운영 기본값
+- ScriptedProvider (scripted_llm.py): 각본 LLM. LLM 을 부르지 않고 각본대로 도구 호출·텍스트를 낸다 (개발·테스트·비상 데모)
 하네스는 LLMProvider 인터페이스만 알고, 어떤 모델인지는 설정(config.py)에서만 정해진다.
-다른 형식의 API(예: Responses API, Anthropic)를 붙이려면 같은 이벤트를 내는 Provider 를 하나 더 만들면 된다.
+공급자가 내장 웹 검색을 지원하면 builtin_web_search = True 이고, stream(..., web_search=n) 으로 이번 호출에서
+최대 n 번 검색하게 한다 (OpenAI Responses 의 web_search 도구, Claude 의 웹 검색 서버 도구). 검색 호출은 WebSearchCall,
+답변의 인용은 Citation 으로 낸다.
+다른 형식의 API 를 붙이려면 같은 이벤트를 내는 Provider 를 하나 더 만들면 된다.
+
+하네스 내부 메시지 형식은 OpenAI Chat Completions 식(role/content/tool_calls/tool)이다. 덧붙는 자리:
+- assistant 의 "native": {"model", "content": [공급자 원본 블록]} — 그 공급자만 같은 턴 안에서 그대로 다시 보낸다
+  (Claude 의 thinking·서버 도구 블록). 다른 공급자는 무시한다.
+- append_only 공급자에게만: 중간 {"role": "system", "content", "clear_at"?} 메시지 (docs/agent/README.md §7.1)
 """
 import json
 import uuid
 from collections.abc import AsyncIterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import Protocol
 
@@ -35,26 +46,87 @@ class ToolCall:
 
 
 @dataclass
+class WebSearchCall:
+    """공급자 내장 웹 검색을 한 번 했다 (검색 수 상한·처리 단계 표시용)."""
+    query: str
+    # 검색 결과 [{"url", "title"}] (공급자가 알려줄 때만, Claude). 본 자료로 등록해 노트 출처로 고를 수 있게 한다
+    results: list[dict] = field(default_factory=list)
+
+
+@dataclass
+class Citation:
+    """답변 문장에 붙은 웹 출처 (OpenAI url_citation)."""
+    url: str
+    title: str
+
+
+@dataclass
 class Finish:
     reason: str
+    # 토큰 사용량 {"input", "cached", "output", "reasoning"} (공급자가 알려줄 때만). input 은 cached 를 포함한 전체
+    usage: dict | None = None
+    # 이 응답의 공급자 원본 블록. 하네스가 assistant 메시지의 "native" 에 담아 같은 턴의 다음 호출에 돌려준다
+    native: dict | None = None
 
 
-LLMEvent = TextDelta | ReasoningDelta | ToolCall | Finish
+# 내장 웹 검색의 사용자 위치 (OpenAI·Claude 공통 형식)
+USER_LOCATION = {"type": "approximate", "country": "KR", "region": "Gyeongsangbuk-do", "city": "Pohang",
+                 "timezone": "Asia/Seoul"}
+
+LLMEvent = TextDelta | ReasoningDelta | ToolCall | WebSearchCall | Citation | Finish
+
+
+LLM_UNAVAILABLE = "지금은 답할 수 없어요. 잠시 후 다시 시도해 주세요."
+LLM_QUOTA = "지금은 AI 사용 한도에 걸려 답할 수 없어요. 잠시 후 다시 시도해 주세요."
 
 
 class LLMError(RuntimeError):
-    pass
+    """message: 공급자 오류 원문 (서버 로그에만 남긴다. 결제 URL 등이 들어 있을 수 있다).
+    retryable: 하네스가 같은 단계를 다시 시도해도 되는지 (SDK 가 이미 재시도한 오류·거절은 False).
+    quota: 크레딧·결제 한도 부족 (code llm_quota). user_message: 사용자에게 보일 고정 문구 (원문을 넣지 않는다)."""
+
+    def __init__(self, message: str, *, retryable: bool = True, user_message: str | None = None,
+                 quota: bool = False):
+        super().__init__(message)
+        self.retryable = retryable
+        self.code = "llm_quota" if quota else "llm_unavailable"
+        self.user_message = user_message or (LLM_QUOTA if quota else LLM_UNAVAILABLE)
+
+
+def http_error(name: str, status: int, body: str) -> LLMError:
+    """OpenAI 호환·Ollama 의 HTTP 오류. 402 나 insufficient_quota(OpenAI 크레딧 부족)면 llm_quota."""
+    return LLMError(f"{name} HTTP {status}: {body[:500]}", quota=status == 402 or "insufficient_quota" in body)
+
+
+class LLMRefusal(LLMError):
+    """모델(안전 분류기)이 요청을 거절함 (Claude stop_reason "refusal"). 같은 요청을 다시 보내도 같다."""
+
+    def __init__(self, message: str, category: str | None = None):
+        super().__init__(message, retryable=False, user_message=(
+            "죄송해요, 이 요청은 처리할 수 없어요. 여행 일정과 관련해 다르게 말씀해 주시겠어요?"))
+        self.code = "llm_refused"
+        self.category = category
 
 
 class LLMProvider(Protocol):
     name: str
 
     def stream(self, messages: list[dict], tools: list[dict]) -> AsyncIterator[LLMEvent]:
-        """텍스트·추론 조각은 오는 대로, ToolCall 은 완성된 뒤, 마지막에 Finish 를 낸다."""
+        """텍스트·추론 조각은 오는 대로, ToolCall 은 완성된 뒤, 마지막에 Finish 를 낸다.
+        builtin_web_search 인 공급자는 web_search=n 키워드도 받는다 (n 번까지 내장 웹 검색).
+
+        append_only = True 인 공급자(기록 편집 금지)는 stream(messages, tools, allow_tools=..., web_search=n) 로 불린다:
+        도구 목록(웹 검색 도구와 그 n 포함)은 턴 내내 같게 주고, 도구를 못 쓰게 할 때는 allow_tools=False 로 알린다."""
         ...
 
 
+def supports_web_search(llm: LLMProvider) -> bool:
+    return bool(getattr(llm, "builtin_web_search", False))
+
+
 class OpenAICompatProvider:
+    builtin_web_search = False
+
     def __init__(self, name: str, base_url: str, api_key: str, model: str, reasoning_effort: str | None = None,
                  temperature: float | None = None, timeout: float = 300):
         self.name = name
@@ -80,7 +152,7 @@ class OpenAICompatProvider:
             async with httpx.AsyncClient(timeout=self._timeout) as client:
                 async with client.stream("POST", self._url, json=body, headers=self._headers) as resp:
                     if resp.status_code >= 400:
-                        raise LLMError(f"{self.name} HTTP {resp.status_code}: {(await resp.aread()).decode(errors='replace')[:500]}")
+                        raise http_error(self.name, resp.status_code, (await resp.aread()).decode(errors="replace"))
                     async for line in resp.aiter_lines():
                         if not line.startswith("data:"):
                             continue
@@ -89,7 +161,7 @@ class OpenAICompatProvider:
                             break
                         chunk = json.loads(data)
                         if chunk.get("error"):
-                            raise LLMError(f"{self.name}: {chunk['error']}")
+                            raise LLMError(f"{self.name}: {chunk['error']}", quota="insufficient_quota" in str(chunk["error"]))
                         for choice in chunk.get("choices", []):
                             delta = choice.get("delta") or {}
                             if delta.get("content"):
@@ -117,6 +189,8 @@ class OpenAICompatProvider:
 class OllamaProvider:
     """Ollama 네이티브 /api/chat. OpenAI 호환 엔드포인트와 달리 요청마다 컨텍스트 길이(num_ctx)를 지정할 수 있다.
     (Ollama 기본 컨텍스트는 4096 토큰이라 시스템 프롬프트·도구 결과가 잘려 도구를 무시하게 된다)"""
+
+    builtin_web_search = False
 
     def __init__(self, name: str, base_url: str, model: str, num_ctx: int, think: bool,
                  temperature: float | None = None, timeout: float = 300):
@@ -151,6 +225,7 @@ class OllamaProvider:
         return out
 
     async def stream(self, messages: list[dict], tools: list[dict]) -> AsyncIterator[LLMEvent]:
+        usage = None
         options: dict = {"num_ctx": self._num_ctx}
         if self._temperature is not None:
             options["temperature"] = self._temperature
@@ -165,13 +240,13 @@ class OllamaProvider:
             async with httpx.AsyncClient(timeout=self._timeout) as client:
                 async with client.stream("POST", self._url, json=body) as resp:
                     if resp.status_code >= 400:
-                        raise LLMError(f"{self.name} HTTP {resp.status_code}: {(await resp.aread()).decode(errors='replace')[:500]}")
+                        raise http_error(self.name, resp.status_code, (await resp.aread()).decode(errors="replace"))
                     async for line in resp.aiter_lines():
                         if not line.strip():
                             continue
                         chunk = json.loads(line)
                         if chunk.get("error"):
-                            raise LLMError(f"{self.name}: {chunk['error']}")
+                            raise LLMError(f"{self.name}: {chunk['error']}", quota="insufficient_quota" in str(chunk["error"]))
                         msg = chunk.get("message") or {}
                         if msg.get("thinking"):
                             yield ReasoningDelta(msg["thinking"])
@@ -183,17 +258,124 @@ class OllamaProvider:
                                                   arguments=json.dumps(fn.get("arguments") or {}, ensure_ascii=False)))
                         if chunk.get("done"):
                             finish = chunk.get("done_reason") or finish
+                            usage = {"input": chunk.get("prompt_eval_count", 0), "cached": 0,
+                                     "output": chunk.get("eval_count", 0), "reasoning": 0}
         except httpx.HTTPError as e:
             raise LLMError(f"{self.name} 연결 실패: {e!r}") from e
         for c in calls:
             yield c
-        yield Finish(finish)
+        yield Finish(finish, usage)
+
+
+class OpenAIResponsesProvider:
+    """OpenAI Responses API (/v1/responses). GPT-5.x 는 추론(reasoning)과 도구를 함께 쓰려면 이 API 가 필요하다.
+    하네스는 Chat Completions 형식 메시지를 쓰므로 여기서 Responses 입력 형식으로 바꾼다.
+    web_search=n 이면 내장 web_search 도구를 켜고 max_tool_calls=n 으로 검색 수를 묶는다 (함수 도구는 세지 않는다)."""
+
+    builtin_web_search = True
+
+    def __init__(self, name: str, base_url: str, api_key: str, model: str, reasoning_effort: str | None = None,
+                 timeout: float = 300, transport: httpx.AsyncBaseTransport | None = None):
+        self.name = name
+        self.model = model
+        self._url = base_url.rstrip("/") + "/responses"
+        self._headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+        self._reasoning_effort = reasoning_effort
+        self._timeout = timeout
+        self._transport = transport
+
+    @staticmethod
+    def _to_input(messages: list[dict]) -> list[dict]:
+        items: list[dict] = []
+        for m in messages:
+            if m["role"] == "tool":
+                items.append({"type": "function_call_output", "call_id": m["tool_call_id"], "output": m["content"]})
+                continue
+            if m.get("content"):
+                items.append({"role": m["role"], "content": m["content"]})
+            for c in m.get("tool_calls") or []:
+                items.append({"type": "function_call", "call_id": c["id"], "name": c["function"]["name"],
+                              "arguments": c["function"]["arguments"] or "{}"})
+        return items
+
+    @staticmethod
+    def _to_tools(tools: list[dict]) -> list[dict]:
+        return [{"type": "function", "name": t["function"]["name"], "description": t["function"]["description"],
+                 "parameters": t["function"]["parameters"], "strict": False} for t in tools]
+
+    @staticmethod
+    def web_search_tool() -> dict:
+        return {"type": "web_search", "search_context_size": settings.web_search_context,
+                "user_location": dict(USER_LOCATION)}
+
+    async def stream(self, messages: list[dict], tools: list[dict], web_search: int = 0) -> AsyncIterator[LLMEvent]:
+        usage = None
+        body: dict = {"model": self.model, "input": self._to_input(messages), "stream": True, "store": False}
+        if tools:
+            body["tools"] = self._to_tools(tools)
+        if web_search > 0:
+            body["tools"] = [*body.get("tools", []), self.web_search_tool()]
+            body["max_tool_calls"] = web_search
+        if self._reasoning_effort:
+            body["reasoning"] = {"effort": self._reasoning_effort, "summary": "auto"}
+
+        calls: list[ToolCall] = []
+        finish = "stop"
+        try:
+            async with httpx.AsyncClient(timeout=self._timeout, transport=self._transport) as client:
+                async with client.stream("POST", self._url, json=body, headers=self._headers) as resp:
+                    if resp.status_code >= 400:
+                        raise http_error(self.name, resp.status_code, (await resp.aread()).decode(errors="replace"))
+                    async for line in resp.aiter_lines():
+                        if not line.startswith("data:"):
+                            continue
+                        data = line[5:].strip()
+                        if not data or data == "[DONE]":
+                            continue
+                        ev = json.loads(data)
+                        kind = ev.get("type", "")
+                        if kind == "response.output_text.delta":
+                            yield TextDelta(ev["delta"])
+                        elif kind == "response.reasoning_summary_text.delta":
+                            yield ReasoningDelta(ev["delta"])
+                        elif kind == "response.output_item.done" and ev.get("item", {}).get("type") == "function_call":
+                            item = ev["item"]
+                            calls.append(ToolCall(id=item.get("call_id") or f"call_{uuid.uuid4().hex[:8]}",
+                                                  name=item.get("name", ""), arguments=item.get("arguments") or "{}"))
+                        elif kind == "response.output_item.done" and ev.get("item", {}).get("type") == "web_search_call":
+                            action = ev["item"].get("action") or {}
+                            yield WebSearchCall(action.get("query") or "")
+                        elif kind == "response.output_item.done" and ev.get("item", {}).get("type") == "message":
+                            for part in ev["item"].get("content") or []:
+                                for a in part.get("annotations") or []:
+                                    if a.get("type") == "url_citation" and a.get("url"):
+                                        yield Citation(a["url"], a.get("title") or "")
+                        elif kind in ("response.completed", "response.incomplete"):
+                            if kind == "response.incomplete":
+                                finish = "length"
+                            u = (ev.get("response") or {}).get("usage") or {}
+                            if u:
+                                usage = {"input": u.get("input_tokens", 0),
+                                         "cached": (u.get("input_tokens_details") or {}).get("cached_tokens", 0),
+                                         "output": u.get("output_tokens", 0),
+                                         "reasoning": (u.get("output_tokens_details") or {}).get("reasoning_tokens", 0)}
+                        elif kind in ("error", "response.failed"):
+                            err = ev.get("error") or ev.get("response", {}).get("error")
+                            raise LLMError(f"{self.name}: {err}", quota="insufficient_quota" in str(err))
+        except httpx.HTTPError as e:
+            raise LLMError(f"{self.name} 연결 실패: {e!r}") from e
+        for c in calls:
+            yield c
+        yield Finish(finish, usage)
 
 
 @lru_cache
 def get_llm() -> LLMProvider:
     """FastAPI 의존성. 테스트에서는 가짜 Provider 로 바꾼다."""
     s = settings
+    if s.provider == "openai" and s.openai_api == "responses":
+        return OpenAIResponsesProvider(f"openai:{s.openai_model}", s.openai_base_url, s.openai_api_key, s.openai_model,
+                                       s.openai_reasoning_effort, s.request_timeout_sec)
     if s.provider == "openai":
         return OpenAICompatProvider(f"openai:{s.openai_model}", s.openai_base_url, s.openai_api_key, s.openai_model,
                                     s.openai_reasoning_effort, s.temperature, s.request_timeout_sec)
@@ -203,4 +385,13 @@ def get_llm() -> LLMProvider:
     if s.provider == "local":
         return OpenAICompatProvider(f"local:{s.local_model}", s.local_base_url, s.local_api_key, s.local_model,
                                     None, s.temperature, s.request_timeout_sec)
+    if s.provider == "claude":
+        from app.agent.claude_llm import ClaudeProvider  # anthropic SDK 는 이 공급자를 쓸 때만 읽는다
+
+        return ClaudeProvider(s.claude_model, api_key=s.claude_api_key or None, effort=s.claude_effort,
+                              max_tokens=s.claude_max_tokens, thinking_mismatch=s.claude_thinking_mismatch, timeout=s.request_timeout_sec)
+    if s.provider == "scripted":
+        from app.agent.scripted_llm import ScriptedProvider
+
+        return ScriptedProvider(s.scripted_dir or None, delay_ms=s.scripted_delay_ms, latency_ms=s.scripted_latency_ms)
     raise ValueError(f"알 수 없는 AGENT_PROVIDER: {s.provider}")

@@ -6,7 +6,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class AgentSettings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_prefix="AGENT_", extra="ignore")
 
-    provider: str = Field("local", description="local | openai")
+    provider: str = Field("claude", description="claude (기본, 운영: Claude API Haiku 5.5) | openai (gpt-5.4-mini) | "
+                                                "local (Ollama 등) | scripted (각본 LLM: 개발·테스트·비상 데모, LLM 호출 없음)")
 
     # 로컬 LLM. 컨테이너에서 호스트의 Ollama 로 접속.
     #   local_api=ollama : Ollama 네이티브 API (컨텍스트 길이 지정 가능, 권장)
@@ -19,18 +20,63 @@ class AgentSettings(BaseSettings):
     local_think: bool = False  # 추론(thinking) 사용. 켜면 도구 사용이 신중해지지만 느려진다
 
     # ChatGPT (OpenAI API)
+    openai_api: str = Field("responses", description="responses (GPT-5.x 추론+도구) | chat (Chat Completions)")
     openai_base_url: str = "https://api.openai.com/v1"
-    openai_model: str = "gpt-5-mini"
+    openai_model: str = "gpt-5.4-mini"
     openai_api_key: str = Field("", validation_alias=AliasChoices("AGENT_OPENAI_API_KEY", "OPENAI_API_KEY", "LLM_API_KEY"))
     openai_reasoning_effort: str | None = "low"
 
+    # Claude API (anthropic SDK). docs/agent/README.md §7.1
+    claude_api_key: str = Field("", validation_alias=AliasChoices("AGENT_CLAUDE_API_KEY", "ANTHROPIC_API_KEY"))
+    claude_model: str = Field("claude-haiku-5-5", description="claude-haiku-5-5 (기본, 2026-10-09 실측 비교 §7.1) | claude-sonnet-5-5")
+    # 한 턴이 도구를 여러 번 쓰는 작업(찾기 -> 초안 -> 검토 -> 수정)이라 두 모델 모두 medium 에서 시작한다.
+    # (Sonnet 5.5: 기본 high, 도구를 여러 번 쓰는 작업은 medium 권장 / Haiku 5.5: 기본·권장 모두 medium)
+    claude_effort: str = Field("medium", description="low | medium | high | xhigh | max (항상 명시적으로 보낸다)")
+    claude_max_tokens: int = Field(64000, description="응답 하나의 최대 토큰 (thinking 포함). 스트리밍이라 넉넉히")
+    claude_thinking_mismatch: str = Field("drop_block", description="기록이 바뀌어 thinking 블록이 무효일 때: "
+                                                                   "drop_block (버리고 계속, 로그) | error (400)")
+
+    # 각본 LLM (provider=scripted, docs/agent/README.md §7.2). 실제 LLM 없이 각본 파일대로 답한다
+    scripted_dir: str = Field("", description="각본 파일(*.json) 디렉터리. 비우면 backend/app/agent/scripts")
+    scripted_delay_ms: float = Field(30, description="텍스트·추론 조각 사이 지연(ms). 0 이면 바로")
+    scripted_latency_ms: float = Field(300, description="LLM 호출마다 첫 조각 전 지연(ms)")
+
     temperature: float | None = None
     request_timeout_sec: float = 300
-    max_steps: int = Field(8, description="한 턴에서 LLM 호출(도구 사용 반복) 최대 횟수")
+    max_steps: int = Field(20, description="한 턴에서 LLM 호출(도구 사용 반복) 최대 횟수")
+    review_rounds: int = Field(2, description="일정을 바꾼 턴에서 답을 끝내려 할 때 검토 문제가 남아 있으면 다시 고치게 하는 최대 횟수. "
+                                              "0 이면 review_plan 도구와 검토 관문을 끈다")
     history_messages: int = Field(40, description="LLM 에 넘길 최근 대화 메시지 수")
 
     # 같은 컨테이너의 API (planner, places). 모듈 간 규칙상 HTTP 로만 호출한다.
     api_base_url: str = "http://127.0.0.1:8000"
+
+    # 여행 중(동행 모드) 판단과 시계 (docs/agent/README.md §11, docs/trip/README.md §5)
+    clock: str = Field("safety", description="safety (GET /safety/sim 가상 시각을 따름) | system")
+    clock_cache_sec: float = 5
+    trip_timeout_sec: float = Field(3, description="매 턴 trip 상태 조회 제한 시간. 넘기면 계획 모드로")
+    memory_timeout_sec: float = Field(3, description="매 턴 docent 메모리 요약 조회 제한 시간. 넘기면 메모리 없이")
+
+    # 외부 웹 검색 (docs/docent/README.md §2.1). 공급자가 내장 검색을 지원하면(OpenAI Responses) 그것을,
+    # 아니면 docent /docent/search·/docent/page 를 함수 도구로 쓴다. 비용을 막기 위해 호출 수 상한을 둔다
+    # (내장 검색은 검색 호출, 함수 도구는 web_search·read_page 호출을 합쳐서 센다)
+    web_search_per_place: int = Field(3, description="가이드 준비 작업에서 장소 하나당 웹 검색 상한. 0 이면 웹 검색 안 함")
+    web_search_per_turn: int = Field(2, description="동행 모드 대화 한 턴의 웹 검색 상한. 0 이면 웹 검색 안 함")
+    web_search_context: str = Field("low", description="OpenAI 내장 검색의 search_context_size (low | medium | high)")
+
+    # 사용자당 호출 수 제한 (공개 서버의 LLM 비용 보호, app/agent/limits.py, docs/deploy/README.md §3.3). 0 이면 제한 없음
+    limit_chat_hour: int = Field(0, description="대화 턴(다시 제안 포함) 1시간 상한")
+    limit_chat_day: int = Field(0, description="대화 턴 하루(24시간) 상한")
+    limit_event_hour: int = Field(0, description="선제 턴 1시간 상한")
+    limit_event_day: int = Field(0, description="선제 턴 하루 상한")
+    limit_guide_hour: int = Field(0, description="가이드 준비 작업 1시간 상한 (작업 하나 = 계획의 장소 여러 곳)")
+    limit_guide_day: int = Field(0, description="가이드 준비 작업 하루 상한")
+
+    # 가이드 준비 작업 (docs/docent/README.md §3.3)
+    guide_max_steps: int = Field(6, description="장소 하나의 LLM 호출 최대 횟수 (마지막 호출은 도구 없이 노트 JSON 강제)")
+    guide_passages: int = Field(6, description="장소마다 미리 찾아 주는 근거 조각 수")
+    guide_auto: bool = Field(True, description="자동 준비 (docs/docent/README.md §3.2): 제안 승인·추천 추가 뒤, 여행 시작·도착 때(trip) "
+                                               "노트가 없는 장소를 백그라운드로 준비. 끄면 [가이드 준비] 버튼으로만")
 
 
 settings = AgentSettings()

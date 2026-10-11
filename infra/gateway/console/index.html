@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>구룡메이트 관제</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='6' fill='%232F6BFF'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="vendor/leaflet/leaflet.css">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- 피할 구역 빗금 무늬 (style.css .avoid-zone) -->
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <defs>
+      <pattern id="gm-hatch" width="9" height="9" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+        <rect width="9" height="9" fill="rgba(229,72,77,0.10)"></rect>
+        <line x1="0" y1="0" x2="0" y2="9" stroke="rgba(229,72,77,0.55)" stroke-width="3"></line>
+      </pattern>
+    </defs>
+  </svg>
+
+  <!-- 상단 바: 상태만 한 줄 (docs/console/redesign.md §2.1) -->
+  <header id="top">
+    <div class="brand"><i class="logo" aria-hidden="true"></i><span>구룡메이트 관제</span></div>
+    <div class="status">
+      <span class="clock" id="clock" title="지금 가상 시각"><span id="clock-text">-</span><span class="tag" id="clock-tag" hidden>가상</span></span>
+      <span class="pill" id="weather-chip">-</span>
+      <button class="pill trip" id="trip-chip" aria-haspopup="dialog">-</button>
+    </div>
+    <button class="user" id="btn-user" aria-haspopup="menu" title="계정·설정"><span class="avatar" aria-hidden="true">👤</span><span id="user-label">-</span><span aria-hidden="true">▾</span></button>
+  </header>
+  <div id="alertbar" hidden></div>
+
+  <main id="main">
+    <div id="map-wrap">
+      <div id="map" aria-label="구룡포 지도"></div>
+      <div id="toasts" aria-live="polite"></div>
+      <div id="motion-card" class="float" hidden></div>
+      <div id="cta" hidden></div>
+      <section id="weather" class="float" aria-label="날씨"></section>
+    </div>
+
+    <aside id="feed" aria-label="지금 일어난 일">
+      <button class="feed-rail" id="feed-rail" title="지금 일어난 일 펼치기" aria-expanded="false">
+        <span aria-hidden="true">🔔</span><span class="badge" id="feed-badge" hidden></span>
+      </button>
+      <div class="feed-body">
+        <div class="feed-head">
+          <h2>지금 일어난 일</h2>
+          <button class="icon-btn" id="feed-close" title="접기" aria-label="접기">›</button>
+        </div>
+        <div class="feed-guide" id="feed-guide" role="status" hidden></div>
+        <ul id="feed-list"></ul>
+        <button class="more" id="feed-more" hidden>더 보기</button>
+      </div>
+    </aside>
+  </main>
+
+  <!-- 하루 타임라인: 시간과 날씨를 한 곳에서 (§2.3) -->
+  <section id="day" aria-label="하루 타임라인"></section>
+
+  <dialog id="dlg-login">
+    <form method="dialog" id="login-form">
+      <h2>로그인</h2>
+      <p class="hint">앱과 같은 데모 사용자로 로그인해요 (여행·위치·이벤트는 사용자별).</p>
+      <label>아이디 <input name="login_id" id="login-id" autocomplete="username" value="seoyun-demo" required></label>
+      <label>비밀번호 <input name="password" id="login-pw" type="password" autocomplete="current-password" required></label>
+      <p class="error" id="login-error" hidden></p>
+      <div class="row end">
+        <button type="button" class="link" id="btn-dev-user" title="AUTH_REQUIRED=false 개발 스택 전용">로그인 없이 (개발: X-User-Id)</button>
+        <button type="submit" class="primary" id="btn-login">로그인</button>
+      </div>
+      <p class="hint">서버: <span id="login-server"></span> · <button type="button" class="link" id="btn-login-settings">서버·관리 토큰 설정</button></p>
+    </form>
+  </dialog>
+
+  <dialog id="dlg-settings">
+    <form method="dialog" id="settings-form">
+      <h2>설정</h2>
+      <label>서버 주소 <input id="set-base" placeholder="비우면 이 페이지의 출처 (같은 게이트웨이)" autocomplete="off"></label>
+      <p class="hint">다른 출처를 넣으면 CORS 때문에 막힐 수 있어요 — 보통은 그 서버의 /console/ 을 엽니다.</p>
+      <label>관리 토큰 (운영 서버에서 시각·날씨·즉시 점검·틱을 바꿀 때)
+        <input id="set-admin" type="password" autocomplete="off" placeholder="deploy/admin_token.sh 로 확인"></label>
+      <p class="hint">이 브라우저의 localStorage 에만 저장되고 모든 요청에 X-Admin-Token 헤더로 붙어요. 개발 스택은 토큰 없이 열려 있어요.
+        <span id="admin-state"></span></p>
+      <div class="row end">
+        <button type="button" id="btn-admin-clear">토큰 지우기</button>
+        <button type="submit" value="close">닫기</button>
+        <button type="submit" class="primary" value="save">저장</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="dlg-reset" aria-labelledby="reset-title"></dialog>
+
+  <dialog id="dlg-dev" class="drawer" aria-label="개발자 정보"></dialog>
+
+  <script src="vendor/leaflet/leaflet.js"></script>
+  <script type="module" src="app.js"></script>
+</body>
+</html>

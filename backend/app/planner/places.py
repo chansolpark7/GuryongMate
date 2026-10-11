@@ -1,6 +1,7 @@
 """places 모듈 HTTP API 로 장소 정보를 조회한다 (모듈 간 규칙: 내부 코드 import 금지)."""
 import time as _time
 from typing import Protocol
+from urllib.parse import quote
 
 import httpx
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -14,6 +15,16 @@ class PlannerSettings(BaseSettings):
     # 같은 컨테이너의 API 서버. 컨테이너 안에서는 항상 8000 번 포트.
     places_base_url: str = "http://127.0.0.1:8000"
     places_cache_ttl_sec: float = 300
+
+    # 안전 점검 (safety 서비스 HTTP API). docs/planner/README.md "안전 점검"
+    safety_base_url: str = "http://127.0.0.1:8000"
+    safety_timeout_sec: float = 15
+    safety_watch_sec: float = 0  # 상황 확인 주기(초). 0 이면 주기 점검을 하지 않는다 (compose 의 planner 서비스만 켠다)
+    safety_recheck_min: float = 10  # 상황이 그대로여도 이 주기마다 다시 점검 (일정 수정, 방문 3시간 전 실측 적용 대비)
+
+    # 지금 시각 (docs/trip/README.md §5). safety: safety 의 가상 시각을 따른다 (실패하면 시스템 시각) / system: 시스템 시각
+    clock: str = "safety"
+    clock_cache_sec: float = 5
 
 
 settings = PlannerSettings()
@@ -40,7 +51,7 @@ class HttpPlaceLookup:
         if hit and _time.monotonic() - hit[0] < self._ttl:
             return hit[1]
         try:
-            resp = self._client.get(f"/places/{place_id}")
+            resp = self._client.get(f"/places/{quote(place_id, safe='')}")
         except httpx.HTTPError as e:
             raise PlacesUnavailable(str(e)) from e
         if resp.status_code == 404:

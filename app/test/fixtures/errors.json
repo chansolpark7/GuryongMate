@@ -1,0 +1,276 @@
+{
+ "flow": "공통",
+ "title": "오류 예시 (LLM 오류 SSE, 503 서비스 장애, 404·422)",
+ "screens": "05·States_Feedback",
+ "recorded_at": "2026-10-09T23:38:56+09:00",
+ "backend": {
+  "agent_provider": "scripted:scripts",
+  "safety_source": "mock",
+  "git": "6a7d484"
+ },
+ "exchanges": [
+  {
+   "name": "chat_llm_unavailable",
+   "method": "POST",
+   "route": "/agent/sessions/{session_id}/chat",
+   "path": "/agent/sessions/d9dc1c8bfdbd4c63bbfe6516b8570de3/chat",
+   "query": {},
+   "body": {
+    "message": "[테스트] LLM 오류"
+   },
+   "status": 200,
+   "elapsed_ms": 432,
+   "content_type": "text/event-stream",
+   "sse": [
+    {
+     "t_ms": 5,
+     "event": "start",
+     "data": {
+      "session_id": "d9dc1c8bfdbd4c63bbfe6516b8570de3"
+     }
+    },
+    {
+     "t_ms": 432,
+     "event": "error",
+     "data": {
+      "code": "llm_unavailable",
+      "message": "지금은 답할 수 없어요. 잠시 후 다시 시도해 주세요."
+     }
+    }
+   ]
+  },
+  {
+   "name": "chat_no_script",
+   "method": "POST",
+   "route": "/agent/sessions/{session_id}/chat",
+   "path": "/agent/sessions/d9dc1c8bfdbd4c63bbfe6516b8570de3/chat",
+   "query": {},
+   "body": {
+    "message": "오늘 저녁 메뉴 골라줘"
+   },
+   "status": 200,
+   "elapsed_ms": 858,
+   "content_type": "text/event-stream",
+   "sse": [
+    {
+     "t_ms": 8,
+     "event": "start",
+     "data": {
+      "session_id": "d9dc1c8bfdbd4c63bbfe6516b8570de3"
+     }
+    },
+    {
+     "t_ms": 448,
+     "event": "text",
+     "data": {
+      "delta": "지금은 데모"
+     }
+    },
+    {
+     "t_ms": 478,
+     "event": "text",
+     "data": {
+      "delta": "용 각본 모"
+     }
+    },
+    {
+     "t_ms": 510,
+     "event": "text",
+     "data": {
+      "delta": "드라 이 요"
+     }
+    },
+    {
+     "t_ms": 541,
+     "event": "text",
+     "data": {
+      "delta": "청에는 답할"
+     }
+    },
+    {
+     "t_ms": 572,
+     "event": "text",
+     "data": {
+      "delta": " 수 없어요"
+     }
+    },
+    {
+     "t_ms": 604,
+     "event": "text",
+     "data": {
+      "delta": ". \"엄마랑"
+     }
+    },
+    {
+     "t_ms": 635,
+     "event": "text",
+     "data": {
+      "delta": " 구룡포 일"
+     }
+    },
+    {
+     "t_ms": 666,
+     "event": "text",
+     "data": {
+      "delta": "정 짜줘\"나"
+     }
+    },
+    {
+     "t_ms": 697,
+     "event": "text",
+     "data": {
+      "delta": " \"갈 만한"
+     }
+    },
+    {
+     "t_ms": 728,
+     "event": "text",
+     "data": {
+      "delta": " 카페 추천"
+     }
+    },
+    {
+     "t_ms": 760,
+     "event": "text",
+     "data": {
+      "delta": "해줘\"처럼 "
+     }
+    },
+    {
+     "t_ms": 791,
+     "event": "text",
+     "data": {
+      "delta": "데모 문장으"
+     }
+    },
+    {
+     "t_ms": 822,
+     "event": "text",
+     "data": {
+      "delta": "로 말해 주"
+     }
+    },
+    {
+     "t_ms": 853,
+     "event": "text",
+     "data": {
+      "delta": "세요."
+     }
+    },
+    {
+     "t_ms": 858,
+     "event": "done",
+     "data": {
+      "text": "지금은 데모용 각본 모드라 이 요청에는 답할 수 없어요. \"엄마랑 구룡포 일정 짜줘\"나 \"갈 만한 카페 추천해줘\"처럼 데모 문장으로 말해 주세요.",
+      "cards": [],
+      "usage": {
+       "input": 0,
+       "cached": 0,
+       "output": 0,
+       "reasoning": 0,
+       "calls": 1
+      },
+      "message_id": 1131,
+      "mode": "plan"
+     }
+    }
+   ]
+  },
+  {
+   "name": "chat_empty_message",
+   "method": "POST",
+   "route": "/agent/sessions/{session_id}/chat",
+   "path": "/agent/sessions/d9dc1c8bfdbd4c63bbfe6516b8570de3/chat",
+   "query": {},
+   "body": {
+    "message": "  "
+   },
+   "status": 422,
+   "elapsed_ms": 3,
+   "response": {
+    "detail": {
+     "code": "invalid_request",
+     "message": "요청 형식이 잘못됐습니다: body.message — String should match pattern '\\S'",
+     "errors": [
+      {
+       "loc": [
+        "body",
+        "message"
+       ],
+       "msg": "String should match pattern '\\S'"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "name": "session_not_found",
+   "method": "GET",
+   "route": "/agent/sessions/{session_id}",
+   "path": "/agent/sessions/00000000000000000000000000000000",
+   "query": {},
+   "body": null,
+   "status": 404,
+   "elapsed_ms": 4,
+   "response": {
+    "detail": {
+     "code": "session_not_found",
+     "message": "세션 00000000000000000000000000000000 을(를) 찾을 수 없습니다."
+    }
+   }
+  },
+  {
+   "name": "plan_not_found",
+   "method": "POST",
+   "route": "/agent/sessions",
+   "path": "/agent/sessions",
+   "query": {},
+   "body": {
+    "plan_id": 999999
+   },
+   "status": 404,
+   "elapsed_ms": 11,
+   "response": {
+    "detail": {
+     "code": "plan_not_found",
+     "message": "계획 999999 을(를) 찾을 수 없습니다."
+    }
+   }
+  },
+  {
+   "name": "planner_safety_unavailable",
+   "method": "GET",
+   "route": "/planner/plans/{plan_id}/safety",
+   "path": "/planner/plans/246/safety",
+   "query": {},
+   "body": null,
+   "status": 503,
+   "elapsed_ms": 3103,
+   "response": {
+    "detail": {
+     "code": "safety_unavailable",
+     "message": "안전 정보 서비스에 접근할 수 없습니다. 잠시 후 다시 시도하세요.",
+     "reason": "/safety/assess -> 502 "
+    }
+   }
+  },
+  {
+   "name": "agent_upstream_unavailable",
+   "method": "POST",
+   "route": "/agent/sessions/{session_id}/proposals/{proposal_id}/accept",
+   "path": "/agent/sessions/d9dc1c8bfdbd4c63bbfe6516b8570de3/proposals/124/accept",
+   "query": {},
+   "body": {
+    "mode": "auto"
+   },
+   "status": 503,
+   "elapsed_ms": 3107,
+   "response": {
+    "detail": {
+     "code": "upstream_unavailable",
+     "message": "서비스가 응답하지 않습니다 (HTTP 502)."
+    }
+   }
+  }
+ ]
+}

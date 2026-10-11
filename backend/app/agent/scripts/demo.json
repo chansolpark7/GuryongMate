@@ -1,0 +1,155 @@
+{
+ "description": "데모 4장면 각본 (docs/app/README.md §6.1 데모 데이터: 엄마랑 구룡포 10/10 12:30~18:00, end_before 18:00). docs/agent/README.md §7.2",
+ "fallback": "지금은 데모용 각본 모드라 이 요청에는 답할 수 없어요. \"엄마랑 구룡포 일정 짜줘\"나 \"갈 만한 카페 추천해줘\"처럼 데모 문장으로 말해 주세요.",
+ "turns": [
+  {
+   "id": "error_llm_unavailable",
+   "when": {"user": "^\\[테스트\\] LLM 오류"},
+   "error": "llm_unavailable"
+  },
+  {
+   "id": "scene1_plan",
+   "when": {"user": "(엄마|어머니).*(일정|코스).*(짜|만들)"},
+   "steps": [
+    {"thinking": "어머니와 함께하는 하루 일정이다. 동행 정보는 이번 여행에만 해당하니 plan 범위로 기억하고, 가옥거리·구룡포항·과메기문화관·북방파제·바다 카페를 걷기 편한 순서로 잇는다.",
+     "tools": [{"name": "remember", "args": {"category": "companion", "text": "어머니와 동행", "scope": "plan"}}]},
+    {"tools": [
+     {"name": "search_places", "args": {"query": "구룡포 일본인 가옥거리", "limit": 3}},
+     {"name": "search_places", "args": {"query": "구룡포항", "limit": 3}},
+     {"name": "search_places", "args": {"query": "과메기문화관", "limit": 3}},
+     {"name": "search_places", "args": {"query": "북방파제", "limit": 3}},
+     {"name": "search_places", "args": {"query": "바다가 보이는 카페", "area": "구룡포읍", "limit": 5}}]},
+    {"tools": [{"name": "add_rule", "args": {"type": "end_before", "time": "18:00", "hard": true, "note": "18시 전에 끝내기"}}]},
+    {"tools": [
+     {"name": "add_item", "args": {"place_id": "kto-1909659", "day": 1, "stay_minutes": 60, "memo": "골목과 계단을 천천히"}},
+     {"name": "add_item", "args": {"place_id": "kto-2610501", "day": 1, "stay_minutes": 50, "memo": "점심 (항구 앞 식당)"}},
+     {"name": "add_item", "args": {"place_id": "kto-2660046", "day": 1, "stay_minutes": 60}},
+     {"name": "add_item", "args": {"place_id": "poi-gr-breakwater-north", "day": 1, "stay_minutes": 40}},
+     {"name": "add_item", "args": {"place_id": "kto-2834344", "day": 1, "stay_minutes": 45}}]},
+    {"tools": [{"name": "review_plan"}]},
+    {"text": "어머니와 걷기 편한 순서로 **다섯 곳**을 넣었어요.\n\n- **일본인 가옥거리**에서 12:30에 시작해요\n- **구룡포항**에서 점심을 먹어요\n- **과메기문화관**과 **북방파제**를 거쳐 **카페파도**에서 **{{end:1}}**에 마쳐요\n\n18시 전에 끝나도록 조건도 걸어 두었어요."}
+   ],
+   "on_review": [
+    {"thinking": "북방파제에서 카페파도까지 걸어가면 너무 길다. 그 구간만 차량으로 바꾼다.",
+     "tools": [{"name": "update_item", "args": {"item_id": "$item:kto-2834344", "travel_mode": "car"}}]},
+    {"tools": [{"name": "review_plan"}]},
+    {"text": "어머니와 걷기 편한 순서로 **다섯 곳**을 넣었어요.\n\n- **일본인 가옥거리**에서 12:30에 시작해요\n- **구룡포항**에서 점심을 먹어요\n- **과메기문화관**과 **북방파제**를 거쳐 **카페파도**에서 **{{end:1}}**에 마쳐요\n\n북방파제에서 카페까지는 멀어서 **차로 이동**하게 했고, 18시 전에 끝나도록 조건도 걸어 두었어요."}
+   ]
+  },
+  {
+   "id": "scene1_recommend_cafe",
+   "when": {"user": "카페.*추천|추천.*카페"},
+   "steps": [
+    {"tools": [{"name": "search_places", "args": {"query": "바다가 보이는 카페", "area": "구룡포읍", "limit": 5}}]},
+    {"tools": [{"name": "recommend_places", "args": {"title": "구룡포에서 쉬어 가기 좋은 카페", "candidates": [
+     {"place_id": "kto-2834344", "day": 1, "time_hint": "16:50", "stay_minutes": 45, "reason": "구룡포 앞바다가 보이는 바닷가 카페, 일정 마지막에 쉬기 좋아요"},
+     {"place_id": "kto-2781555", "day": 1, "time_hint": "13:30", "stay_minutes": 40, "reason": "가옥거리 바로 옆이라 걷다가 잠깐 쉬기 좋아요"}]}}]},
+    {"text": "구룡포에서 쉬어 가기 좋은 카페 두 곳을 골랐어요.\n\n- 바다를 보고 싶으면 **카페파도**\n- 가옥거리를 걷다 쉬려면 가까운 **까멜리아인구룡포**\n\n마음에 드는 곳을 추가해 보세요."}
+   ]
+  },
+  {
+   "id": "f2_longer_lunch",
+   "when": {"user": "점심.*(늘려|길게|1시간)"},
+   "steps": [
+    {"tools": [{"name": "update_item", "args": {"item_id": "$item:kto-2610501", "stay_minutes": 60}}]},
+    {"tools": [{"name": "review_plan"}]},
+    {"text": "**구룡포항** 점심을 **1시간**으로 늘렸어요. 뒤 일정이 10분씩 밀려 **{{end:1}}**에 끝나요."}
+   ]
+  },
+  {
+   "id": "f2_repropose_lunch",
+   "when": {"user": "^이전 제안을 현재 일정에 맞춰 다시 만들어줘", "system": "점심.*(늘려|길게|1시간)"},
+   "steps": [
+    {"tools": [{"name": "view_plan"}]},
+    {"tools": [{"name": "update_item", "args": {"item_id": "$item:kto-2610501", "stay_minutes": 60}}]},
+    {"tools": [{"name": "review_plan"}]},
+    {"text": "바뀐 일정을 기준으로 다시 만들었어요. **구룡포항** 점심을 **1시간**으로 늘리면 **{{end:1}}**에 끝나요."}
+   ]
+  },
+  {
+   "id": "repropose_default",
+   "when": {"user": "^이전 제안을 현재 일정에 맞춰 다시 만들어줘"},
+   "steps": [
+    {"tools": [{"name": "view_plan"}]},
+    {"text": "지금 일정을 다시 확인했어요. 원래 제안의 문제는 지금 일정에는 없어서 **바꿀 것이 없어요**."}
+   ]
+  },
+  {
+   "id": "scene2_house_built",
+   "when": {"user": "(언제|몇 년).*(지어|생긴|만들)|가옥거리.*(어떤|뭐|무슨)"},
+   "steps": [
+    {"tools": [{"name": "get_guide_note", "args": {"place_id": "kto-1909659"}}]},
+    {"tools": [{"name": "search_passages", "args": {"query": "일본인 가옥은 언제 지어졌나", "place_id": "kto-1909659", "limit": 3}}]},
+    {"text": "일제강점기 구룡포에 정착한 일본인 어부와 상인들이 살던 집들이에요.\n\n지금도 일본식 목조 건물 **47채**가 남아 있고, **2010년** 포항시가 거리를 정비해 지금 모습이 됐어요."}
+   ]
+  },
+  {
+   "id": "scene2_name",
+   "when": {"user": "(왜|어째서).*이름.*구룡포|구룡포.*이름.*(왜|뜻)"},
+   "steps": [
+    {"tools": [{"name": "search_passages", "args": {"query": "구룡포 이름 유래 아홉 마리 용", "limit": 3}}]},
+    {"text": "열 마리 용이 하늘로 오르다 한 마리가 떨어져 **아홉 마리**만 승천했다는 전설에서 '아홉 마리 용의 포구'라는 이름이 왔어요.\n\n신라 때부터 전해지는 이야기로, 기록이 아니라 **전설**이에요."}
+   ]
+  },
+  {
+   "id": "scene2_shorter",
+   "when": {"user": "(더 )?짧게"},
+   "steps": [
+    {"tools": [{"name": "remember", "args": {"category": "style", "text": "해설은 핵심만 짧게", "scope": "user"}}]},
+    {"text": "알겠어요. 앞으로 해설은 **핵심만 짧게** 할게요."}
+   ]
+  },
+  {
+   "id": "behind_schedule",
+   "when": {"event": "delay", "reason": "behind_schedule"},
+   "steps": [
+    {"thinking": "새 위반은 없지만 다음 일정에 30분 넘게 늦는다. 지난 일은 바꾸지 않고, trip 이 계산한 추천 변경(머무는 곳 체류 늘리기 또는 다음 장소 시작 미루기)으로 남은 일정을 미룬다.",
+     "tools": [{"name": "view_plan"}]},
+    {"tools": [{"name": "update_item", "args": {"item_id": "$event:suggest.item_id", "stay_minutes": "$event:suggest.stay_minutes", "start_time": "$event:suggest.start_time"}}]},
+    {"tools": [{"name": "review_plan"}]},
+    {"text": "**{{event:next.title}}** 도착이 {{event:next.planned_start}} 예정에서 **{{event:next.eta}}**으로 {{event:delay_minutes}}분쯤 늦어질 것 같아요.\n\n남은 일정을 그만큼 뒤로 미루는 안을 준비했어요. 그러면 오늘 일정은 **{{end:1}}**에 끝나요.\n\n다른 방법으로 뒤 장소 체류를 줄이거나 한 곳을 빼서 원래 시간에 맞출 수도 있어요."}
+   ]
+  },
+  {
+   "id": "scene3_delay",
+   "when": {"event": "delay"},
+   "steps": [
+    {"thinking": "가옥거리에서 늦어져 카페파도가 18시를 넘겨 끝난다. 지난 일은 바꾸지 않고, 남은 일정에서 시간이 가장 많이 드는 과메기문화관을 빼는 안을 만든다.",
+     "tools": [{"name": "view_plan"}]},
+    {"tools": [{"name": "remove_item", "args": {"item_id": "$item:kto-2660046"}}]},
+    {"tools": [{"name": "review_plan"}]},
+    {"text": "가옥거리에서 머문 시간이 길어져 이대로면 **카페파도**에서 **18시를 넘겨** 끝나요.\n\n**과메기문화관**을 빼면 **{{end:1}}**에 여유 있게 마칠 수 있어요.\n\n다른 방법으로 구룡포항 점심을 줄여 과메기문화관을 유지할 수도 있어요."}
+   ]
+  },
+  {
+   "id": "scene3_keep_museum",
+   "when": {"user": "과메기\\s*문화관.*(유지|꼭|가고 싶)", "pending": true},
+   "steps": [
+    {"thinking": "과메기문화관을 꼭 포함하는 조건을 걸고, 빼는 대신 구룡포항 점심 시간을 줄여 18시 전에 끝낸다.",
+     "tools": [{"name": "discard_changes"}]},
+    {"tools": [{"name": "add_rule", "args": {"type": "must_include", "place_id": "kto-2660046", "hard": true, "note": "과메기문화관은 꼭 가기"}}]},
+    {"tools": [{"name": "update_item", "args": {"item_id": "$item:kto-2610501", "stay_minutes": 30}}]},
+    {"tools": [{"name": "review_plan"}]},
+    {"text": "**과메기문화관**은 꼭 가는 조건으로 바꿨어요.\n\n대신 **구룡포항 점심을 30분**으로 줄이면 **{{end:1}}**에 끝나 18시 전에 마칠 수 있어요."}
+   ]
+  },
+  {
+   "id": "scene4_safety",
+   "when": {"event": "safety_raised"},
+   "steps": [
+    {"thinking": "안전 경고가 올라왔다. 근거를 확인하고, 위험한 야외 장소를 가까운 실내 장소로 바꾼다.",
+     "tools": [{"name": "check_safety"}]},
+    {"tools": [{"name": "search_places", "args": {"query": "실내 전시관", "near_place_id": "kto-2660046", "content_type": "문화시설", "radius_m": 800, "limit": 5}}]},
+    {"tools": [
+     {"name": "remove_item", "args": {"item_id": "$item:poi-gr-breakwater-north"}},
+     {"name": "add_item", "args": {"place_id": "kto-2603493", "day": 1, "order": "$order:poi-gr-breakwater-north", "stay_minutes": 40, "memo": "북방파제 대신 실내"}}]},
+    {"tools": [{"name": "review_plan"}]},
+    {"text": "풍랑주의보와 높은 파도 예보에 방파제 CCTV에서도 위험 신호가 있어 **북방파제**가 **위험** 단계예요.\n\n북방파제 대신 가까운 실내 **근대문화역사관**으로 바꾸는 안을 준비했어요.\n\n다른 방법으로 북방파제를 빼고 과메기문화관에 더 머무를 수도 있어요."}
+   ],
+   "on_review": [
+    {"thinking": "카페로 가는 차량 구간은 침수 감시 구역 옆을 지나 바꿀 수 없다. 이유와 조심할 점을 함께 말한다.",
+     "text": "풍랑주의보와 높은 파도 예보에 방파제 CCTV에서도 위험 신호가 있어 **북방파제**가 **위험** 단계예요.\n\n북방파제 대신 가까운 실내 **근대문화역사관**으로 바꾸는 안을 준비했어요. 카페파도로 가는 차 길은 **구룡포수협 주변** 침수 감시 구역 옆이라 물이 고인 길은 피해서 가세요.\n\n다른 방법으로 북방파제를 빼고 과메기문화관에 더 머무를 수도 있어요."}
+   ]
+  }
+ ]
+}

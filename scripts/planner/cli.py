@@ -3,42 +3,38 @@
     python scripts/planner/cli.py --url http://127.0.0.1:8002 plans
     python scripts/planner/cli.py shell          # 대화형 (명령을 한 줄씩 입력)
     python scripts/planner/cli.py chat 1         # Planner Agent 와 대화 (응답 실시간 스트리밍)
+    python scripts/planner/cli.py login seoyun   # 로그인 (이후 요청은 토큰으로). 로그인 안 했으면 --user 가 X-User-Id
+    python scripts/planner/cli.py trip replay new scene3_delay   # 여행 중 재생 (trip·sim 명령: scripts/trip/trip_cli.py)
+    python scripts/planner/cli.py route kto-1909659 kto-2610501 --avoid   # docent·safety·routing·places: services_cli.py
 
-환경변수 GURYONG_API_URL, GURYONG_USER 로 기본값을 바꿀 수 있다. 명령 목록은 -h 참고.
+환경변수 GURYONG_API_URL, GURYONG_USER 로 기본값을 바꿀 수 있다. 명령 목록은 -h 참고 (docs/planner/README.md §11).
 """
 import argparse
+import getpass
 import json
 import os
 import shlex
 import sys
-import unicodedata
+from pathlib import Path
 
 import httpx
 
+import services_cli
 from client import PlannerApiError, PlannerClient
+from fmt import LEVEL, dump, latlng, table
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "trip"))
+import trip_cli  # noqa: E402  trip·sim 명령 (scripts/trip/)
 
 MODE = {"walk": "도보", "car": "차량"}
 
 
 # ---------- 출력 ----------
 
-def width(s: str) -> int:
-    return sum(2 if unicodedata.east_asian_width(c) in "WF" else 1 for c in s)
-
-
-def pad(s: str, n: int) -> str:
-    return s + " " * max(0, n - width(s))
-
-
-def table(headers: list[str], rows: list[list[str]], indent: str = "  ") -> None:
-    cols = [max(width(str(x)) for x in col) for col in zip(headers, *rows)]
-    for row in [headers, *rows]:
-        print(indent + "  ".join(pad(str(x), w) for x, w in zip(row, cols)).rstrip())
-
-
 def print_plan(p: dict) -> None:
     print(f"[계획 #{p['id']}] {p['title']}  |  {p['start_date']} ~ {p['end_date']}  |  "
-          f"{p['day_start']}~{p['day_end']}  |  {MODE.get(p['travel_mode'], p['travel_mode'])}  |  user={p['user_id']}")
+          f"{p['day_start']}~{p['day_end']}  |  {MODE.get(p['travel_mode'], p['travel_mode'])}  |  v{p['version']}  |  "
+          f"user={p['user_id']}")
     if p["memo"]:
         print(f"  메모: {p['memo']}")
     for d in p["days"]:
@@ -48,7 +44,16 @@ def print_plan(p: dict) -> None:
         rows = []
         for i in d["items"]:
             place = i["place"]["title"] if i["place"] else "(정보 없음)"
-            move = "-" if i["travel_minutes"] is None else f"{i['travel_minutes']}분/{i['travel_distance_m']}m"
+            move = "-"
+            if i["travel_minutes"] is not None:
+                mode = {"walk": "도보", "car": "차량"}.get(i.get("leg_mode"), "")
+                approx = "약 " if i.get("travel_source") == "estimate" else ""
+                move = f"{mode} {approx}{i['travel_minutes']}분/{i['travel_distance_m']}m"
+                other = {"walk": "car", "car": "walk"}.get(i.get("leg_mode"))
+                if other and (i.get("travel_options") or {}).get(other):
+                    move += f" ({'차량' if other == 'car' else '도보'} {i['travel_options'][other]['minutes']}분)"
+                if i.get("travel_mode"):
+                    move += " *"  # 이 구간만 수단을 정함
             span = "건너뜀" if i["status"] == "skipped" else f"{i['start_at']}~{i['end_at']}"
             notes = [f"{i['start_time']} 고정"] if i["start_time"] else []
             if i["status"] not in ("planned", "skipped"):
@@ -57,7 +62,7 @@ def print_plan(p: dict) -> None:
                 notes.append(i["memo"])
             rows.append([str(i["order"]), str(i["id"]), i["arrive_at"] or "-", span, f"{i['stay_minutes']}분", move,
                          f"{place} [{i['place_id']}]", " · ".join(notes)])
-        table(["순서", "id", "도착", "시간", "체류", "이동", "장소", "비고"], rows)
+        table(["순서", "id", "도착", "시간", "체류", "이동 (* 구간 지정)", "장소", "비고"], rows)
     if p["constraints"]:
         print("\n 규칙")
         for c in p["constraints"]:
@@ -135,17 +140,139 @@ def cmd_place(c, a):
 
 
 def cmd_add(c, a):
-    print_plan(c.add_item(a.plan, a.place_id, a.day, a.order, a.stay, a.at, a.memo))
+    print_plan(c.add_item(a.plan, a.place_id, a.day, a.order, a.stay, a.at, a.memo, a.mode))
 
 
 def cmd_edit(c, a):
+    if a.status in ("visiting", "done"):
+        raise SystemExit(f"--status {a.status} 는 일정 변경(version 이 오름)이라 대기 중인 제안이 base_changed 가 됩니다.\n"
+                         f"여행 중 도착·완료는 progress 를 쓰세요: progress {a.plan} {a.item} {a.status} [--at HH:MM]")
     changes = {k: v for k, v in {"day": a.day, "order": a.order, "stay_minutes": a.stay, "memo": a.memo,
                                  "status": a.status}.items() if v is not None}
     if a.at is not None:
         changes["start_time"] = None if a.at.lower() == "none" else a.at
+    if a.mode is not None:
+        changes["travel_mode"] = None if a.mode == "default" else a.mode
     if not changes:
-        raise SystemExit("바꿀 값을 하나 이상 지정하세요 (--day/--order/--stay/--at/--memo/--status).")
+        raise SystemExit("바꿀 값을 하나 이상 지정하세요 (--day/--order/--stay/--at/--memo/--status/--mode).")
     print_plan(c.update_item(a.plan, a.item, **changes))
+
+
+def cmd_safety(c, a):
+    print_safety(c.check_safety(a.plan))
+
+
+def print_safety(r: dict) -> None:
+    print(f"안전 점검 ({r['checked_at'][:16]}): 전체 {LEVEL[r['overall_risk']]}  {r['counts']}")
+    for i in r["items"]:
+        what = f"이동({'도보' if i['mode'] == 'walk' else '차량'}) {i['title']}" if i["kind"] == "travel" else i["title"]
+        level = LEVEL[i["risk"]] + (f"({i['unassessed_reason']})" if i["risk"] is None else "")
+        print(f"  {i['day']}일차 {i['start_at']}~{i['end_at']} {what} — {level}")
+        for h in i["hazards"][:3]:
+            print(f"      [{h['level']}] {h['reason']}")
+        if i["detour"]:
+            print(f"      우회하면 {i['detour']['detour_minutes']}분 더: {', '.join(i['detour']['avoided'])}")
+    print(f"\n{r['guidance']}")
+
+
+def cmd_alerts(c, a):
+    if a.seen is not None:
+        x = c.safety_alert_seen(a.plan, a.seen)
+        if a.json:
+            return dump(x)
+        print(f"경고 #{x['id']} 확인 표시 ({x['status']})")
+        return
+    alerts = c.safety_alerts(a.plan, a.status)
+    if a.json:
+        return dump(alerts)
+    if not alerts:
+        print("경고 없음")
+    for x in alerts:
+        print(f"#{x['id']} {x['created_at'][:16]} [{x['status']}] {LEVEL[x['level']]}"
+              + (" (조치 필요)" if x["needs_action"] else ""))
+        print("   " + x["message"].replace("\n", "\n   "))
+
+
+def cmd_safety_preview(c, a):
+    """ops 를 적용했다고 치고 안전 점검. --ops 파일 ({"ops": [...]} 또는 [...]) 이 없으면 대기 중인 제안(또는 --proposal)의 ops."""
+    if a.ops:
+        data = json.loads(Path(a.ops).read_text(encoding="utf-8"))
+        ops, label = (data["ops"] if isinstance(data, dict) else data), Path(a.ops).name
+    else:
+        pid = a.proposal
+        if pid is None:
+            pending = c.list_proposals(a.plan, "pending")
+            if not pending:
+                raise SystemExit("대기 중인 제안이 없습니다. --proposal ID 또는 --ops 파일을 주세요.")
+            pid = pending[0]["id"]
+        p = c.get_proposal(a.plan, pid)
+        ops, label = p["ops"], f"제안 #{pid} ({short_summary(p)})"
+    r = c.safety_preview(a.plan, ops)
+    if a.json:
+        return dump(r)
+    print(f"{label} 를 반영하면 (저장 안 함, 새 항목 id 는 음수)")
+    print_safety(r)
+
+
+def short_summary(p: dict) -> str:
+    return (p.get("summary") or "").replace("\n", " ")[:40] or f"변경 {len(p.get('changes', []))}건"
+
+
+# ---------- 여행 중: 진행 상태 · 현재 기준 재계산 (docs/planner/README.md §8) ----------
+
+def _item_line(p: dict, item_id: int) -> str:
+    for d in p["days"]:
+        for i in d["items"]:
+            if i["id"] == item_id:
+                title = i["place"]["title"] if i["place"] else i["place_id"]
+                return (f"{d['day']}일차 #{i['id']} {title}: {i['status']}"
+                        f" (도착 {i.get('arrived_at') or '-'}, 완료 {i.get('done_at') or '-'}) · 계획 {i['start_at']}~{i['end_at']}")
+    return f"#{item_id}"
+
+
+def cmd_progress(c, a):
+    p = c.progress(a.plan, a.item, a.status, a.at)
+    if a.json:
+        return dump(p)
+    print(f"진행 상태 반영 · version v{p['version']} 그대로, progress v{p.get('progress_version', '-')}")
+    print("  " + _item_line(p, a.item))
+
+
+def cmd_projection(c, a):
+    position = None
+    if a.at_item is not None and a.moving:
+        raise SystemExit("--at-item 과 --moving 은 함께 쓸 수 없습니다.")
+    if a.at_item is not None:
+        position = {"state": "visiting", "item_id": a.at_item} | ({"arrived_at": a.arrived} if a.arrived else {})
+    elif a.moving:
+        lat, lng = latlng(a.moving)
+        position = {"state": "moving", "lat": lat, "lng": lng}
+    r = c.projection(a.plan, a.day, a.now, position)
+    if a.json:
+        return dump(r)
+    d = r["delay_minutes"]
+    late = "-" if d is None else (f"{d}분 늦음" if d > 0 else f"{-d}분 여유" if d < 0 else "예정대로")
+    print(f"현재 기준 재계산 — {r['day']}일차 지금 {r['now']} · 지연 {late}")
+    n = r["next"]
+    if n:
+        print(f"  다음: #{n['item_id']} {n['planned_start'] or '-'} 예정 → 예상 도착 {n['eta'] or '-'}, 시작 {n['start_at'] or '-'}")
+    else:
+        print("  다음: 없음 (남은 일정 없음)")
+    day = next((x for x in r["plan"]["days"] if x["day"] == r["day"]), None)
+    if day and day["items"]:
+        table(["순서", "id", "도착", "시간", "장소", "상태"],
+              [[str(i["order"]), str(i["id"]), i["arrive_at"] or "-",
+                "건너뜀" if i["status"] == "skipped" else f"{i['start_at']}~{i['end_at']}",
+                i["place"]["title"] if i["place"] else i["place_id"], i["status"]] for i in day["items"]])
+        print(f"  예상 종료 {day['end_at']}")
+    if r["new_violations"]:
+        print("\n 새로 생긴 위반 (trip 의 delay 판정 기준)")
+        for v in r["new_violations"]:
+            print(f"  [{'E' if v['severity'] == 'error' else 'W'}] {v['code']}: {v['message']}")
+    else:
+        print("\n 새로 생긴 위반 없음 (가벼운 지연이면 알리지 않음)")
+    if r["baseline_violations"]:
+        print(f" 기준 일정 위반 {len(r['baseline_violations'])}건 (원래 있던 것)")
 
 
 def cmd_rm(c, a):
@@ -179,21 +306,23 @@ def cmd_check(c, a):
     print_violations(r["violations"])
 
 
-# ---------- 제안 · Agent ----------
+# ---------- 제안 · 추천 · Agent ----------
 
-DIM, BOLD, RESET = "\033[2m", "\033[1m", "\033[0m"
-TOOL_LABELS = {"search_places": "장소 검색", "get_place": "장소 확인", "view_plan": "일정 확인",
-               "add_item": "일정 추가", "update_item": "일정 수정", "remove_item": "일정 삭제",
-               "update_plan": "계획 설정", "add_rule": "규칙 추가", "remove_rule": "규칙 삭제",
-               "discard_changes": "변경 취소"}
+DIM, BOLD, RESET, CLEAR = "\033[2m", "\033[1m", "\033[0m", "\r\033[2K"
+STATE = {"in_plan": "일정에 있음", "not_in_plan": "", "day_out_of_range": "날짜 없음"}
+BUTTON = {"in_plan": "[빼기]", "not_in_plan": "[추가]", "day_out_of_range": ""}
 
 
-def print_proposal(p: dict) -> None:
-    print(f"\n{BOLD}[제안 #{p['id']}] ({p['status']}){RESET}")
+def print_error(e: PlannerApiError) -> None:
+    print(f"오류 {e.status} {e.code}: {e.message}")
+
+
+def print_proposal(p: dict, no: int | None = None) -> None:
+    label = f"카드 {no} · " if no else ""
+    state = p["status"] + (f"/{p['decision']}" if p.get("decision") else "")
+    print(f"\n{BOLD}[{label}변경 제안 #{p['id']}] ({state}){RESET}")
     for ch in p.get("changes", []):
         print(f"  - {ch['message']}")
-    if p.get("error"):
-        print(f"  ! {p['error']}")
     after = p.get("after")
     if after:
         errors = [v for v in after["violations"] if v["severity"] == "error"]
@@ -201,6 +330,23 @@ def print_proposal(p: dict) -> None:
         print(f"  검증: error {len(errors)} · warning {len(warns)}")
         for v in errors + warns:
             print(f"    [{'E' if v['severity'] == 'error' else 'W'}] {v['message']}")
+    if p["status"] == "pending" and p.get("base_changed"):
+        print(f"  {DIM}! 이 제안 이후 일정이 바뀌었어요 (승인 시 확인){RESET}")
+
+
+def print_recommendation(r: dict, no: int | None = None) -> None:
+    label = f"카드 {no} · " if no else ""
+    print(f"\n{BOLD}[{label}장소 추천 #{r['id']}] {r['title']}{RESET}")
+    for n, c in enumerate(r["candidates"], start=1):
+        title = (c["place"] or {}).get("title", c["place_id"])
+        when = f"{c['day']}일차" + (f" {c['time_hint']}쯤" if c["time_hint"] else "")
+        state = STATE[c["state"]]
+        if c["item"]:
+            state += f" · {c['item']['start_at'] or '건너뜀'}"
+        other = f" (다른 날: {', '.join(map(str, c['other_days']))}일차)" if c["other_days"] else ""
+        print(f"  {n}. {title}  {when}  {BUTTON[c['state']]} {state}{other}")
+        if c["reason"]:
+            print(f"     {DIM}{c['reason']}{RESET}")
 
 
 def cmd_proposals(c, a):
@@ -208,24 +354,84 @@ def cmd_proposals(c, a):
     if not rows:
         print("제안이 없습니다.")
     for p in rows:
-        print(f"#{p['id']} {p['status']:<10} {p['source']:<5} {p['created_at'][:16]}  {p['summary'][:60]!r}")
+        print(f"#{p['id']} {p['status']:<10} v{p['base_version']:<3} {p['created_at'][:16]}  "
+              f"변경 {len(p['changes'])}건  {p['summary'][:50]!r}")
 
 
 def cmd_proposal(c, a):
     p = c.get_proposal(a.plan, a.proposal)
     print_proposal(p)
-    if a.full and p.get("after"):
+    if a.full:
+        print("\n--- 제안 당시 일정 ---")
+        print_plan(p["before"])
         print("\n--- 승인 시 일정 ---")
         print_plan(p["after"])
 
 
+def cmd_accept(c, a):
+    try:
+        r = c.plan_accept_proposal(a.plan, a.proposal, "overwrite" if a.overwrite else "auto")
+    except PlannerApiError as e:
+        if e.code != "base_changed":
+            raise
+        print_base_changed(e)
+        print("카드 일정 그대로 반영하려면 --overwrite 를 붙이세요.")
+        return
+    print(f"제안 #{a.proposal} 반영됨 ({r['proposal']['decision']})\n")
+    print_plan(r["plan"])
+
+
+def cmd_reject(c, a):
+    c.plan_reject_proposal(a.plan, a.proposal)
+    print(f"제안 #{a.proposal} 거절됨")
+
+
+def cmd_recs(c, a):
+    rows = c.list_recommendations(a.plan)
+    if not rows:
+        print("추천이 없습니다.")
+    for r in rows:
+        print_recommendation(r)
+
+
+def cmd_rec(c, a):
+    print_recommendation(c.get_recommendation(a.plan, a.rec))
+
+
+def _rec_action(c, a, action):
+    r = c.plan_candidate(a.plan, a.rec, a.candidate, action)
+    print_recommendation(r["recommendation"])
+
+
+def cmd_rec_add(c, a):
+    _rec_action(c, a, "add")
+
+
+def cmd_rec_remove(c, a):
+    _rec_action(c, a, "remove")
+
+
+def print_base_changed(e: PlannerApiError) -> None:
+    d = e.detail
+    print(f"\n{BOLD}이 제안 이후 일정이 바뀌었어요{RESET} (제안 v{d['base_version']} → 지금 v{d['current_version']})")
+    if d["since_proposal"]:
+        print("  그대로 반영하면 사라지는 변경:")
+        for ch in d["since_proposal"]:
+            print(f"    - {ch['message']}")
+    print("  카드 일정으로 바꾸면:")
+    for ch in d["overwrite_effect"]:
+        print(f"    - {ch['message']}")
+
+
 class ChatPrinter:
-    """SSE 이벤트를 터미널에 실시간으로 그린다."""
+    """SSE 이벤트를 터미널에 실시간으로 그린다. 단계는 진행 중엔 [..], 끝나면 [v] 로 같은 줄을 갱신한다."""
 
     def __init__(self, show_thinking: bool):
         self.show_thinking = show_thinking
         self.line_start = True
         self.thinking = False
+        self.step_open = False  # 진행 중 단계 줄이 열려 있음 (줄바꿈 전)
+        self.cards: list[dict] = []
 
     def _out(self, s: str) -> None:
         sys.stdout.write(s)
@@ -234,13 +440,16 @@ class ChatPrinter:
             self.line_start = s.endswith("\n")
 
     def _newline(self) -> None:
+        if self.step_open:
+            self._out("\n")
+            self.step_open = False
         if not self.line_start:
             self._out("\n")
 
     def handle(self, event: str, d: dict) -> None:
         if event != "thinking" and self.thinking:
             self.thinking = False
-            if self.show_thinking:  # "(생각 중…)" 한 줄만 찍은 경우엔 이미 줄이 끝나 있다
+            if self.show_thinking:
                 self._out(RESET)
                 self._newline()
         if event == "thinking":
@@ -254,28 +463,65 @@ class ChatPrinter:
                 self._newline()
                 self._out(f"{DIM}(생각 중…){RESET}\n")
                 self.thinking = True
-        elif event == "text":
-            self._out(d["delta"])
-        elif event == "tool_call":
+        elif event == "status":
             self._newline()
-            args = d["arguments"] if len(d["arguments"]) < 120 else d["arguments"][:117] + "..."
-            self._out(f"{DIM}  · {TOOL_LABELS.get(d['name'], d['name'])} {args}{RESET}")
-        elif event == "tool_result":
-            self._out(f"{DIM} → {'ok' if d['ok'] else '실패'}: {d['summary']}{RESET}\n")
+            self._out(f"{BOLD}{d['text']}{RESET}\n")
+        elif event == "step":
+            mark = {"running": "[..]", "done": "[v]", "error": "[x]"}[d["status"]]
+            line = f"  {mark} {d['title']}" + (f" · {d['detail']}" if d["detail"] else "")
+            if d["status"] == "running":
+                if not self.step_open:
+                    self._newline()
+                self._out(CLEAR + DIM + line + RESET)
+                self.step_open = True
+            else:
+                self._out(CLEAR + line + "\n")
+                self.step_open = False
+        elif event == "text":
+            if self.step_open:
+                self._newline()
+            self._out(d["delta"])
         elif event == "proposal":
             self._newline()
+            self.cards.append({"type": "proposal", "proposal": d})
             print_proposal(d)
-            print(f"{DIM}  /accept 로 반영, /reject 로 거절, 말로 더 고칠 수도 있어요.{RESET}")
+            print(f"{DIM}  /accept 반영 · /reject 거절 · /detail 전체 일정 · 말로 더 고칠 수도 있어요{RESET}")
             self.line_start = True
+        elif event == "recommendation":
+            self._newline()
+            self.cards.append({"type": "recommendation", "recommendation": d})
+            print_recommendation(d)
+            print(f"{DIM}  /add <번호> 일정에 추가 · /remove <번호> 빼기{RESET}")
+            self.line_start = True
+        elif event == "steps_done":
+            self._newline()
+            self._out(f"{DIM}[v] {d['summary']}{RESET}\n")
         elif event == "error":
             self._newline()
-            self._out(f"오류: {d['message']}\n")
+            self._out(f"오류 ({d['code']}): {d['message']}\n")
         elif event == "done":
             self._newline()
 
 
-def _pending(c, sid: str) -> dict | None:
-    return c.get_session(sid).get("pending_proposal")
+def _session_cards(c, sid: str) -> list[dict]:
+    return [card for m in c.get_session(sid)["messages"] for card in m["cards"]]
+
+
+def _pick(cards: list[dict], kind: str, arg: str | None) -> dict | None:
+    """카드번호(1부터, 세션 전체 기준)로 고르거나, 생략하면 그 종류의 가장 최근 카드."""
+    if arg:
+        n = int(arg)
+        if not 1 <= n <= len(cards) or cards[n - 1]["type"] != kind:
+            print(f"카드 {n} 은(는) {'변경 제안' if kind == 'proposal' else '장소 추천'} 카드가 아닙니다. /cards 로 확인하세요.")
+            return None
+        return cards[n - 1][kind]
+    found = [card[kind] for card in cards if card["type"] == kind]
+    if not found:
+        print("해당 카드가 없습니다.")
+        return None
+    if kind == "proposal":  # 제안은 대기 중인 것 중 가장 최근을 우선
+        found = [p for p in found if p["status"] == "pending"] or found
+    return found[-1]
 
 
 def cmd_chat(c, a):
@@ -287,36 +533,61 @@ def cmd_chat(c, a):
     detail = c.get_session(sid)
     plan_id = detail["plan_id"]
     print(f"{BOLD}Planner Agent{RESET} — 계획 #{plan_id}, 세션 {sid} ({c.agent_info()['provider']})")
-    print(f"{DIM}/plan 일정 보기 · /proposal 대기 제안 · /accept · /reject · /exit{RESET}")
+    print(f"{DIM}/plan · /cards · /detail [n] · /accept [n] [overwrite] · /reject [n] · /repropose [n] · "
+          f"/add <i> · /remove <i> · /exit{RESET}")
     for m in detail["messages"][-6:]:
         who = "나" if m["role"] == "user" else "Agent"
         print(f"{DIM}{who}> {m['content']}{RESET}")
-    if detail["pending_proposal"]:
-        print_proposal(detail["pending_proposal"])
+        if m.get("steps_summary"):
+            print(f"{DIM}  [v] {m['steps_summary']}{RESET}")
 
-    def send(text: str) -> None:
+    def stream(events) -> None:
         printer = ChatPrinter(a.thinking)
         print(f"{BOLD}Agent>{RESET} ", end="", flush=True)
         try:
-            for event, data in c.chat_stream(sid, text):
+            for event, data in events:
                 printer.handle(event, data)
         except KeyboardInterrupt:
             print("\n(중단)")
         except httpx.HTTPError as e:  # 스트림이 끊겨도 대화는 계속
             print(f"\n연결 오류: {e!r}")
 
-    def decide(accept: bool) -> None:
-        pending = _pending(c, sid)
-        if not pending:
-            print("대기 중인 제안이 없습니다.")
+    def accept(arg: str | None, overwrite: bool) -> None:
+        p = _pick(_session_cards(c, sid), "proposal", arg)
+        if not p:
             return
-        if accept:
-            r = c.accept_proposal(sid, pending["id"])
-            print(f"제안 #{pending['id']} 반영됨\n")
-            print_plan(r["plan"])
-        else:
-            c.reject_proposal(sid, pending["id"])
-            print(f"제안 #{pending['id']} 거절됨 (일정 그대로)")
+        try:
+            r = c.accept_proposal(sid, p["id"], "overwrite" if overwrite else "auto")
+        except PlannerApiError as e:
+            if e.code != "base_changed":
+                raise
+            print_base_changed(e)
+            print("  1) 카드에서 본 일정 그대로 반영   2) 현재 일정에 맞춰 다시 제안   3) 취소")
+            try:
+                choice = input("선택> ").strip()
+            except EOFError:
+                choice = "3"
+            if choice == "1":
+                r = c.accept_proposal(sid, p["id"], "overwrite")
+            elif choice == "2":
+                stream(c.repropose_stream(sid, p["id"]))
+                return
+            else:
+                print("취소했어요.")
+                return
+        print(f"제안 #{p['id']} 반영됨 ({r['proposal']['decision']})\n")
+        print_plan(r["plan"])
+
+    def candidate(arg: str | None, action: str) -> None:
+        rec = _pick(_session_cards(c, sid), "recommendation", None)
+        if not rec:
+            return
+        if not arg or not arg.isdigit() or not 1 <= int(arg) <= len(rec["candidates"]):
+            print(f"후보 번호를 1~{len(rec['candidates'])} 중에서 주세요. 예) /{action} 1")
+            return
+        cand = rec["candidates"][int(arg) - 1]
+        r = c.candidate(sid, rec["id"], cand["id"], action)
+        print_recommendation(r["recommendation"])
 
     queue = list(a.message or [])
     while True:
@@ -333,32 +604,99 @@ def cmd_chat(c, a):
                 return
         if not line:
             continue
+        cmd, *args = line.split()
+        arg = args[0] if args and args[0].isdigit() else None
         try:
-            if line in ("/exit", "/quit"):
+            if cmd in ("/exit", "/quit"):
                 return
-            elif line == "/plan":
+            elif cmd == "/plan":
                 print_plan(c.get_plan(plan_id))
-            elif line == "/proposal":
-                p = _pending(c, sid)
+            elif cmd == "/cards":
+                cards = _session_cards(c, sid)
+                if not cards:
+                    print("카드가 없습니다.")
+                for n, card in enumerate(cards, start=1):
+                    if card["type"] == "proposal":
+                        print_proposal(card["proposal"], n)
+                    else:
+                        print_recommendation(card["recommendation"], n)
+            elif cmd == "/detail":
+                p = _pick(_session_cards(c, sid), "proposal", arg)
                 if p:
-                    print_proposal(p)
-                else:
-                    print("대기 중인 제안이 없습니다.")
-            elif line == "/accept":
-                decide(True)
-            elif line == "/reject":
-                decide(False)
-            elif line.startswith("/"):
-                print("명령: /plan /proposal /accept /reject /exit")
+                    print("\n--- 제안 당시 일정 ---")
+                    print_plan(p["before"])
+                    print("\n--- 승인 시 일정 ---")
+                    print_plan(p["after"])
+            elif cmd == "/accept":
+                accept(arg, "overwrite" in args)
+            elif cmd == "/reject":
+                p = _pick(_session_cards(c, sid), "proposal", arg)
+                if p:
+                    c.reject_proposal(sid, p["id"])
+                    print(f"제안 #{p['id']} 거절됨 (일정 그대로)")
+            elif cmd == "/repropose":
+                p = _pick(_session_cards(c, sid), "proposal", arg)
+                if p:
+                    stream(c.repropose_stream(sid, p["id"]))
+            elif cmd in ("/add", "/remove"):
+                candidate(args[0] if args else None, cmd[1:])
+            elif cmd.startswith("/"):
+                print("명령: /plan /cards /detail [n] /accept [n] [overwrite] /reject [n] /repropose [n] "
+                      "/add <i> /remove <i> /exit")
             else:
-                send(line)
+                stream(c.chat_stream(sid, line))
         except PlannerApiError as e:
-            print(f"오류 {e.status}: {e.detail}")
+            print_error(e)
+
+
+# ---------- 계정 ----------
+
+def _password(a, prompt: str = "비밀번호: ") -> str:
+    return a.password if getattr(a, "password", None) else getpass.getpass(prompt)
+
+
+def _print_login(tokens: dict, verb: str) -> None:
+    u = tokens["user"]
+    print(f"{verb}: {u['display_name']} ({u['login_id'] or u['email']}, {u['provider']}) · user id {u['id']}")
+
+
+def cmd_signup(c, a):
+    pw = _password(a)
+    if not a.password and getpass.getpass("비밀번호 확인: ") != pw:
+        raise SystemExit("비밀번호가 서로 다릅니다.")
+    _print_login(c.signup(a.login_id, pw, a.name), "가입하고 로그인했습니다")
+
+
+def cmd_login(c, a):
+    _print_login(c.login(a.login_id, _password(a)), "로그인했습니다")
+
+
+def cmd_logout(c, a):
+    c.logout()
+    print("로그아웃했습니다. (이제 요청은 --user 의 X-User-Id 로 보냅니다)")
+
+
+def cmd_whoami(c, a):
+    if not c.logged_in:
+        print(f"로그인하지 않았습니다. 개발 모드 사용자: {a.user} (X-User-Id)")
+        return
+    u = c.me()
+    print(f"{u['display_name']} ({u['login_id'] or u['email']}, {u['provider']}) · user id {u['id']}")
+
+
+def cmd_passwd(c, a):
+    current = getpass.getpass("현재 비밀번호: ")
+    new = getpass.getpass("새 비밀번호: ")
+    if getpass.getpass("새 비밀번호 확인: ") != new:
+        raise SystemExit("새 비밀번호가 서로 다릅니다.")
+    c.change_password(current, new)
+    print("비밀번호를 바꿨습니다. 다른 기기는 로그아웃됩니다.")
 
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(prog="planner", description="GuryongMate Planner CLI")
     ap.add_argument("--url", default=os.getenv("GURYONG_API_URL", "http://127.0.0.1:8000"), help="API 주소")
-    ap.add_argument("--user", default=os.getenv("GURYONG_USER", "demo"), help="사용자 ID (X-User-Id)")
+    ap.add_argument("--user", default=os.getenv("GURYONG_USER", "demo"),
+                    help="로그인하지 않았을 때 쓸 사용자 ID (개발 모드 X-User-Id)")
     sub = ap.add_subparsers(dest="cmd", required=True, metavar="명령")
 
     def add(name, fn, help_):
@@ -414,6 +752,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--stay", type=int, default=60, help="체류 시간(분)")
     p.add_argument("--at", help="시작 시각 고정 HH:MM")
     p.add_argument("--memo", default="")
+    p.add_argument("--mode", choices=["walk", "car"], help="직전 장소에서 여기까지 수단 (생략 시 계획 기본)")
 
     p = add("edit", cmd_edit, "일정 수정 (순서·날짜 이동·시간·상태)")
     p.add_argument("plan", type=int)
@@ -423,7 +762,40 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--stay", type=int)
     p.add_argument("--at", help="시작 시각 고정 HH:MM, 'none' 이면 해제")
     p.add_argument("--memo")
-    p.add_argument("--status", choices=["planned", "visiting", "done", "skipped"])
+    p.add_argument("--status", choices=["planned", "visiting", "done", "skipped"],
+                   help="planned·skipped (일정 변경). 여행 중 도착·완료(visiting·done)는 progress 명령으로")
+    p.add_argument("--mode", choices=["walk", "car", "default"], help="여기까지 오는 수단 (default: 계획 기본으로)")
+
+    p = add("safety", cmd_safety, "안전 점검 (방문·이동 구간별 위험 단계)")
+    p.add_argument("plan", type=int)
+
+    p = add("alerts", cmd_alerts, "안전 경고 목록 (--seen ID: 확인 표시)")
+    p.add_argument("plan", type=int)
+    p.add_argument("--status", choices=["new", "seen"])
+    p.add_argument("--seen", type=int, metavar="ID", help="이 경고를 확인 표시")
+    p.add_argument("--json", action="store_true", help="API 응답 JSON 그대로 출력")
+
+    p = add("safety-preview", cmd_safety_preview, "변경안을 적용했다고 치고 안전 점검 (대기 중인 제안 또는 ops 파일)")
+    p.add_argument("plan", type=int)
+    p.add_argument("--proposal", type=int, help="이 제안의 ops (생략: 가장 최근 대기 중 제안)")
+    p.add_argument("--ops", help='ops JSON 파일 ({"ops": [...]} 또는 [...], docs/planner/README.md §4 PlanOp)')
+    p.add_argument("--json", action="store_true", help="API 응답 JSON 그대로 출력")
+
+    p = add("progress", cmd_progress, "여행 중 진행 상태 (version 은 그대로)  예) progress 1 7 visiting --at 14:05")
+    p.add_argument("plan", type=int)
+    p.add_argument("item", type=int, help="일정 항목 id")
+    p.add_argument("status", choices=["visiting", "done", "planned"])
+    p.add_argument("--at", help="HH:MM (생략: planner 의 지금). planned 면 무시")
+    p.add_argument("--json", action="store_true", help="API 응답 JSON 그대로 출력")
+
+    p = add("projection", cmd_projection, "현재 기준 재계산: 지연·다음 항목·새 위반 (저장 안 함)")
+    p.add_argument("plan", type=int)
+    p.add_argument("--day", type=int, help="생략: planner 의 오늘")
+    p.add_argument("--now", help="HH:MM (생략: planner 의 지금)")
+    p.add_argument("--at-item", type=int, metavar="ID", help="이 항목에 머무는 중으로 본다")
+    p.add_argument("--arrived", help="--at-item 의 도착 시각 HH:MM (생략: 기록된 도착, 없으면 now)")
+    p.add_argument("--moving", metavar="LAT,LNG", help="이 위치에서 다음 항목으로 이동 중으로 본다")
+    p.add_argument("--json", action="store_true", help="API 응답 JSON 그대로 출력")
 
     p = add("rm", cmd_rm, "일정 삭제")
     p.add_argument("plan", type=int)
@@ -434,7 +806,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = add("rule", cmd_rule, "규칙 추가  예) rule 1 end_before time=18:00 / rule 1 must_include place_id=kto-123")
     p.add_argument("plan", type=int)
-    p.add_argument("type", choices=["must_include", "exclude", "end_before", "max_travel_minutes"])
+    p.add_argument("type", choices=["must_include", "exclude", "end_before", "max_travel_minutes", "max_walk_minutes",
+                                    "max_daily_walk_minutes"])
     p.add_argument("params", nargs="*", help="key=value ...")
     p.add_argument("--soft", action="store_true", help="위반 시 warning (기본 error)")
     p.add_argument("--note", default="")
@@ -453,7 +826,46 @@ def build_parser() -> argparse.ArgumentParser:
     p = add("proposal", cmd_proposal, "제안 상세 (변경 요약·검증)")
     p.add_argument("plan", type=int)
     p.add_argument("proposal", type=int)
-    p.add_argument("--full", action="store_true", help="승인 시 일정 전체 출력")
+    p.add_argument("--full", action="store_true", help="제안 당시·승인 시 일정 전체 출력")
+
+    p = add("accept", cmd_accept, "제안 승인 (planner 직접. 대화 기록에는 안 남음)")
+    p.add_argument("plan", type=int)
+    p.add_argument("proposal", type=int)
+    p.add_argument("--overwrite", action="store_true", help="일정이 바뀌었어도 카드의 일정 그대로 반영")
+
+    p = add("reject", cmd_reject, "제안 거절 (planner 직접)")
+    p.add_argument("plan", type=int)
+    p.add_argument("proposal", type=int)
+
+    p = add("recs", cmd_recs, "장소 추천 카드 목록 (후보 상태 포함)")
+    p.add_argument("plan", type=int)
+
+    p = add("rec", cmd_rec, "장소 추천 카드")
+    p.add_argument("plan", type=int)
+    p.add_argument("rec", type=int)
+
+    p = add("rec-add", cmd_rec_add, "추천 후보를 일정에 추가 (planner 직접)")
+    p.add_argument("plan", type=int)
+    p.add_argument("rec", type=int)
+    p.add_argument("candidate", type=int, help="후보 id")
+
+    p = add("rec-remove", cmd_rec_remove, "추천 후보를 일정에서 빼기 (planner 직접)")
+    p.add_argument("plan", type=int)
+    p.add_argument("rec", type=int)
+    p.add_argument("candidate", type=int, help="후보 id")
+
+    p = add("signup", cmd_signup, "회원가입 (ID/비밀번호) 후 로그인")
+    p.add_argument("login_id")
+    p.add_argument("--name", help="표시 이름 (생략 시 아이디)")
+    p.add_argument("--password", help="스크립트용. 생략하면 입력받는다")
+
+    p = add("login", cmd_login, "로그인 (토큰을 ~/.guryongmate/session.json 에 저장)")
+    p.add_argument("login_id")
+    p.add_argument("--password", help="스크립트용. 생략하면 입력받는다")
+
+    add("logout", cmd_logout, "로그아웃")
+    add("whoami", cmd_whoami, "지금 사용자")
+    add("passwd", cmd_passwd, "비밀번호 변경")
 
     p = add("chat", cmd_chat, "Planner Agent 와 대화 (계획의 최근 세션을 이어서)")
     p.add_argument("plan", type=int)
@@ -462,6 +874,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--thinking", action="store_true", help="모델의 추론 과정도 표시")
     p.add_argument("-m", "--message", action="append",
                    help="이 메시지만 보내고 종료 (여러 번 지정 가능, /accept 같은 명령도 가능)")
+
+    services_cli.register(add)
+    trip_cli.register(sub)
 
     add("shell", None, "대화형 모드")
     return ap
@@ -475,7 +890,7 @@ def run(ap: argparse.ArgumentParser, argv: list[str], client: PlannerClient | No
     try:
         a.fn(c, a)
     except PlannerApiError as e:
-        print(f"오류 {e.status}: {json.dumps(e.detail, ensure_ascii=False) if not isinstance(e.detail, str) else e.detail}")
+        print_error(e)
     except Exception as e:  # 연결 실패 등
         print(f"오류: {e}")
 

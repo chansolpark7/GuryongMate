@@ -27,3 +27,11 @@ build/
 .vscode/
 .DS_Store
 Thumbs.db
+
+# 디자인 작업 중 Figma 화면 캡처 (에이전트 임시 파일)
+.figma-tmp/
+
+# 배포 로컬 설정·비밀 (deploy/*.example 참고)
+deploy/deploy.conf
+deploy/backend.env
+deploy/users.txt

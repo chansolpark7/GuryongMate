@@ -1,40 +1,9 @@
-# 게이트웨이: 앱은 이 주소 하나만 안다. URL 앞부분으로 서비스에 나눠 보낸다.
-# 서비스 문서: /places/docs, /planner/docs, /agent/docs
+# 게이트웨이 (개발): 앱은 이 주소 하나만 안다. URL 앞부분으로 서비스에 나눠 보낸다. 경로는 routes.caddy
+# 운영(공개 서버)은 Caddyfile.prod — 데모 조작 API 를 관리 토큰으로 막는다 (docs/deploy/README.md §3)
 {
 	admin off
 }
 
 :80 {
-	handle /health {
-		header Content-Type application/json
-		respond `{"status":"ok","service":"gateway"}` 200
-	}
-
-	handle /places* {
-		reverse_proxy places:8000
-	}
-
-	handle /planner* {
-		reverse_proxy planner:8000
-	}
-
-	handle /agent* {
-		# 채팅은 SSE 스트림이라 버퍼링 없이 바로 흘려보낸다
-		reverse_proxy agent:8000 {
-			flush_interval -1
-		}
-	}
-
-	# account 서비스가 생기면 주석 해제
-	# handle /auth* {
-	# 	reverse_proxy account:8000
-	# }
-	# handle /users* {
-	# 	reverse_proxy account:8000
-	# }
-
-	handle {
-		header Content-Type application/json
-		respond `{"detail":"Not Found"}` 404
-	}
+	import routes.caddy
 }

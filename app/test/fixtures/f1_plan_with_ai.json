@@ -1,0 +1,4720 @@
+{
+ "flow": "F1",
+ "title": "AI 로 계획 만들기 + 장소 추천 (장면 ①)",
+ "screens": "03·05·06·06B·08",
+ "recorded_at": "2026-10-09T23:37:46+09:00",
+ "backend": {
+  "agent_provider": "scripted:scripts",
+  "safety_source": "mock",
+  "git": "6a7d484"
+ },
+ "exchanges": [
+  {
+   "name": "create_plan",
+   "method": "POST",
+   "route": "/planner/plans",
+   "path": "/planner/plans",
+   "query": {},
+   "body": {
+    "title": "엄마랑 구룡포",
+    "start_date": "2026-10-10",
+    "end_date": "2026-10-10",
+    "day_start": "12:30",
+    "day_end": "18:00",
+    "travel_mode": "walk"
+   },
+   "status": 201,
+   "elapsed_ms": 15,
+   "response": {
+    "id": 240,
+    "user_id": "74bb7f62aa554ec1861a8a24288ff267",
+    "title": "엄마랑 구룡포",
+    "start_date": "2026-10-10",
+    "end_date": "2026-10-10",
+    "day_start": "12:30",
+    "day_end": "18:00",
+    "travel_mode": "walk",
+    "memo": "",
+    "version": 1,
+    "progress_version": 0,
+    "item_count": 0,
+    "created_at": "2026-10-09T14:37:37.717083Z",
+    "updated_at": "2026-10-09T14:37:37.717083Z",
+    "days": [
+     {
+      "day": 1,
+      "date": "2026-10-10",
+      "weekday": "토",
+      "end_at": null,
+      "items": []
+     }
+    ],
+    "constraints": [],
+    "violations": []
+   }
+  },
+  {
+   "name": "list_sessions_empty",
+   "method": "GET",
+   "route": "/agent/sessions",
+   "path": "/agent/sessions",
+   "query": {
+    "plan_id": 240
+   },
+   "body": null,
+   "status": 200,
+   "elapsed_ms": 12,
+   "response": []
+  },
+  {
+   "name": "create_session",
+   "method": "POST",
+   "route": "/agent/sessions",
+   "path": "/agent/sessions",
+   "query": {},
+   "body": {
+    "plan_id": 240
+   },
+   "status": 201,
+   "elapsed_ms": 73,
+   "response": {
+    "id": "d4bb6faca3064447856d260bdb6699e9",
+    "plan_id": 240,
+    "created_at": "2026-10-09T14:37:37.803523Z",
+    "updated_at": "2026-10-09T14:37:37.803523Z"
+   }
+  },
+  {
+   "name": "chat_make_plan",
+   "method": "POST",
+   "route": "/agent/sessions/{session_id}/chat",
+   "path": "/agent/sessions/d4bb6faca3064447856d260bdb6699e9/chat",
+   "query": {},
+   "body": {
+    "message": "엄마랑 구룡포 일정 짜줘"
+   },
+   "status": 200,
+   "elapsed_ms": 6512,
+   "content_type": "text/event-stream",
+   "sse": [
+    {
+     "t_ms": 9,
+     "event": "start",
+     "data": {
+      "session_id": "d4bb6faca3064447856d260bdb6699e9"
+     }
+    },
+    {
+     "t_ms": 510,
+     "event": "thinking",
+     "data": {
+      "delta": "어머니와 함"
+     }
+    },
+    {
+     "t_ms": 541,
+     "event": "thinking",
+     "data": {
+      "delta": "께하는 하루"
+     }
+    },
+    {
+     "t_ms": 572,
+     "event": "thinking",
+     "data": {
+      "delta": " 일정이다."
+     }
+    },
+    {
+     "t_ms": 602,
+     "event": "thinking",
+     "data": {
+      "delta": " 동행 정보"
+     }
+    },
+    {
+     "t_ms": 633,
+     "event": "thinking",
+     "data": {
+      "delta": "는 이번 여"
+     }
+    },
+    {
+     "t_ms": 664,
+     "event": "thinking",
+     "data": {
+      "delta": "행에만 해당"
+     }
+    },
+    {
+     "t_ms": 696,
+     "event": "thinking",
+     "data": {
+      "delta": "하니 pla"
+     }
+    },
+    {
+     "t_ms": 727,
+     "event": "thinking",
+     "data": {
+      "delta": "n 범위로 "
+     }
+    },
+    {
+     "t_ms": 758,
+     "event": "thinking",
+     "data": {
+      "delta": "기억하고, "
+     }
+    },
+    {
+     "t_ms": 790,
+     "event": "thinking",
+     "data": {
+      "delta": "가옥거리·구"
+     }
+    },
+    {
+     "t_ms": 821,
+     "event": "thinking",
+     "data": {
+      "delta": "룡포항·과메"
+     }
+    },
+    {
+     "t_ms": 852,
+     "event": "thinking",
+     "data": {
+      "delta": "기문화관·북"
+     }
+    },
+    {
+     "t_ms": 884,
+     "event": "thinking",
+     "data": {
+      "delta": "방파제·바다"
+     }
+    },
+    {
+     "t_ms": 915,
+     "event": "thinking",
+     "data": {
+      "delta": " 카페를 걷"
+     }
+    },
+    {
+     "t_ms": 946,
+     "event": "thinking",
+     "data": {
+      "delta": "기 편한 순"
+     }
+    },
+    {
+     "t_ms": 977,
+     "event": "thinking",
+     "data": {
+      "delta": "서로 잇는다"
+     }
+    },
+    {
+     "t_ms": 1008,
+     "event": "thinking",
+     "data": {
+      "delta": "."
+     }
+    },
+    {
+     "t_ms": 1040,
+     "event": "status",
+     "data": {
+      "text": "기억해 두고 있어요."
+     }
+    },
+    {
+     "t_ms": 1040,
+     "event": "step",
+     "data": {
+      "id": "s1",
+      "kind": "memory",
+      "status": "running",
+      "title": "기억하기",
+      "detail": ""
+     }
+    },
+    {
+     "t_ms": 1072,
+     "event": "step",
+     "data": {
+      "id": "s1",
+      "kind": "memory",
+      "status": "done",
+      "title": "기억하기",
+      "detail": "어머니와 동행"
+     }
+    },
+    {
+     "t_ms": 1466,
+     "event": "status",
+     "data": {
+      "text": "장소를 찾고 있어요."
+     }
+    },
+    {
+     "t_ms": 1466,
+     "event": "step",
+     "data": {
+      "id": "s2",
+      "kind": "search",
+      "status": "running",
+      "title": "장소 찾기",
+      "detail": ""
+     }
+    },
+    {
+     "t_ms": 1573,
+     "event": "step",
+     "data": {
+      "id": "s2",
+      "kind": "search",
+      "status": "done",
+      "title": "장소 찾기",
+      "detail": "구룡포 일본인 가옥거리 외 2곳"
+     }
+    },
+    {
+     "t_ms": 1573,
+     "event": "step",
+     "data": {
+      "id": "s2",
+      "kind": "search",
+      "status": "running",
+      "title": "장소 찾기",
+      "detail": ""
+     }
+    },
+    {
+     "t_ms": 1632,
+     "event": "step",
+     "data": {
+      "id": "s2",
+      "kind": "search",
+      "status": "done",
+      "title": "장소 찾기",
+      "detail": "구룡포항 외 2곳"
+     }
+    },
+    {
+     "t_ms": 1632,
+     "event": "step",
+     "data": {
+      "id": "s2",
+      "kind": "search",
+      "status": "running",
+      "title": "장소 찾기",
+      "detail": ""
+     }
+    },
+    {
+     "t_ms": 1687,
+     "event": "step",
+     "data": {
+      "id": "s2",
+      "kind": "search",
+      "status": "done",
+      "title": "장소 찾기",
+      "detail": "구룡포과메기문화관 외 2곳"
+     }
+    },
+    {
+     "t_ms": 1687,
+     "event": "step",
+     "data": {
+      "id": "s2",
+      "kind": "search",
+      "status": "running",
+      "title": "장소 찾기",
+      "detail": ""
+     }
+    },
+    {
+     "t_ms": 1758,
+     "event": "step",
+     "data": {
+      "id": "s2",
+      "kind": "search",
+      "status": "done",
+      "title": "장소 찾기",
+      "detail": "구룡포 북방파제 외 2곳"
+     }
+    },
+    {
+     "t_ms": 1758,
+     "event": "step",
+     "data": {
+      "id": "s2",
+      "kind": "search",
+      "status": "running",
+      "title": "장소 찾기",
+      "detail": ""
+     }
+    },
+    {
+     "t_ms": 1825,
+     "event": "step",
+     "data": {
+      "id": "s2",
+      "kind": "search",
+      "status": "done",
+      "title": "장소 찾기",
+      "detail": "까멜리아인구룡포 외 4곳"
+     }
+    },
+    {
+     "t_ms": 2215,
+     "event": "status",
+     "data": {
+      "text": "조건을 반영하고 있어요."
+     }
+    },
+    {
+     "t_ms": 2215,
+     "event": "step",
+     "data": {
+      "id": "s3",
+      "kind": "rule",
+      "status": "running",
+      "title": "조건 반영",
+      "detail": ""
+     }
+    },
+    {
+     "t_ms": 2231,
+     "event": "step",
+     "data": {
+      "id": "s3",
+      "kind": "rule",
+      "status": "done",
+      "title": "조건 반영",
+      "detail": "18:00 전 종료"
+     }
+    },
+    {
+     "t_ms": 2601,
+     "event": "status",
+     "data": {
+      "text": "일정을 조정하고 있어요."
+     }
+    },
+    {
+     "t_ms": 2601,
+     "event": "step",
+     "data": {
+      "id": "s4",
+      "kind": "edit",
+      "status": "running",
+      "title": "일정 조정",
+      "detail": ""
+     }
+    },
+    {
+     "t_ms": 2608,
+     "event": "step",
+     "data": {
+      "id": "s4",
+      "kind": "edit",
+      "status": "done",
+      "title": "일정 조정",
+      "detail": "구룡포 일본인 가옥거리 추가"
+     }
+    },
+    {
+     "t_ms": 2608,
+     "event": "step",
+     "data": {
+      "id": "s4",
+      "kind": "edit",
+      "status": "running",
+      "title": "일정 조정",
+      "detail": ""
+     }
+    },
+    {
+     "t_ms": 2615,
+     "event": "step",
+     "data": {
+      "id": "s4",
+      "kind": "edit",
+      "status": "done",
+      "title": "일정 조정",
+      "detail": "구룡포항 추가 · 총 이동 +10분"
+     }
+    },
+    {
+     "t_ms": 2615,
+     "event": "step",
+     "data": {
+      "id": "s4",
+      "kind": "edit",
+      "status": "running",
+      "title": "일정 조정",
+      "detail": ""
+     }
+    },
+    {
+     "t_ms": 2621,
+     "event": "step",
+     "data": {
+      "id": "s4",
+      "kind": "edit",
+      "status": "done",
+      "title": "일정 조정",
+      "detail": "구룡포과메기문화관 추가 · 총 이동 +17분"
+     }
+    },
+    {
+     "t_ms": 2621,
+     "event": "step",
+     "data": {
+      "id": "s4",
+      "kind": "edit",
+      "status": "running",
+      "title": "일정 조정",
+      "detail": ""
+     }
+    },
+    {
+     "t_ms": 2627,
+     "event": "step",
+     "data": {
+      "id": "s4",
+      "kind": "edit",
+      "status": "done",
+      "title": "일정 조정",
+      "detail": "구룡포 북방파제 추가 · 총 이동 +13분"
+     }
+    },
+    {
+     "t_ms": 2627,
+     "event": "step",
+     "data": {
+      "id": "s4",
+      "kind": "edit",
+      "status": "running",
+      "title": "일정 조정",
+      "detail": ""
+     }
+    },
+    {
+     "t_ms": 2632,
+     "event": "step",
+     "data": {
+      "id": "s4",
+      "kind": "edit",
+      "status": "done",
+      "title": "일정 조정",
+      "detail": "카페파도 추가 · 총 이동 +45분"
+     }
+    },
+    {
+     "t_ms": 3029,
+     "event": "status",
+     "data": {
+      "text": "일정을 검토하고 있어요."
+     }
+    },
+    {
+     "t_ms": 3029,
+     "event": "step",
+     "data": {
+      "id": "s5",
+      "kind": "review",
+      "status": "running",
+      "title": "일정 검토",
+      "detail": ""
+     }
+    },
+    {
+     "t_ms": 3080,
+     "event": "step",
+     "data": {
+      "id": "s5",
+      "kind": "review",
+      "status": "done",
+      "title": "일정 검토",
+      "detail": "문제 3건"
+     }
+    },
+    {
+     "t_ms": 4074,
+     "event": "step",
+     "data": {
+      "id": "s5",
+      "kind": "review",
+      "status": "running",
+      "title": "일정 검토",
+      "detail": ""
+     }
+    },
+    {
+     "t_ms": 4101,
+     "event": "step",
+     "data": {
+      "id": "s5",
+      "kind": "review",
+      "status": "done",
+      "title": "일정 검토",
+      "detail": "문제 3건"
+     }
+    },
+    {
+     "t_ms": 4499,
+     "event": "thinking",
+     "data": {
+      "delta": "북방파제에서"
+     }
+    },
+    {
+     "t_ms": 4530,
+     "event": "thinking",
+     "data": {
+      "delta": " 카페파도까"
+     }
+    },
+    {
+     "t_ms": 4562,
+     "event": "thinking",
+     "data": {
+      "delta": "지 걸어가면"
+     }
+    },
+    {
+     "t_ms": 4592,
+     "event": "thinking",
+     "data": {
+      "delta": " 너무 길다"
+     }
+    },
+    {
+     "t_ms": 4623,
+     "event": "thinking",
+     "data": {
+      "delta": ". 그 구간"
+     }
+    },
+    {
+     "t_ms": 4655,
+     "event": "thinking",
+     "data": {
+      "delta": "만 차량으로"
+     }
+    },
+    {
+     "t_ms": 4686,
+     "event": "thinking",
+     "data": {
+      "delta": " 바꾼다."
+     }
+    },
+    {
+     "t_ms": 4720,
+     "event": "status",
+     "data": {
+      "text": "일정을 조정하고 있어요."
+     }
+    },
+    {
+     "t_ms": 4720,
+     "event": "step",
+     "data": {
+      "id": "s6",
+      "kind": "edit",
+      "status": "running",
+      "title": "일정 조정",
+      "detail": ""
+     }
+    },
+    {
+     "t_ms": 4781,
+     "event": "step",
+     "data": {
+      "id": "s6",
+      "kind": "edit",
+      "status": "done",
+      "title": "일정 조정",
+      "detail": "카페파도 수정 · 총 이동 -32분"
+     }
+    },
+    {
+     "t_ms": 5180,
+     "event": "status",
+     "data": {
+      "text": "일정을 검토하고 있어요."
+     }
+    },
+    {
+     "t_ms": 5180,
+     "event": "step",
+     "data": {
+      "id": "s7",
+      "kind": "review",
+      "status": "running",
+      "title": "일정 검토",
+      "detail": ""
+     }
+    },
+    {
+     "t_ms": 5294,
+     "event": "step",
+     "data": {
+      "id": "s7",
+      "kind": "review",
+      "status": "done",
+      "title": "일정 검토",
+      "detail": "문제 없음"
+     }
+    },
+    {
+     "t_ms": 6451,
+     "event": "step",
+     "data": {
+      "id": "s7",
+      "kind": "review",
+      "status": "running",
+      "title": "일정 검토",
+      "detail": ""
+     }
+    },
+    {
+     "t_ms": 6474,
+     "event": "step",
+     "data": {
+      "id": "s7",
+      "kind": "review",
+      "status": "done",
+      "title": "일정 검토",
+      "detail": "문제 없음"
+     }
+    },
+    {
+     "t_ms": 6474,
+     "event": "text",
+     "data": {
+      "delta": "어머니와 걷기 편한 순서로 다섯 곳을 넣었어요. 12:30 일본인 가옥거리에서 시작해 구룡포항에서 점심을 먹고, 과메기문화관과 북방파제를 거쳐 카페파도에서 17:38에 마쳐요. 북방파제에서 카페까지는 멀어서 차로 이동하게 했고, 18시 전에 끝나도록 조건도 걸어 두었어요."
+     }
+    },
+    {
+     "t_ms": 6482,
+     "event": "status",
+     "data": {
+      "text": "변경안을 만들고 있어요."
+     }
+    },
+    {
+     "t_ms": 6482,
+     "event": "step",
+     "data": {
+      "id": "s8",
+      "kind": "proposal",
+      "status": "running",
+      "title": "변경안 만들기",
+      "detail": "잠시만요..."
+     }
+    },
+    {
+     "t_ms": 6497,
+     "event": "step",
+     "data": {
+      "id": "s8",
+      "kind": "proposal",
+      "status": "done",
+      "title": "변경안 만들기",
+      "detail": "변경 6건"
+     }
+    },
+    {
+     "t_ms": 6512,
+     "event": "proposal",
+     "data": {
+      "id": 116,
+      "plan_id": 240,
+      "status": "pending",
+      "decision": null,
+      "summary": "어머니와 걷기 편한 순서로 다섯 곳을 넣었어요. 12:30 일본인 가옥거리에서 시작해 구룡포항에서 점심을 먹고, 과메기문화관과 북방파제를 거쳐 카페파도에서 17:38에 마쳐요. 북방파제에서 카페까지는 멀어서 차로 이동하게 했고, 18시 전에 끝나도록 조건도 걸어 두었어요.",
+      "source": "llm",
+      "origin": "d4bb6faca3064447856d260bdb6699e9",
+      "base_version": 1,
+      "changes": [
+       {
+        "kind": "added",
+        "message": "추가: 1일차 1번째 '구룡포 일본인 가옥거리' (60분)",
+        "item_id": -1,
+        "day": 1
+       },
+       {
+        "kind": "added",
+        "message": "추가: 1일차 2번째 '구룡포항' (50분)",
+        "item_id": -2,
+        "day": 1
+       },
+       {
+        "kind": "added",
+        "message": "추가: 1일차 3번째 '구룡포과메기문화관' (60분)",
+        "item_id": -3,
+        "day": 1
+       },
+       {
+        "kind": "added",
+        "message": "추가: 1일차 4번째 '구룡포 북방파제' (40분)",
+        "item_id": -4,
+        "day": 1
+       },
+       {
+        "kind": "added",
+        "message": "추가: 1일차 5번째 '카페파도' (45분)",
+        "item_id": -5,
+        "day": 1
+       },
+       {
+        "kind": "rule_added",
+        "message": "규칙 추가: end_before {'time': '18:00'} (18시 전에 끝내기)",
+        "item_id": null,
+        "day": null
+       },
+       {
+        "kind": "day_end",
+        "message": "1일차 종료: 없음 → 17:38",
+        "item_id": null,
+        "day": 1
+       }
+      ],
+      "created_at": "2026-10-09T14:37:44.097168Z",
+      "decided_at": null,
+      "request": "엄마랑 구룡포 일정 짜줘",
+      "ops": [
+       {
+        "type": "end_before",
+        "params": {
+         "time": "18:00"
+        },
+        "hard": true,
+        "source": "llm",
+        "note": "18시 전에 끝내기",
+        "op": "add_constraint"
+       },
+       {
+        "place_id": "kto-1909659",
+        "day": 1,
+        "order": null,
+        "stay_minutes": 60,
+        "memo": "골목과 계단을 천천히",
+        "op": "add_item"
+       },
+       {
+        "place_id": "kto-2610501",
+        "day": 1,
+        "order": null,
+        "stay_minutes": 50,
+        "memo": "점심 (항구 앞 식당)",
+        "op": "add_item"
+       },
+       {
+        "place_id": "kto-2660046",
+        "day": 1,
+        "order": null,
+        "stay_minutes": 60,
+        "memo": "",
+        "op": "add_item"
+       },
+       {
+        "place_id": "poi-gr-breakwater-north",
+        "day": 1,
+        "order": null,
+        "stay_minutes": 40,
+        "memo": "",
+        "op": "add_item"
+       },
+       {
+        "place_id": "kto-2834344",
+        "day": 1,
+        "order": null,
+        "stay_minutes": 45,
+        "memo": "",
+        "op": "add_item"
+       },
+       {
+        "travel_mode": "car",
+        "op": "update_item",
+        "item_id": -5
+       }
+      ],
+      "before": {
+       "id": 240,
+       "user_id": "74bb7f62aa554ec1861a8a24288ff267",
+       "title": "엄마랑 구룡포",
+       "start_date": "2026-10-10",
+       "end_date": "2026-10-10",
+       "day_start": "12:30",
+       "day_end": "18:00",
+       "travel_mode": "walk",
+       "memo": "",
+       "version": 1,
+       "progress_version": 0,
+       "item_count": 0,
+       "created_at": "2026-10-09T14:37:37.717083Z",
+       "updated_at": "2026-10-09T14:37:37.717083Z",
+       "days": [
+        {
+         "day": 1,
+         "date": "2026-10-10",
+         "weekday": "토",
+         "end_at": null,
+         "items": []
+        }
+       ],
+       "constraints": [],
+       "violations": []
+      },
+      "after": {
+       "id": 240,
+       "user_id": "74bb7f62aa554ec1861a8a24288ff267",
+       "title": "엄마랑 구룡포",
+       "start_date": "2026-10-10",
+       "end_date": "2026-10-10",
+       "day_start": "12:30",
+       "day_end": "18:00",
+       "travel_mode": "walk",
+       "memo": "",
+       "version": 1,
+       "progress_version": 0,
+       "item_count": 5,
+       "created_at": "2026-10-09T14:37:37.717083Z",
+       "updated_at": "2026-10-09T14:37:44.099848Z",
+       "days": [
+        {
+         "day": 1,
+         "date": "2026-10-10",
+         "weekday": "토",
+         "end_at": "17:38",
+         "items": [
+          {
+           "id": -1,
+           "day": 1,
+           "order": 1,
+           "place_id": "kto-1909659",
+           "place": {
+            "id": "kto-1909659",
+            "title": "구룡포 일본인 가옥거리",
+            "content_type": "관광지",
+            "lat": 35.9906209551,
+            "lng": 129.5604550366,
+            "addr": "경상북도 포항시 남구 구룡포읍 호미로 277",
+            "open_hours": "상시 개방",
+            "rest_date": "연중무휴"
+           },
+           "stay_minutes": 60,
+           "start_time": null,
+           "memo": "골목과 계단을 천천히",
+           "status": "planned",
+           "travel_mode": null,
+           "leg_mode": null,
+           "travel_minutes": null,
+           "travel_distance_m": null,
+           "travel_source": null,
+           "travel_options": null,
+           "arrive_at": "12:30",
+           "start_at": "12:30",
+           "end_at": "13:30",
+           "arrived_at": null,
+           "done_at": null
+          },
+          {
+           "id": -2,
+           "day": 1,
+           "order": 2,
+           "place_id": "kto-2610501",
+           "place": {
+            "id": "kto-2610501",
+            "title": "구룡포항",
+            "content_type": "관광지",
+            "lat": 35.9893051205,
+            "lng": 129.555641609,
+            "addr": "경상북도 포항시 남구 구룡포읍 호미로 222-1",
+            "open_hours": "상시 개방",
+            "rest_date": "연중무휴"
+           },
+           "stay_minutes": 50,
+           "start_time": null,
+           "memo": "점심 (항구 앞 식당)",
+           "status": "planned",
+           "travel_mode": null,
+           "leg_mode": "walk",
+           "travel_minutes": 10,
+           "travel_distance_m": 632,
+           "travel_source": "road",
+           "travel_options": {
+            "walk": {
+             "minutes": 10,
+             "distance_m": 632,
+             "source": "road"
+            },
+            "car": {
+             "minutes": 7,
+             "distance_m": 631,
+             "source": "road"
+            }
+           },
+           "arrive_at": "13:40",
+           "start_at": "13:40",
+           "end_at": "14:30",
+           "arrived_at": null,
+           "done_at": null
+          },
+          {
+           "id": -3,
+           "day": 1,
+           "order": 3,
+           "place_id": "kto-2660046",
+           "place": {
+            "id": "kto-2660046",
+            "title": "구룡포과메기문화관",
+            "content_type": "문화시설",
+            "lat": 35.9927402978,
+            "lng": 129.5617992377,
+            "addr": "경상북도 포항시 남구 구룡포읍 구룡포길117번길 28-8",
+            "open_hours": "09:00~18:00 (입장 마감 17:30)",
+            "rest_date": "매주 월요일 / 공휴일 다음날 / 1월 1일 / 추석 당일"
+           },
+           "stay_minutes": 60,
+           "start_time": null,
+           "memo": "",
+           "status": "planned",
+           "travel_mode": null,
+           "leg_mode": "walk",
+           "travel_minutes": 17,
+           "travel_distance_m": 1006,
+           "travel_source": "road",
+           "travel_options": {
+            "walk": {
+             "minutes": 17,
+             "distance_m": 1006,
+             "source": "road"
+            },
+            "car": {
+             "minutes": 9,
+             "distance_m": 1471,
+             "source": "road"
+            }
+           },
+           "arrive_at": "14:47",
+           "start_at": "14:47",
+           "end_at": "15:47",
+           "arrived_at": null,
+           "done_at": null
+          },
+          {
+           "id": -4,
+           "day": 1,
+           "order": 4,
+           "place_id": "poi-gr-breakwater-north",
+           "place": {
+            "id": "poi-gr-breakwater-north",
+            "title": "구룡포 북방파제",
+            "content_type": "관광지",
+            "lat": 35.988078,
+            "lng": 129.559279,
+            "addr": "경상북도 포항시 남구 구룡포읍 구룡포리 (구룡포항 북방파제)",
+            "open_hours": "상시 개방 (기상 악화 시 출입 자제)",
+            "rest_date": "연중무휴"
+           },
+           "stay_minutes": 40,
+           "start_time": null,
+           "memo": "",
+           "status": "planned",
+           "travel_mode": null,
+           "leg_mode": "walk",
+           "travel_minutes": 13,
+           "travel_distance_m": 886,
+           "travel_source": "road",
+           "travel_options": {
+            "walk": {
+             "minutes": 13,
+             "distance_m": 886,
+             "source": "road"
+            },
+            "car": {
+             "minutes": 10,
+             "distance_m": 1138,
+             "source": "road"
+            }
+           },
+           "arrive_at": "16:00",
+           "start_at": "16:00",
+           "end_at": "16:40",
+           "arrived_at": null,
+           "done_at": null
+          },
+          {
+           "id": -5,
+           "day": 1,
+           "order": 5,
+           "place_id": "kto-2834344",
+           "place": {
+            "id": "kto-2834344",
+            "title": "카페파도",
+            "content_type": "음식점",
+            "lat": 35.9768342269,
+            "lng": 129.5514895569,
+            "addr": "경상북도 포항시 남구 구룡포읍 하정로172번길 2",
+            "open_hours": "10:00~21:00 (마지막 주문 20:30)",
+            "rest_date": "연중무휴"
+           },
+           "stay_minutes": 45,
+           "start_time": null,
+           "memo": "",
+           "status": "planned",
+           "travel_mode": "car",
+           "leg_mode": "car",
+           "travel_minutes": 13,
+           "travel_distance_m": 3265,
+           "travel_source": "road",
+           "travel_options": {
+            "walk": {
+             "minutes": 45,
+             "distance_m": 2922,
+             "source": "road"
+            },
+            "car": {
+             "minutes": 13,
+             "distance_m": 3265,
+             "source": "road"
+            }
+           },
+           "arrive_at": "16:53",
+           "start_at": "16:53",
+           "end_at": "17:38",
+           "arrived_at": null,
+           "done_at": null
+          }
+         ]
+        }
+       ],
+       "constraints": [
+        {
+         "id": -1,
+         "type": "end_before",
+         "params": {
+          "time": "18:00"
+         },
+         "hard": true,
+         "source": "llm",
+         "note": "18시 전에 끝내기"
+        }
+       ],
+       "violations": []
+      },
+      "current_version": 1,
+      "base_changed": false,
+      "progress_changed": []
+     }
+    },
+    {
+     "t_ms": 6512,
+     "event": "steps_done",
+     "data": {
+      "count": 8,
+      "summary": "8단계 완료 : 기억하기, 장소 찾기, 조건 반영, 일정 조정, 일정 검토, 일정 조정, 일정 검토, 변경안 만들기"
+     }
+    },
+    {
+     "t_ms": 6512,
+     "event": "done",
+     "data": {
+      "text": "어머니와 걷기 편한 순서로 다섯 곳을 넣었어요. 12:30 일본인 가옥거리에서 시작해 구룡포항에서 점심을 먹고, 과메기문화관과 북방파제를 거쳐 카페파도에서 17:38에 마쳐요. 북방파제에서 카페까지는 멀어서 차로 이동하게 했고, 18시 전에 끝나도록 조건도 걸어 두었어요.",
+      "cards": [
+       {
+        "type": "proposal",
+        "id": 116
+       }
+      ],
+      "usage": {
+       "input": 0,
+       "cached": 0,
+       "output": 0,
+       "reasoning": 0,
+       "calls": 9
+      },
+      "message_id": 1038,
+      "mode": "plan"
+     }
+    }
+   ]
+  },
+  {
+   "name": "session_detail",
+   "method": "GET",
+   "route": "/agent/sessions/{session_id}",
+   "path": "/agent/sessions/d4bb6faca3064447856d260bdb6699e9",
+   "query": {},
+   "body": null,
+   "status": 200,
+   "elapsed_ms": 13,
+   "response": {
+    "id": "d4bb6faca3064447856d260bdb6699e9",
+    "plan_id": 240,
+    "created_at": "2026-10-09T14:37:37.803523Z",
+    "updated_at": "2026-10-09T14:37:44.107245Z",
+    "messages": [
+     {
+      "id": 1015,
+      "role": "user",
+      "content": "엄마랑 구룡포 일정 짜줘",
+      "created_at": "2026-10-09T14:37:44.109081Z",
+      "steps": [],
+      "steps_summary": null,
+      "cards": []
+     },
+     {
+      "id": 1038,
+      "role": "assistant",
+      "content": "어머니와 걷기 편한 순서로 다섯 곳을 넣었어요. 12:30 일본인 가옥거리에서 시작해 구룡포항에서 점심을 먹고, 과메기문화관과 북방파제를 거쳐 카페파도에서 17:38에 마쳐요. 북방파제에서 카페까지는 멀어서 차로 이동하게 했고, 18시 전에 끝나도록 조건도 걸어 두었어요.",
+      "created_at": "2026-10-09T14:37:44.109081Z",
+      "steps": [
+       {
+        "id": "s1",
+        "kind": "memory",
+        "status": "done",
+        "title": "기억하기",
+        "detail": "어머니와 동행"
+       },
+       {
+        "id": "s2",
+        "kind": "search",
+        "status": "done",
+        "title": "장소 찾기",
+        "detail": "까멜리아인구룡포 외 4곳"
+       },
+       {
+        "id": "s3",
+        "kind": "rule",
+        "status": "done",
+        "title": "조건 반영",
+        "detail": "18:00 전 종료"
+       },
+       {
+        "id": "s4",
+        "kind": "edit",
+        "status": "done",
+        "title": "일정 조정",
+        "detail": "카페파도 추가 · 총 이동 +45분"
+       },
+       {
+        "id": "s5",
+        "kind": "review",
+        "status": "done",
+        "title": "일정 검토",
+        "detail": "문제 3건"
+       },
+       {
+        "id": "s6",
+        "kind": "edit",
+        "status": "done",
+        "title": "일정 조정",
+        "detail": "카페파도 수정 · 총 이동 -32분"
+       },
+       {
+        "id": "s7",
+        "kind": "review",
+        "status": "done",
+        "title": "일정 검토",
+        "detail": "문제 없음"
+       },
+       {
+        "id": "s8",
+        "kind": "proposal",
+        "status": "done",
+        "title": "변경안 만들기",
+        "detail": "변경 6건"
+       }
+      ],
+      "steps_summary": "8단계 완료 : 기억하기, 장소 찾기, 조건 반영, 일정 조정, 일정 검토, 일정 조정, 일정 검토, 변경안 만들기",
+      "cards": [
+       {
+        "type": "proposal",
+        "proposal": {
+         "id": 116,
+         "plan_id": 240,
+         "status": "pending",
+         "decision": null,
+         "summary": "어머니와 걷기 편한 순서로 다섯 곳을 넣었어요. 12:30 일본인 가옥거리에서 시작해 구룡포항에서 점심을 먹고, 과메기문화관과 북방파제를 거쳐 카페파도에서 17:38에 마쳐요. 북방파제에서 카페까지는 멀어서 차로 이동하게 했고, 18시 전에 끝나도록 조건도 걸어 두었어요.",
+         "source": "llm",
+         "origin": "d4bb6faca3064447856d260bdb6699e9",
+         "base_version": 1,
+         "changes": [
+          {
+           "kind": "added",
+           "message": "추가: 1일차 1번째 '구룡포 일본인 가옥거리' (60분)",
+           "item_id": -1,
+           "day": 1
+          },
+          {
+           "kind": "added",
+           "message": "추가: 1일차 2번째 '구룡포항' (50분)",
+           "item_id": -2,
+           "day": 1
+          },
+          {
+           "kind": "added",
+           "message": "추가: 1일차 3번째 '구룡포과메기문화관' (60분)",
+           "item_id": -3,
+           "day": 1
+          },
+          {
+           "kind": "added",
+           "message": "추가: 1일차 4번째 '구룡포 북방파제' (40분)",
+           "item_id": -4,
+           "day": 1
+          },
+          {
+           "kind": "added",
+           "message": "추가: 1일차 5번째 '카페파도' (45분)",
+           "item_id": -5,
+           "day": 1
+          },
+          {
+           "kind": "rule_added",
+           "message": "규칙 추가: end_before {'time': '18:00'} (18시 전에 끝내기)",
+           "item_id": null,
+           "day": null
+          },
+          {
+           "kind": "day_end",
+           "message": "1일차 종료: 없음 → 17:38",
+           "item_id": null,
+           "day": 1
+          }
+         ],
+         "created_at": "2026-10-09T14:37:44.097168Z",
+         "decided_at": null,
+         "request": "엄마랑 구룡포 일정 짜줘",
+         "ops": [
+          {
+           "type": "end_before",
+           "params": {
+            "time": "18:00"
+           },
+           "hard": true,
+           "source": "llm",
+           "note": "18시 전에 끝내기",
+           "op": "add_constraint"
+          },
+          {
+           "place_id": "kto-1909659",
+           "day": 1,
+           "order": null,
+           "stay_minutes": 60,
+           "memo": "골목과 계단을 천천히",
+           "op": "add_item"
+          },
+          {
+           "place_id": "kto-2610501",
+           "day": 1,
+           "order": null,
+           "stay_minutes": 50,
+           "memo": "점심 (항구 앞 식당)",
+           "op": "add_item"
+          },
+          {
+           "place_id": "kto-2660046",
+           "day": 1,
+           "order": null,
+           "stay_minutes": 60,
+           "memo": "",
+           "op": "add_item"
+          },
+          {
+           "place_id": "poi-gr-breakwater-north",
+           "day": 1,
+           "order": null,
+           "stay_minutes": 40,
+           "memo": "",
+           "op": "add_item"
+          },
+          {
+           "place_id": "kto-2834344",
+           "day": 1,
+           "order": null,
+           "stay_minutes": 45,
+           "memo": "",
+           "op": "add_item"
+          },
+          {
+           "travel_mode": "car",
+           "op": "update_item",
+           "item_id": -5
+          }
+         ],
+         "before": {
+          "id": 240,
+          "user_id": "74bb7f62aa554ec1861a8a24288ff267",
+          "title": "엄마랑 구룡포",
+          "start_date": "2026-10-10",
+          "end_date": "2026-10-10",
+          "day_start": "12:30",
+          "day_end": "18:00",
+          "travel_mode": "walk",
+          "memo": "",
+          "version": 1,
+          "progress_version": 0,
+          "item_count": 0,
+          "created_at": "2026-10-09T14:37:37.717083Z",
+          "updated_at": "2026-10-09T14:37:37.717083Z",
+          "days": [
+           {
+            "day": 1,
+            "date": "2026-10-10",
+            "weekday": "토",
+            "end_at": null,
+            "items": []
+           }
+          ],
+          "constraints": [],
+          "violations": []
+         },
+         "after": {
+          "id": 240,
+          "user_id": "74bb7f62aa554ec1861a8a24288ff267",
+          "title": "엄마랑 구룡포",
+          "start_date": "2026-10-10",
+          "end_date": "2026-10-10",
+          "day_start": "12:30",
+          "day_end": "18:00",
+          "travel_mode": "walk",
+          "memo": "",
+          "version": 1,
+          "progress_version": 0,
+          "item_count": 5,
+          "created_at": "2026-10-09T14:37:37.717083Z",
+          "updated_at": "2026-10-09T14:37:44.099848Z",
+          "days": [
+           {
+            "day": 1,
+            "date": "2026-10-10",
+            "weekday": "토",
+            "end_at": "17:38",
+            "items": [
+             {
+              "id": -1,
+              "day": 1,
+              "order": 1,
+              "place_id": "kto-1909659",
+              "place": {
+               "id": "kto-1909659",
+               "title": "구룡포 일본인 가옥거리",
+               "content_type": "관광지",
+               "lat": 35.9906209551,
+               "lng": 129.5604550366,
+               "addr": "경상북도 포항시 남구 구룡포읍 호미로 277",
+               "open_hours": "상시 개방",
+               "rest_date": "연중무휴"
+              },
+              "stay_minutes": 60,
+              "start_time": null,
+              "memo": "골목과 계단을 천천히",
+              "status": "planned",
+              "travel_mode": null,
+              "leg_mode": null,
+              "travel_minutes": null,
+              "travel_distance_m": null,
+              "travel_source": null,
+              "travel_options": null,
+              "arrive_at": "12:30",
+              "start_at": "12:30",
+              "end_at": "13:30",
+              "arrived_at": null,
+              "done_at": null
+             },
+             {
+              "id": -2,
+              "day": 1,
+              "order": 2,
+              "place_id": "kto-2610501",
+              "place": {
+               "id": "kto-2610501",
+               "title": "구룡포항",
+               "content_type": "관광지",
+               "lat": 35.9893051205,
+               "lng": 129.555641609,
+               "addr": "경상북도 포항시 남구 구룡포읍 호미로 222-1",
+               "open_hours": "상시 개방",
+               "rest_date": "연중무휴"
+              },
+              "stay_minutes": 50,
+              "start_time": null,
+              "memo": "점심 (항구 앞 식당)",
+              "status": "planned",
+              "travel_mode": null,
+              "leg_mode": "walk",
+              "travel_minutes": 10,
+              "travel_distance_m": 632,
+              "travel_source": "road",
+              "travel_options": {
+               "car": {
+                "minutes": 7,
+                "distance_m": 631,
+                "source": "road"
+               },
+               "walk": {
+                "minutes": 10,
+                "distance_m": 632,
+                "source": "road"
+               }
+              },
+              "arrive_at": "13:40",
+              "start_at": "13:40",
+              "end_at": "14:30",
+              "arrived_at": null,
+              "done_at": null
+             },
+             {
+              "id": -3,
+              "day": 1,
+              "order": 3,
+              "place_id": "kto-2660046",
+              "place": {
+               "id": "kto-2660046",
+               "title": "구룡포과메기문화관",
+               "content_type": "문화시설",
+               "lat": 35.9927402978,
+               "lng": 129.5617992377,
+               "addr": "경상북도 포항시 남구 구룡포읍 구룡포길117번길 28-8",
+               "open_hours": "09:00~18:00 (입장 마감 17:30)",
+               "rest_date": "매주 월요일 / 공휴일 다음날 / 1월 1일 / 추석 당일"
+              },
+              "stay_minutes": 60,
+              "start_time": null,
+              "memo": "",
+              "status": "planned",
+              "travel_mode": null,
+              "leg_mode": "walk",
+              "travel_minutes": 17,
+              "travel_distance_m": 1006,
+              "travel_source": "road",
+              "travel_options": {
+               "car": {
+                "minutes": 9,
+                "distance_m": 1471,
+                "source": "road"
+               },
+               "walk": {
+                "minutes": 17,
+                "distance_m": 1006,
+                "source": "road"
+               }
+              },
+              "arrive_at": "14:47",
+              "start_at": "14:47",
+              "end_at": "15:47",
+              "arrived_at": null,
+              "done_at": null
+             },
+             {
+              "id": -4,
+              "day": 1,
+              "order": 4,
+              "place_id": "poi-gr-breakwater-north",
+              "place": {
+               "id": "poi-gr-breakwater-north",
+               "title": "구룡포 북방파제",
+               "content_type": "관광지",
+               "lat": 35.988078,
+               "lng": 129.559279,
+               "addr": "경상북도 포항시 남구 구룡포읍 구룡포리 (구룡포항 북방파제)",
+               "open_hours": "상시 개방 (기상 악화 시 출입 자제)",
+               "rest_date": "연중무휴"
+              },
+              "stay_minutes": 40,
+              "start_time": null,
+              "memo": "",
+              "status": "planned",
+              "travel_mode": null,
+              "leg_mode": "walk",
+              "travel_minutes": 13,
+              "travel_distance_m": 886,
+              "travel_source": "road",
+              "travel_options": {
+               "car": {
+                "minutes": 10,
+                "distance_m": 1138,
+                "source": "road"
+               },
+               "walk": {
+                "minutes": 13,
+                "distance_m": 886,
+                "source": "road"
+               }
+              },
+              "arrive_at": "16:00",
+              "start_at": "16:00",
+              "end_at": "16:40",
+              "arrived_at": null,
+              "done_at": null
+             },
+             {
+              "id": -5,
+              "day": 1,
+              "order": 5,
+              "place_id": "kto-2834344",
+              "place": {
+               "id": "kto-2834344",
+               "title": "카페파도",
+               "content_type": "음식점",
+               "lat": 35.9768342269,
+               "lng": 129.5514895569,
+               "addr": "경상북도 포항시 남구 구룡포읍 하정로172번길 2",
+               "open_hours": "10:00~21:00 (마지막 주문 20:30)",
+               "rest_date": "연중무휴"
+              },
+              "stay_minutes": 45,
+              "start_time": null,
+              "memo": "",
+              "status": "planned",
+              "travel_mode": "car",
+              "leg_mode": "car",
+              "travel_minutes": 13,
+              "travel_distance_m": 3265,
+              "travel_source": "road",
+              "travel_options": {
+               "car": {
+                "minutes": 13,
+                "distance_m": 3265,
+                "source": "road"
+               },
+               "walk": {
+                "minutes": 45,
+                "distance_m": 2922,
+                "source": "road"
+               }
+              },
+              "arrive_at": "16:53",
+              "start_at": "16:53",
+              "end_at": "17:38",
+              "arrived_at": null,
+              "done_at": null
+             }
+            ]
+           }
+          ],
+          "constraints": [
+           {
+            "id": -1,
+            "type": "end_before",
+            "params": {
+             "time": "18:00"
+            },
+            "hard": true,
+            "source": "llm",
+            "note": "18시 전에 끝내기"
+           }
+          ],
+          "violations": []
+         },
+         "current_version": 1,
+         "base_changed": false,
+         "progress_changed": []
+        }
+       }
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "name": "proposal_detail",
+   "method": "GET",
+   "route": "/planner/plans/{plan_id}/proposals/{proposal_id}",
+   "path": "/planner/plans/240/proposals/116",
+   "query": {},
+   "body": null,
+   "status": 200,
+   "elapsed_ms": 7,
+   "response": {
+    "id": 116,
+    "plan_id": 240,
+    "status": "pending",
+    "decision": null,
+    "summary": "어머니와 걷기 편한 순서로 다섯 곳을 넣었어요. 12:30 일본인 가옥거리에서 시작해 구룡포항에서 점심을 먹고, 과메기문화관과 북방파제를 거쳐 카페파도에서 17:38에 마쳐요. 북방파제에서 카페까지는 멀어서 차로 이동하게 했고, 18시 전에 끝나도록 조건도 걸어 두었어요.",
+    "source": "llm",
+    "origin": "d4bb6faca3064447856d260bdb6699e9",
+    "base_version": 1,
+    "changes": [
+     {
+      "kind": "added",
+      "message": "추가: 1일차 1번째 '구룡포 일본인 가옥거리' (60분)",
+      "item_id": -1,
+      "day": 1
+     },
+     {
+      "kind": "added",
+      "message": "추가: 1일차 2번째 '구룡포항' (50분)",
+      "item_id": -2,
+      "day": 1
+     },
+     {
+      "kind": "added",
+      "message": "추가: 1일차 3번째 '구룡포과메기문화관' (60분)",
+      "item_id": -3,
+      "day": 1
+     },
+     {
+      "kind": "added",
+      "message": "추가: 1일차 4번째 '구룡포 북방파제' (40분)",
+      "item_id": -4,
+      "day": 1
+     },
+     {
+      "kind": "added",
+      "message": "추가: 1일차 5번째 '카페파도' (45분)",
+      "item_id": -5,
+      "day": 1
+     },
+     {
+      "kind": "rule_added",
+      "message": "규칙 추가: end_before {'time': '18:00'} (18시 전에 끝내기)",
+      "item_id": null,
+      "day": null
+     },
+     {
+      "kind": "day_end",
+      "message": "1일차 종료: 없음 → 17:38",
+      "item_id": null,
+      "day": 1
+     }
+    ],
+    "created_at": "2026-10-09T14:37:44.097168Z",
+    "decided_at": null,
+    "request": "엄마랑 구룡포 일정 짜줘",
+    "ops": [
+     {
+      "type": "end_before",
+      "params": {
+       "time": "18:00"
+      },
+      "hard": true,
+      "source": "llm",
+      "note": "18시 전에 끝내기",
+      "op": "add_constraint"
+     },
+     {
+      "place_id": "kto-1909659",
+      "day": 1,
+      "order": null,
+      "stay_minutes": 60,
+      "memo": "골목과 계단을 천천히",
+      "op": "add_item"
+     },
+     {
+      "place_id": "kto-2610501",
+      "day": 1,
+      "order": null,
+      "stay_minutes": 50,
+      "memo": "점심 (항구 앞 식당)",
+      "op": "add_item"
+     },
+     {
+      "place_id": "kto-2660046",
+      "day": 1,
+      "order": null,
+      "stay_minutes": 60,
+      "memo": "",
+      "op": "add_item"
+     },
+     {
+      "place_id": "poi-gr-breakwater-north",
+      "day": 1,
+      "order": null,
+      "stay_minutes": 40,
+      "memo": "",
+      "op": "add_item"
+     },
+     {
+      "place_id": "kto-2834344",
+      "day": 1,
+      "order": null,
+      "stay_minutes": 45,
+      "memo": "",
+      "op": "add_item"
+     },
+     {
+      "travel_mode": "car",
+      "op": "update_item",
+      "item_id": -5
+     }
+    ],
+    "before": {
+     "id": 240,
+     "user_id": "74bb7f62aa554ec1861a8a24288ff267",
+     "title": "엄마랑 구룡포",
+     "start_date": "2026-10-10",
+     "end_date": "2026-10-10",
+     "day_start": "12:30",
+     "day_end": "18:00",
+     "travel_mode": "walk",
+     "memo": "",
+     "version": 1,
+     "progress_version": 0,
+     "item_count": 0,
+     "created_at": "2026-10-09T14:37:37.717083Z",
+     "updated_at": "2026-10-09T14:37:37.717083Z",
+     "days": [
+      {
+       "day": 1,
+       "date": "2026-10-10",
+       "weekday": "토",
+       "end_at": null,
+       "items": []
+      }
+     ],
+     "constraints": [],
+     "violations": []
+    },
+    "after": {
+     "id": 240,
+     "user_id": "74bb7f62aa554ec1861a8a24288ff267",
+     "title": "엄마랑 구룡포",
+     "start_date": "2026-10-10",
+     "end_date": "2026-10-10",
+     "day_start": "12:30",
+     "day_end": "18:00",
+     "travel_mode": "walk",
+     "memo": "",
+     "version": 1,
+     "progress_version": 0,
+     "item_count": 5,
+     "created_at": "2026-10-09T14:37:37.717083Z",
+     "updated_at": "2026-10-09T14:37:44.099848Z",
+     "days": [
+      {
+       "day": 1,
+       "date": "2026-10-10",
+       "weekday": "토",
+       "end_at": "17:38",
+       "items": [
+        {
+         "id": -1,
+         "day": 1,
+         "order": 1,
+         "place_id": "kto-1909659",
+         "place": {
+          "id": "kto-1909659",
+          "title": "구룡포 일본인 가옥거리",
+          "content_type": "관광지",
+          "lat": 35.9906209551,
+          "lng": 129.5604550366,
+          "addr": "경상북도 포항시 남구 구룡포읍 호미로 277",
+          "open_hours": "상시 개방",
+          "rest_date": "연중무휴"
+         },
+         "stay_minutes": 60,
+         "start_time": null,
+         "memo": "골목과 계단을 천천히",
+         "status": "planned",
+         "travel_mode": null,
+         "leg_mode": null,
+         "travel_minutes": null,
+         "travel_distance_m": null,
+         "travel_source": null,
+         "travel_options": null,
+         "arrive_at": "12:30",
+         "start_at": "12:30",
+         "end_at": "13:30",
+         "arrived_at": null,
+         "done_at": null
+        },
+        {
+         "id": -2,
+         "day": 1,
+         "order": 2,
+         "place_id": "kto-2610501",
+         "place": {
+          "id": "kto-2610501",
+          "title": "구룡포항",
+          "content_type": "관광지",
+          "lat": 35.9893051205,
+          "lng": 129.555641609,
+          "addr": "경상북도 포항시 남구 구룡포읍 호미로 222-1",
+          "open_hours": "상시 개방",
+          "rest_date": "연중무휴"
+         },
+         "stay_minutes": 50,
+         "start_time": null,
+         "memo": "점심 (항구 앞 식당)",
+         "status": "planned",
+         "travel_mode": null,
+         "leg_mode": "walk",
+         "travel_minutes": 10,
+         "travel_distance_m": 632,
+         "travel_source": "road",
+         "travel_options": {
+          "car": {
+           "minutes": 7,
+           "distance_m": 631,
+           "source": "road"
+          },
+          "walk": {
+           "minutes": 10,
+           "distance_m": 632,
+           "source": "road"
+          }
+         },
+         "arrive_at": "13:40",
+         "start_at": "13:40",
+         "end_at": "14:30",
+         "arrived_at": null,
+         "done_at": null
+        },
+        {
+         "id": -3,
+         "day": 1,
+         "order": 3,
+         "place_id": "kto-2660046",
+         "place": {
+          "id": "kto-2660046",
+          "title": "구룡포과메기문화관",
+          "content_type": "문화시설",
+          "lat": 35.9927402978,
+          "lng": 129.5617992377,
+          "addr": "경상북도 포항시 남구 구룡포읍 구룡포길117번길 28-8",
+          "open_hours": "09:00~18:00 (입장 마감 17:30)",
+          "rest_date": "매주 월요일 / 공휴일 다음날 / 1월 1일 / 추석 당일"
+         },
+         "stay_minutes": 60,
+         "start_time": null,
+         "memo": "",
+         "status": "planned",
+         "travel_mode": null,
+         "leg_mode": "walk",
+         "travel_minutes": 17,
+         "travel_distance_m": 1006,
+         "travel_source": "road",
+         "travel_options": {
+          "car": {
+           "minutes": 9,
+           "distance_m": 1471,
+           "source": "road"
+          },
+          "walk": {
+           "minutes": 17,
+           "distance_m": 1006,
+           "source": "road"
+          }
+         },
+         "arrive_at": "14:47",
+         "start_at": "14:47",
+         "end_at": "15:47",
+         "arrived_at": null,
+         "done_at": null
+        },
+        {
+         "id": -4,
+         "day": 1,
+         "order": 4,
+         "place_id": "poi-gr-breakwater-north",
+         "place": {
+          "id": "poi-gr-breakwater-north",
+          "title": "구룡포 북방파제",
+          "content_type": "관광지",
+          "lat": 35.988078,
+          "lng": 129.559279,
+          "addr": "경상북도 포항시 남구 구룡포읍 구룡포리 (구룡포항 북방파제)",
+          "open_hours": "상시 개방 (기상 악화 시 출입 자제)",
+          "rest_date": "연중무휴"
+         },
+         "stay_minutes": 40,
+         "start_time": null,
+         "memo": "",
+         "status": "planned",
+         "travel_mode": null,
+         "leg_mode": "walk",
+         "travel_minutes": 13,
+         "travel_distance_m": 886,
+         "travel_source": "road",
+         "travel_options": {
+          "car": {
+           "minutes": 10,
+           "distance_m": 1138,
+           "source": "road"
+          },
+          "walk": {
+           "minutes": 13,
+           "distance_m": 886,
+           "source": "road"
+          }
+         },
+         "arrive_at": "16:00",
+         "start_at": "16:00",
+         "end_at": "16:40",
+         "arrived_at": null,
+         "done_at": null
+        },
+        {
+         "id": -5,
+         "day": 1,
+         "order": 5,
+         "place_id": "kto-2834344",
+         "place": {
+          "id": "kto-2834344",
+          "title": "카페파도",
+          "content_type": "음식점",
+          "lat": 35.9768342269,
+          "lng": 129.5514895569,
+          "addr": "경상북도 포항시 남구 구룡포읍 하정로172번길 2",
+          "open_hours": "10:00~21:00 (마지막 주문 20:30)",
+          "rest_date": "연중무휴"
+         },
+         "stay_minutes": 45,
+         "start_time": null,
+         "memo": "",
+         "status": "planned",
+         "travel_mode": "car",
+         "leg_mode": "car",
+         "travel_minutes": 13,
+         "travel_distance_m": 3265,
+         "travel_source": "road",
+         "travel_options": {
+          "car": {
+           "minutes": 13,
+           "distance_m": 3265,
+           "source": "road"
+          },
+          "walk": {
+           "minutes": 45,
+           "distance_m": 2922,
+           "source": "road"
+          }
+         },
+         "arrive_at": "16:53",
+         "start_at": "16:53",
+         "end_at": "17:38",
+         "arrived_at": null,
+         "done_at": null
+        }
+       ]
+      }
+     ],
+     "constraints": [
+      {
+       "id": -1,
+       "type": "end_before",
+       "params": {
+        "time": "18:00"
+       },
+       "hard": true,
+       "source": "llm",
+       "note": "18시 전에 끝내기"
+      }
+     ],
+     "violations": []
+    },
+    "current_version": 1,
+    "base_changed": false,
+    "progress_changed": []
+   }
+  },
+  {
+   "name": "accept",
+   "method": "POST",
+   "route": "/agent/sessions/{session_id}/proposals/{proposal_id}/accept",
+   "path": "/agent/sessions/d4bb6faca3064447856d260bdb6699e9/proposals/116/accept",
+   "query": {},
+   "body": {
+    "mode": "auto"
+   },
+   "status": 200,
+   "elapsed_ms": 35,
+   "response": {
+    "proposal": {
+     "id": 116,
+     "plan_id": 240,
+     "status": "accepted",
+     "decision": "applied",
+     "summary": "어머니와 걷기 편한 순서로 다섯 곳을 넣었어요. 12:30 일본인 가옥거리에서 시작해 구룡포항에서 점심을 먹고, 과메기문화관과 북방파제를 거쳐 카페파도에서 17:38에 마쳐요. 북방파제에서 카페까지는 멀어서 차로 이동하게 했고, 18시 전에 끝나도록 조건도 걸어 두었어요.",
+     "source": "llm",
+     "origin": "d4bb6faca3064447856d260bdb6699e9",
+     "base_version": 1,
+     "changes": [
+      {
+       "kind": "added",
+       "message": "추가: 1일차 1번째 '구룡포 일본인 가옥거리' (60분)",
+       "item_id": -1,
+       "day": 1
+      },
+      {
+       "kind": "added",
+       "message": "추가: 1일차 2번째 '구룡포항' (50분)",
+       "item_id": -2,
+       "day": 1
+      },
+      {
+       "kind": "added",
+       "message": "추가: 1일차 3번째 '구룡포과메기문화관' (60분)",
+       "item_id": -3,
+       "day": 1
+      },
+      {
+       "kind": "added",
+       "message": "추가: 1일차 4번째 '구룡포 북방파제' (40분)",
+       "item_id": -4,
+       "day": 1
+      },
+      {
+       "kind": "added",
+       "message": "추가: 1일차 5번째 '카페파도' (45분)",
+       "item_id": -5,
+       "day": 1
+      },
+      {
+       "kind": "rule_added",
+       "message": "규칙 추가: end_before {'time': '18:00'} (18시 전에 끝내기)",
+       "item_id": null,
+       "day": null
+      },
+      {
+       "kind": "day_end",
+       "message": "1일차 종료: 없음 → 17:38",
+       "item_id": null,
+       "day": 1
+      }
+     ],
+     "created_at": "2026-10-09T14:37:44.097168Z",
+     "decided_at": "2026-10-09T14:37:44.156918Z",
+     "request": "엄마랑 구룡포 일정 짜줘",
+     "ops": [
+      {
+       "type": "end_before",
+       "params": {
+        "time": "18:00"
+       },
+       "hard": true,
+       "source": "llm",
+       "note": "18시 전에 끝내기",
+       "op": "add_constraint"
+      },
+      {
+       "place_id": "kto-1909659",
+       "day": 1,
+       "order": null,
+       "stay_minutes": 60,
+       "memo": "골목과 계단을 천천히",
+       "op": "add_item"
+      },
+      {
+       "place_id": "kto-2610501",
+       "day": 1,
+       "order": null,
+       "stay_minutes": 50,
+       "memo": "점심 (항구 앞 식당)",
+       "op": "add_item"
+      },
+      {
+       "place_id": "kto-2660046",
+       "day": 1,
+       "order": null,
+       "stay_minutes": 60,
+       "memo": "",
+       "op": "add_item"
+      },
+      {
+       "place_id": "poi-gr-breakwater-north",
+       "day": 1,
+       "order": null,
+       "stay_minutes": 40,
+       "memo": "",
+       "op": "add_item"
+      },
+      {
+       "place_id": "kto-2834344",
+       "day": 1,
+       "order": null,
+       "stay_minutes": 45,
+       "memo": "",
+       "op": "add_item"
+      },
+      {
+       "travel_mode": "car",
+       "op": "update_item",
+       "item_id": -5
+      }
+     ],
+     "before": {
+      "id": 240,
+      "user_id": "74bb7f62aa554ec1861a8a24288ff267",
+      "title": "엄마랑 구룡포",
+      "start_date": "2026-10-10",
+      "end_date": "2026-10-10",
+      "day_start": "12:30",
+      "day_end": "18:00",
+      "travel_mode": "walk",
+      "memo": "",
+      "version": 1,
+      "progress_version": 0,
+      "item_count": 0,
+      "created_at": "2026-10-09T14:37:37.717083Z",
+      "updated_at": "2026-10-09T14:37:37.717083Z",
+      "days": [
+       {
+        "day": 1,
+        "date": "2026-10-10",
+        "weekday": "토",
+        "end_at": null,
+        "items": []
+       }
+      ],
+      "constraints": [],
+      "violations": []
+     },
+     "after": {
+      "id": 240,
+      "user_id": "74bb7f62aa554ec1861a8a24288ff267",
+      "title": "엄마랑 구룡포",
+      "start_date": "2026-10-10",
+      "end_date": "2026-10-10",
+      "day_start": "12:30",
+      "day_end": "18:00",
+      "travel_mode": "walk",
+      "memo": "",
+      "version": 1,
+      "progress_version": 0,
+      "item_count": 5,
+      "created_at": "2026-10-09T14:37:37.717083Z",
+      "updated_at": "2026-10-09T14:37:44.099848Z",
+      "days": [
+       {
+        "day": 1,
+        "date": "2026-10-10",
+        "weekday": "토",
+        "end_at": "17:38",
+        "items": [
+         {
+          "id": -1,
+          "day": 1,
+          "order": 1,
+          "place_id": "kto-1909659",
+          "place": {
+           "id": "kto-1909659",
+           "title": "구룡포 일본인 가옥거리",
+           "content_type": "관광지",
+           "lat": 35.9906209551,
+           "lng": 129.5604550366,
+           "addr": "경상북도 포항시 남구 구룡포읍 호미로 277",
+           "open_hours": "상시 개방",
+           "rest_date": "연중무휴"
+          },
+          "stay_minutes": 60,
+          "start_time": null,
+          "memo": "골목과 계단을 천천히",
+          "status": "planned",
+          "travel_mode": null,
+          "leg_mode": null,
+          "travel_minutes": null,
+          "travel_distance_m": null,
+          "travel_source": null,
+          "travel_options": null,
+          "arrive_at": "12:30",
+          "start_at": "12:30",
+          "end_at": "13:30",
+          "arrived_at": null,
+          "done_at": null
+         },
+         {
+          "id": -2,
+          "day": 1,
+          "order": 2,
+          "place_id": "kto-2610501",
+          "place": {
+           "id": "kto-2610501",
+           "title": "구룡포항",
+           "content_type": "관광지",
+           "lat": 35.9893051205,
+           "lng": 129.555641609,
+           "addr": "경상북도 포항시 남구 구룡포읍 호미로 222-1",
+           "open_hours": "상시 개방",
+           "rest_date": "연중무휴"
+          },
+          "stay_minutes": 50,
+          "start_time": null,
+          "memo": "점심 (항구 앞 식당)",
+          "status": "planned",
+          "travel_mode": null,
+          "leg_mode": "walk",
+          "travel_minutes": 10,
+          "travel_distance_m": 632,
+          "travel_source": "road",
+          "travel_options": {
+           "car": {
+            "minutes": 7,
+            "distance_m": 631,
+            "source": "road"
+           },
+           "walk": {
+            "minutes": 10,
+            "distance_m": 632,
+            "source": "road"
+           }
+          },
+          "arrive_at": "13:40",
+          "start_at": "13:40",
+          "end_at": "14:30",
+          "arrived_at": null,
+          "done_at": null
+         },
+         {
+          "id": -3,
+          "day": 1,
+          "order": 3,
+          "place_id": "kto-2660046",
+          "place": {
+           "id": "kto-2660046",
+           "title": "구룡포과메기문화관",
+           "content_type": "문화시설",
+           "lat": 35.9927402978,
+           "lng": 129.5617992377,
+           "addr": "경상북도 포항시 남구 구룡포읍 구룡포길117번길 28-8",
+           "open_hours": "09:00~18:00 (입장 마감 17:30)",
+           "rest_date": "매주 월요일 / 공휴일 다음날 / 1월 1일 / 추석 당일"
+          },
+          "stay_minutes": 60,
+          "start_time": null,
+          "memo": "",
+          "status": "planned",
+          "travel_mode": null,
+          "leg_mode": "walk",
+          "travel_minutes": 17,
+          "travel_distance_m": 1006,
+          "travel_source": "road",
+          "travel_options": {
+           "car": {
+            "minutes": 9,
+            "distance_m": 1471,
+            "source": "road"
+           },
+           "walk": {
+            "minutes": 17,
+            "distance_m": 1006,
+            "source": "road"
+           }
+          },
+          "arrive_at": "14:47",
+          "start_at": "14:47",
+          "end_at": "15:47",
+          "arrived_at": null,
+          "done_at": null
+         },
+         {
+          "id": -4,
+          "day": 1,
+          "order": 4,
+          "place_id": "poi-gr-breakwater-north",
+          "place": {
+           "id": "poi-gr-breakwater-north",
+           "title": "구룡포 북방파제",
+           "content_type": "관광지",
+           "lat": 35.988078,
+           "lng": 129.559279,
+           "addr": "경상북도 포항시 남구 구룡포읍 구룡포리 (구룡포항 북방파제)",
+           "open_hours": "상시 개방 (기상 악화 시 출입 자제)",
+           "rest_date": "연중무휴"
+          },
+          "stay_minutes": 40,
+          "start_time": null,
+          "memo": "",
+          "status": "planned",
+          "travel_mode": null,
+          "leg_mode": "walk",
+          "travel_minutes": 13,
+          "travel_distance_m": 886,
+          "travel_source": "road",
+          "travel_options": {
+           "car": {
+            "minutes": 10,
+            "distance_m": 1138,
+            "source": "road"
+           },
+           "walk": {
+            "minutes": 13,
+            "distance_m": 886,
+            "source": "road"
+           }
+          },
+          "arrive_at": "16:00",
+          "start_at": "16:00",
+          "end_at": "16:40",
+          "arrived_at": null,
+          "done_at": null
+         },
+         {
+          "id": -5,
+          "day": 1,
+          "order": 5,
+          "place_id": "kto-2834344",
+          "place": {
+           "id": "kto-2834344",
+           "title": "카페파도",
+           "content_type": "음식점",
+           "lat": 35.9768342269,
+           "lng": 129.5514895569,
+           "addr": "경상북도 포항시 남구 구룡포읍 하정로172번길 2",
+           "open_hours": "10:00~21:00 (마지막 주문 20:30)",
+           "rest_date": "연중무휴"
+          },
+          "stay_minutes": 45,
+          "start_time": null,
+          "memo": "",
+          "status": "planned",
+          "travel_mode": "car",
+          "leg_mode": "car",
+          "travel_minutes": 13,
+          "travel_distance_m": 3265,
+          "travel_source": "road",
+          "travel_options": {
+           "car": {
+            "minutes": 13,
+            "distance_m": 3265,
+            "source": "road"
+           },
+           "walk": {
+            "minutes": 45,
+            "distance_m": 2922,
+            "source": "road"
+           }
+          },
+          "arrive_at": "16:53",
+          "start_at": "16:53",
+          "end_at": "17:38",
+          "arrived_at": null,
+          "done_at": null
+         }
+        ]
+       }
+      ],
+      "constraints": [
+       {
+        "id": -1,
+        "type": "end_before",
+        "params": {
+         "time": "18:00"
+        },
+        "hard": true,
+        "source": "llm",
+        "note": "18시 전에 끝내기"
+       }
+      ],
+      "violations": []
+     },
+     "current_version": 2,
+     "base_changed": true,
+     "progress_changed": []
+    },
+    "plan": {
+     "id": 240,
+     "user_id": "74bb7f62aa554ec1861a8a24288ff267",
+     "title": "엄마랑 구룡포",
+     "start_date": "2026-10-10",
+     "end_date": "2026-10-10",
+     "day_start": "12:30",
+     "day_end": "18:00",
+     "travel_mode": "walk",
+     "memo": "",
+     "version": 2,
+     "progress_version": 0,
+     "item_count": 5,
+     "created_at": "2026-10-09T14:37:37.717083Z",
+     "updated_at": "2026-10-09T14:37:44.156899Z",
+     "days": [
+      {
+       "day": 1,
+       "date": "2026-10-10",
+       "weekday": "토",
+       "end_at": "17:38",
+       "items": [
+        {
+         "id": 486,
+         "day": 1,
+         "order": 1,
+         "place_id": "kto-1909659",
+         "place": {
+          "id": "kto-1909659",
+          "title": "구룡포 일본인 가옥거리",
+          "content_type": "관광지",
+          "lat": 35.9906209551,
+          "lng": 129.5604550366,
+          "addr": "경상북도 포항시 남구 구룡포읍 호미로 277",
+          "open_hours": "상시 개방",
+          "rest_date": "연중무휴"
+         },
+         "stay_minutes": 60,
+         "start_time": null,
+         "memo": "골목과 계단을 천천히",
+         "status": "planned",
+         "travel_mode": null,
+         "leg_mode": null,
+         "travel_minutes": null,
+         "travel_distance_m": null,
+         "travel_source": null,
+         "travel_options": null,
+         "arrive_at": "12:30",
+         "start_at": "12:30",
+         "end_at": "13:30",
+         "arrived_at": null,
+         "done_at": null
+        },
+        {
+         "id": 487,
+         "day": 1,
+         "order": 2,
+         "place_id": "kto-2610501",
+         "place": {
+          "id": "kto-2610501",
+          "title": "구룡포항",
+          "content_type": "관광지",
+          "lat": 35.9893051205,
+          "lng": 129.555641609,
+          "addr": "경상북도 포항시 남구 구룡포읍 호미로 222-1",
+          "open_hours": "상시 개방",
+          "rest_date": "연중무휴"
+         },
+         "stay_minutes": 50,
+         "start_time": null,
+         "memo": "점심 (항구 앞 식당)",
+         "status": "planned",
+         "travel_mode": null,
+         "leg_mode": "walk",
+         "travel_minutes": 10,
+         "travel_distance_m": 632,
+         "travel_source": "road",
+         "travel_options": {
+          "walk": {
+           "minutes": 10,
+           "distance_m": 632,
+           "source": "road"
+          },
+          "car": {
+           "minutes": 7,
+           "distance_m": 631,
+           "source": "road"
+          }
+         },
+         "arrive_at": "13:40",
+         "start_at": "13:40",
+         "end_at": "14:30",
+         "arrived_at": null,
+         "done_at": null
+        },
+        {
+         "id": 488,
+         "day": 1,
+         "order": 3,
+         "place_id": "kto-2660046",
+         "place": {
+          "id": "kto-2660046",
+          "title": "구룡포과메기문화관",
+          "content_type": "문화시설",
+          "lat": 35.9927402978,
+          "lng": 129.5617992377,
+          "addr": "경상북도 포항시 남구 구룡포읍 구룡포길117번길 28-8",
+          "open_hours": "09:00~18:00 (입장 마감 17:30)",
+          "rest_date": "매주 월요일 / 공휴일 다음날 / 1월 1일 / 추석 당일"
+         },
+         "stay_minutes": 60,
+         "start_time": null,
+         "memo": "",
+         "status": "planned",
+         "travel_mode": null,
+         "leg_mode": "walk",
+         "travel_minutes": 17,
+         "travel_distance_m": 1006,
+         "travel_source": "road",
+         "travel_options": {
+          "walk": {
+           "minutes": 17,
+           "distance_m": 1006,
+           "source": "road"
+          },
+          "car": {
+           "minutes": 9,
+           "distance_m": 1471,
+           "source": "road"
+          }
+         },
+         "arrive_at": "14:47",
+         "start_at": "14:47",
+         "end_at": "15:47",
+         "arrived_at": null,
+         "done_at": null
+        },
+        {
+         "id": 489,
+         "day": 1,
+         "order": 4,
+         "place_id": "poi-gr-breakwater-north",
+         "place": {
+          "id": "poi-gr-breakwater-north",
+          "title": "구룡포 북방파제",
+          "content_type": "관광지",
+          "lat": 35.988078,
+          "lng": 129.559279,
+          "addr": "경상북도 포항시 남구 구룡포읍 구룡포리 (구룡포항 북방파제)",
+          "open_hours": "상시 개방 (기상 악화 시 출입 자제)",
+          "rest_date": "연중무휴"
+         },
+         "stay_minutes": 40,
+         "start_time": null,
+         "memo": "",
+         "status": "planned",
+         "travel_mode": null,
+         "leg_mode": "walk",
+         "travel_minutes": 13,
+         "travel_distance_m": 886,
+         "travel_source": "road",
+         "travel_options": {
+          "walk": {
+           "minutes": 13,
+           "distance_m": 886,
+           "source": "road"
+          },
+          "car": {
+           "minutes": 10,
+           "distance_m": 1138,
+           "source": "road"
+          }
+         },
+         "arrive_at": "16:00",
+         "start_at": "16:00",
+         "end_at": "16:40",
+         "arrived_at": null,
+         "done_at": null
+        },
+        {
+         "id": 490,
+         "day": 1,
+         "order": 5,
+         "place_id": "kto-2834344",
+         "place": {
+          "id": "kto-2834344",
+          "title": "카페파도",
+          "content_type": "음식점",
+          "lat": 35.9768342269,
+          "lng": 129.5514895569,
+          "addr": "경상북도 포항시 남구 구룡포읍 하정로172번길 2",
+          "open_hours": "10:00~21:00 (마지막 주문 20:30)",
+          "rest_date": "연중무휴"
+         },
+         "stay_minutes": 45,
+         "start_time": null,
+         "memo": "",
+         "status": "planned",
+         "travel_mode": "car",
+         "leg_mode": "car",
+         "travel_minutes": 13,
+         "travel_distance_m": 3265,
+         "travel_source": "road",
+         "travel_options": {
+          "walk": {
+           "minutes": 45,
+           "distance_m": 2922,
+           "source": "road"
+          },
+          "car": {
+           "minutes": 13,
+           "distance_m": 3265,
+           "source": "road"
+          }
+         },
+         "arrive_at": "16:53",
+         "start_at": "16:53",
+         "end_at": "17:38",
+         "arrived_at": null,
+         "done_at": null
+        }
+       ]
+      }
+     ],
+     "constraints": [
+      {
+       "id": 36,
+       "type": "end_before",
+       "params": {
+        "time": "18:00"
+       },
+       "hard": true,
+       "source": "llm",
+       "note": "18시 전에 끝내기"
+      }
+     ],
+     "violations": []
+    }
+   }
+  },
+  {
+   "name": "plan_after_accept",
+   "method": "GET",
+   "route": "/planner/plans/{plan_id}",
+   "path": "/planner/plans/240",
+   "query": {},
+   "body": null,
+   "status": 200,
+   "elapsed_ms": 6,
+   "response": {
+    "id": 240,
+    "user_id": "74bb7f62aa554ec1861a8a24288ff267",
+    "title": "엄마랑 구룡포",
+    "start_date": "2026-10-10",
+    "end_date": "2026-10-10",
+    "day_start": "12:30",
+    "day_end": "18:00",
+    "travel_mode": "walk",
+    "memo": "",
+    "version": 2,
+    "progress_version": 0,
+    "item_count": 5,
+    "created_at": "2026-10-09T14:37:37.717083Z",
+    "updated_at": "2026-10-09T14:37:44.156899Z",
+    "days": [
+     {
+      "day": 1,
+      "date": "2026-10-10",
+      "weekday": "토",
+      "end_at": "17:38",
+      "items": [
+       {
+        "id": 486,
+        "day": 1,
+        "order": 1,
+        "place_id": "kto-1909659",
+        "place": {
+         "id": "kto-1909659",
+         "title": "구룡포 일본인 가옥거리",
+         "content_type": "관광지",
+         "lat": 35.9906209551,
+         "lng": 129.5604550366,
+         "addr": "경상북도 포항시 남구 구룡포읍 호미로 277",
+         "open_hours": "상시 개방",
+         "rest_date": "연중무휴"
+        },
+        "stay_minutes": 60,
+        "start_time": null,
+        "memo": "골목과 계단을 천천히",
+        "status": "planned",
+        "travel_mode": null,
+        "leg_mode": null,
+        "travel_minutes": null,
+        "travel_distance_m": null,
+        "travel_source": null,
+        "travel_options": null,
+        "arrive_at": "12:30",
+        "start_at": "12:30",
+        "end_at": "13:30",
+        "arrived_at": null,
+        "done_at": null
+       },
+       {
+        "id": 487,
+        "day": 1,
+        "order": 2,
+        "place_id": "kto-2610501",
+        "place": {
+         "id": "kto-2610501",
+         "title": "구룡포항",
+         "content_type": "관광지",
+         "lat": 35.9893051205,
+         "lng": 129.555641609,
+         "addr": "경상북도 포항시 남구 구룡포읍 호미로 222-1",
+         "open_hours": "상시 개방",
+         "rest_date": "연중무휴"
+        },
+        "stay_minutes": 50,
+        "start_time": null,
+        "memo": "점심 (항구 앞 식당)",
+        "status": "planned",
+        "travel_mode": null,
+        "leg_mode": "walk",
+        "travel_minutes": 10,
+        "travel_distance_m": 632,
+        "travel_source": "road",
+        "travel_options": {
+         "walk": {
+          "minutes": 10,
+          "distance_m": 632,
+          "source": "road"
+         },
+         "car": {
+          "minutes": 7,
+          "distance_m": 631,
+          "source": "road"
+         }
+        },
+        "arrive_at": "13:40",
+        "start_at": "13:40",
+        "end_at": "14:30",
+        "arrived_at": null,
+        "done_at": null
+       },
+       {
+        "id": 488,
+        "day": 1,
+        "order": 3,
+        "place_id": "kto-2660046",
+        "place": {
+         "id": "kto-2660046",
+         "title": "구룡포과메기문화관",
+         "content_type": "문화시설",
+         "lat": 35.9927402978,
+         "lng": 129.5617992377,
+         "addr": "경상북도 포항시 남구 구룡포읍 구룡포길117번길 28-8",
+         "open_hours": "09:00~18:00 (입장 마감 17:30)",
+         "rest_date": "매주 월요일 / 공휴일 다음날 / 1월 1일 / 추석 당일"
+        },
+        "stay_minutes": 60,
+        "start_time": null,
+        "memo": "",
+        "status": "planned",
+        "travel_mode": null,
+        "leg_mode": "walk",
+        "travel_minutes": 17,
+        "travel_distance_m": 1006,
+        "travel_source": "road",
+        "travel_options": {
+         "walk": {
+          "minutes": 17,
+          "distance_m": 1006,
+          "source": "road"
+         },
+         "car": {
+          "minutes": 9,
+          "distance_m": 1471,
+          "source": "road"
+         }
+        },
+        "arrive_at": "14:47",
+        "start_at": "14:47",
+        "end_at": "15:47",
+        "arrived_at": null,
+        "done_at": null
+       },
+       {
+        "id": 489,
+        "day": 1,
+        "order": 4,
+        "place_id": "poi-gr-breakwater-north",
+        "place": {
+         "id": "poi-gr-breakwater-north",
+         "title": "구룡포 북방파제",
+         "content_type": "관광지",
+         "lat": 35.988078,
+         "lng": 129.559279,
+         "addr": "경상북도 포항시 남구 구룡포읍 구룡포리 (구룡포항 북방파제)",
+         "open_hours": "상시 개방 (기상 악화 시 출입 자제)",
+         "rest_date": "연중무휴"
+        },
+        "stay_minutes": 40,
+        "start_time": null,
+        "memo": "",
+        "status": "planned",
+        "travel_mode": null,
+        "leg_mode": "walk",
+        "travel_minutes": 13,
+        "travel_distance_m": 886,
+        "travel_source": "road",
+        "travel_options": {
+         "walk": {
+          "minutes": 13,
+          "distance_m": 886,
+          "source": "road"
+         },
+         "car": {
+          "minutes": 10,
+          "distance_m": 1138,
+          "source": "road"
+         }
+        },
+        "arrive_at": "16:00",
+        "start_at": "16:00",
+        "end_at": "16:40",
+        "arrived_at": null,
+        "done_at": null
+       },
+       {
+        "id": 490,
+        "day": 1,
+        "order": 5,
+        "place_id": "kto-2834344",
+        "place": {
+         "id": "kto-2834344",
+         "title": "카페파도",
+         "content_type": "음식점",
+         "lat": 35.9768342269,
+         "lng": 129.5514895569,
+         "addr": "경상북도 포항시 남구 구룡포읍 하정로172번길 2",
+         "open_hours": "10:00~21:00 (마지막 주문 20:30)",
+         "rest_date": "연중무휴"
+        },
+        "stay_minutes": 45,
+        "start_time": null,
+        "memo": "",
+        "status": "planned",
+        "travel_mode": "car",
+        "leg_mode": "car",
+        "travel_minutes": 13,
+        "travel_distance_m": 3265,
+        "travel_source": "road",
+        "travel_options": {
+         "walk": {
+          "minutes": 45,
+          "distance_m": 2922,
+          "source": "road"
+         },
+         "car": {
+          "minutes": 13,
+          "distance_m": 3265,
+          "source": "road"
+         }
+        },
+        "arrive_at": "16:53",
+        "start_at": "16:53",
+        "end_at": "17:38",
+        "arrived_at": null,
+        "done_at": null
+       }
+      ]
+     }
+    ],
+    "constraints": [
+     {
+      "id": 36,
+      "type": "end_before",
+      "params": {
+       "time": "18:00"
+      },
+      "hard": true,
+      "source": "llm",
+      "note": "18시 전에 끝내기"
+     }
+    ],
+    "violations": []
+   }
+  },
+  {
+   "name": "plan_safety",
+   "method": "GET",
+   "route": "/planner/plans/{plan_id}/safety",
+   "path": "/planner/plans/240/safety",
+   "query": {},
+   "body": null,
+   "status": 200,
+   "elapsed_ms": 12,
+   "response": {
+    "plan_id": 240,
+    "plan_version": 2,
+    "checked_at": "2026-10-09T10:00:06.479983+09:00",
+    "overall_risk": "safe",
+    "counts": {
+     "safe": 9,
+     "caution": 0,
+     "danger": 0,
+     "unassessed": 0,
+     "info": 0
+    },
+    "guidance": "예보·실측상 주의·위험 신호가 없다. 예보는 바뀔 수 있으니 '안전이 보장된다'고 말하지 마라.",
+    "items": [
+     {
+      "item_id": 486,
+      "kind": "visit",
+      "mode": null,
+      "day": 1,
+      "date": "2026-10-10",
+      "place_id": "kto-1909659",
+      "title": "구룡포 일본인 가옥거리",
+      "start_at": "12:30",
+      "end_at": "13:30",
+      "risk": "safe",
+      "unassessed_reason": null,
+      "data_missing": false,
+      "horizon": "short_range",
+      "hazards": [],
+      "advice": "예보상 특별한 위험 신호가 없다. 예보는 바뀔 수 있다.",
+      "better_times": [],
+      "sensitivity": [],
+      "notes": [],
+      "recheck_from": null,
+      "detour": null
+     },
+     {
+      "item_id": 487,
+      "kind": "travel",
+      "mode": "walk",
+      "day": 1,
+      "date": "2026-10-10",
+      "place_id": "kto-2610501",
+      "title": "구룡포 일본인 가옥거리 → 구룡포항",
+      "start_at": "13:30",
+      "end_at": "13:40",
+      "risk": "safe",
+      "unassessed_reason": null,
+      "data_missing": false,
+      "horizon": "short_range",
+      "hazards": [],
+      "advice": "걸어서 이동하는 경로에 특별한 위험 신호가 없다. 예보는 바뀔 수 있다.",
+      "better_times": [],
+      "sensitivity": [
+       "침수 감시 구역"
+      ],
+      "notes": [
+       "만조 15:10 (약 33cm) 전후 방문. 구룡포는 조차가 작아 단독 위험 요인은 아니지만, 높은 파도·호우와 겹치면 해안가는 더 위험해진다."
+      ],
+      "recheck_from": null,
+      "detour": null
+     },
+     {
+      "item_id": 487,
+      "kind": "visit",
+      "mode": null,
+      "day": 1,
+      "date": "2026-10-10",
+      "place_id": "kto-2610501",
+      "title": "구룡포항",
+      "start_at": "13:40",
+      "end_at": "14:30",
+      "risk": "safe",
+      "unassessed_reason": null,
+      "data_missing": false,
+      "horizon": "short_range",
+      "hazards": [],
+      "advice": "예보상 특별한 위험 신호가 없다. 예보는 바뀔 수 있다.",
+      "better_times": [],
+      "sensitivity": [
+       "침수 감시 구역"
+      ],
+      "notes": [
+       "만조 15:10 (약 33cm) 전후 방문. 구룡포는 조차가 작아 단독 위험 요인은 아니지만, 높은 파도·호우와 겹치면 해안가는 더 위험해진다."
+      ],
+      "recheck_from": null,
+      "detour": null
+     },
+     {
+      "item_id": 488,
+      "kind": "travel",
+      "mode": "walk",
+      "day": 1,
+      "date": "2026-10-10",
+      "place_id": "kto-2660046",
+      "title": "구룡포항 → 구룡포과메기문화관",
+      "start_at": "14:30",
+      "end_at": "14:47",
+      "risk": "safe",
+      "unassessed_reason": null,
+      "data_missing": false,
+      "horizon": "short_range",
+      "hazards": [],
+      "advice": "걸어서 이동하는 경로에 특별한 위험 신호가 없다. 예보는 바뀔 수 있다.",
+      "better_times": [],
+      "sensitivity": [
+       "침수 감시 구역"
+      ],
+      "notes": [
+       "만조 15:10 (약 33cm) 전후 방문. 구룡포는 조차가 작아 단독 위험 요인은 아니지만, 높은 파도·호우와 겹치면 해안가는 더 위험해진다."
+      ],
+      "recheck_from": null,
+      "detour": null
+     },
+     {
+      "item_id": 488,
+      "kind": "visit",
+      "mode": null,
+      "day": 1,
+      "date": "2026-10-10",
+      "place_id": "kto-2660046",
+      "title": "구룡포과메기문화관",
+      "start_at": "14:47",
+      "end_at": "15:47",
+      "risk": "safe",
+      "unassessed_reason": null,
+      "data_missing": false,
+      "horizon": "short_range",
+      "hazards": [],
+      "advice": "실내 장소라 방문 자체는 괜찮다. 날씨가 나쁜 날 야외 일정의 대안으로 쓸 수 있다.",
+      "better_times": [],
+      "sensitivity": [
+       "실내"
+      ],
+      "notes": [],
+      "recheck_from": null,
+      "detour": null
+     },
+     {
+      "item_id": 489,
+      "kind": "travel",
+      "mode": "walk",
+      "day": 1,
+      "date": "2026-10-10",
+      "place_id": "poi-gr-breakwater-north",
+      "title": "구룡포과메기문화관 → 구룡포 북방파제",
+      "start_at": "15:47",
+      "end_at": "16:00",
+      "risk": "safe",
+      "unassessed_reason": null,
+      "data_missing": false,
+      "horizon": "short_range",
+      "hazards": [],
+      "advice": "걸어서 이동하는 경로에 특별한 위험 신호가 없다. 예보는 바뀔 수 있다.",
+      "better_times": [],
+      "sensitivity": [
+       "방파제"
+      ],
+      "notes": [
+       "만조 15:10 (약 33cm) 전후 방문. 구룡포는 조차가 작아 단독 위험 요인은 아니지만, 높은 파도·호우와 겹치면 해안가는 더 위험해진다."
+      ],
+      "recheck_from": null,
+      "detour": null
+     },
+     {
+      "item_id": 489,
+      "kind": "visit",
+      "mode": null,
+      "day": 1,
+      "date": "2026-10-10",
+      "place_id": "poi-gr-breakwater-north",
+      "title": "구룡포 북방파제",
+      "start_at": "16:00",
+      "end_at": "16:40",
+      "risk": "safe",
+      "unassessed_reason": null,
+      "data_missing": false,
+      "horizon": "short_range",
+      "hazards": [],
+      "advice": "예보상 특별한 위험 신호가 없다. 예보는 바뀔 수 있다.",
+      "better_times": [],
+      "sensitivity": [
+       "방파제"
+      ],
+      "notes": [
+       "만조 15:10 (약 33cm) 전후 방문. 구룡포는 조차가 작아 단독 위험 요인은 아니지만, 높은 파도·호우와 겹치면 해안가는 더 위험해진다."
+      ],
+      "recheck_from": null,
+      "detour": null
+     },
+     {
+      "item_id": 490,
+      "kind": "travel",
+      "mode": "car",
+      "day": 1,
+      "date": "2026-10-10",
+      "place_id": "kto-2834344",
+      "title": "구룡포 북방파제 → 카페파도",
+      "start_at": "16:40",
+      "end_at": "16:53",
+      "risk": "safe",
+      "unassessed_reason": null,
+      "data_missing": false,
+      "horizon": "short_range",
+      "hazards": [],
+      "advice": "차로 이동하는 경로에 특별한 위험 신호가 없다. 예보는 바뀔 수 있다.",
+      "better_times": [],
+      "sensitivity": [
+       "침수 감시 구역"
+      ],
+      "notes": [
+       "만조 15:10 (약 33cm) 전후 방문. 구룡포는 조차가 작아 단독 위험 요인은 아니지만, 높은 파도·호우와 겹치면 해안가는 더 위험해진다."
+      ],
+      "recheck_from": null,
+      "detour": null
+     },
+     {
+      "item_id": 490,
+      "kind": "visit",
+      "mode": null,
+      "day": 1,
+      "date": "2026-10-10",
+      "place_id": "kto-2834344",
+      "title": "카페파도",
+      "start_at": "16:53",
+      "end_at": "17:38",
+      "risk": "safe",
+      "unassessed_reason": null,
+      "data_missing": false,
+      "horizon": "short_range",
+      "hazards": [],
+      "advice": "실내 장소라 방문 자체는 괜찮다. 날씨가 나쁜 날 야외 일정의 대안으로 쓸 수 있다.",
+      "better_times": [],
+      "sensitivity": [
+       "실내"
+      ],
+      "notes": [],
+      "recheck_from": null,
+      "detour": null
+     }
+    ],
+    "data_ok": {
+     "forecast": true,
+     "places": true,
+     "warnings": true,
+     "tide": true
+    }
+   }
+  },
+  {
+   "name": "chat_recommend_cafe",
+   "method": "POST",
+   "route": "/agent/sessions/{session_id}/chat",
+   "path": "/agent/sessions/d4bb6faca3064447856d260bdb6699e9/chat",
+   "query": {},
+   "body": {
+    "message": "갈 만한 카페 추천해줘"
+   },
+   "status": 200,
+   "elapsed_ms": 1790,
+   "content_type": "text/event-stream",
+   "sse": [
+    {
+     "t_ms": 5,
+     "event": "start",
+     "data": {
+      "session_id": "d4bb6faca3064447856d260bdb6699e9"
+     }
+    },
+    {
+     "t_ms": 431,
+     "event": "status",
+     "data": {
+      "text": "장소를 찾고 있어요."
+     }
+    },
+    {
+     "t_ms": 431,
+     "event": "step",
+     "data": {
+      "id": "s1",
+      "kind": "search",
+      "status": "running",
+      "title": "장소 찾기",
+      "detail": ""
+     }
+    },
+    {
+     "t_ms": 536,
+     "event": "step",
+     "data": {
+      "id": "s1",
+      "kind": "search",
+      "status": "done",
+      "title": "장소 찾기",
+      "detail": "까멜리아인구룡포 외 4곳"
+     }
+    },
+    {
+     "t_ms": 899,
+     "event": "status",
+     "data": {
+      "text": "추천할 곳을 고르고 있어요."
+     }
+    },
+    {
+     "t_ms": 899,
+     "event": "step",
+     "data": {
+      "id": "s2",
+      "kind": "recommend",
+      "status": "running",
+      "title": "추천 정리",
+      "detail": ""
+     }
+    },
+    {
+     "t_ms": 919,
+     "event": "step",
+     "data": {
+      "id": "s2",
+      "kind": "recommend",
+      "status": "done",
+      "title": "추천 정리",
+      "detail": "2곳"
+     }
+    },
+    {
+     "t_ms": 919,
+     "event": "recommendation",
+     "data": {
+      "id": 33,
+      "plan_id": 240,
+      "title": "구룡포에서 쉬어 가기 좋은 카페",
+      "source": "llm",
+      "origin": "d4bb6faca3064447856d260bdb6699e9",
+      "created_at": "2026-10-09T14:37:45.069993Z",
+      "candidates": [
+       {
+        "id": 44,
+        "place_id": "kto-2834344",
+        "place": {
+         "id": "kto-2834344",
+         "title": "카페파도",
+         "content_type": "음식점",
+         "lat": 35.9768342269,
+         "lng": 129.5514895569,
+         "addr": "경상북도 포항시 남구 구룡포읍 하정로172번길 2",
+         "open_hours": "10:00~21:00 (마지막 주문 20:30)",
+         "rest_date": "연중무휴"
+        },
+        "day": 1,
+        "time_hint": "16:50",
+        "stay_minutes": 45,
+        "reason": "구룡포 앞바다가 보이는 바닷가 카페, 일정 마지막에 쉬기 좋아요",
+        "state": "in_plan",
+        "item": {
+         "item_id": 490,
+         "day": 1,
+         "order": 5,
+         "start_at": "16:53",
+         "end_at": "17:38"
+        },
+        "other_days": []
+       },
+       {
+        "id": 45,
+        "place_id": "kto-2781555",
+        "place": {
+         "id": "kto-2781555",
+         "title": "까멜리아인구룡포",
+         "content_type": "음식점",
+         "lat": 35.9913988466,
+         "lng": 129.5596812664,
+         "addr": "경상북도 포항시 남구 구룡포읍 구룡포길 133-1",
+         "open_hours": "- 월요일 9:00~19:00 - 화~금 10:00~18:00 - 토요일 10:00~21:00 - 일요일 9:00~19:00",
+         "rest_date": "연중무휴"
+        },
+        "day": 1,
+        "time_hint": "13:30",
+        "stay_minutes": 40,
+        "reason": "가옥거리 바로 옆이라 걷다가 잠깐 쉬기 좋아요",
+        "state": "not_in_plan",
+        "item": null,
+        "other_days": []
+       }
+      ]
+     }
+    },
+    {
+     "t_ms": 1315,
+     "event": "text",
+     "data": {
+      "delta": "구룡포에서 "
+     }
+    },
+    {
+     "t_ms": 1346,
+     "event": "text",
+     "data": {
+      "delta": "쉬어 가기 "
+     }
+    },
+    {
+     "t_ms": 1377,
+     "event": "text",
+     "data": {
+      "delta": "좋은 카페 "
+     }
+    },
+    {
+     "t_ms": 1408,
+     "event": "text",
+     "data": {
+      "delta": "두 곳을 골"
+     }
+    },
+    {
+     "t_ms": 1439,
+     "event": "text",
+     "data": {
+      "delta": "랐어요. 바"
+     }
+    },
+    {
+     "t_ms": 1470,
+     "event": "text",
+     "data": {
+      "delta": "다를 보고 "
+     }
+    },
+    {
+     "t_ms": 1501,
+     "event": "text",
+     "data": {
+      "delta": "싶으면 카페"
+     }
+    },
+    {
+     "t_ms": 1533,
+     "event": "text",
+     "data": {
+      "delta": "파도, 가옥"
+     }
+    },
+    {
+     "t_ms": 1565,
+     "event": "text",
+     "data": {
+      "delta": "거리를 걷다"
+     }
+    },
+    {
+     "t_ms": 1596,
+     "event": "text",
+     "data": {
+      "delta": " 쉬려면 까"
+     }
+    },
+    {
+     "t_ms": 1627,
+     "event": "text",
+     "data": {
+      "delta": "멜리아인구룡"
+     }
+    },
+    {
+     "t_ms": 1659,
+     "event": "text",
+     "data": {
+      "delta": "포가 가까워"
+     }
+    },
+    {
+     "t_ms": 1690,
+     "event": "text",
+     "data": {
+      "delta": "요. 마음에"
+     }
+    },
+    {
+     "t_ms": 1721,
+     "event": "text",
+     "data": {
+      "delta": " 드는 곳을"
+     }
+    },
+    {
+     "t_ms": 1752,
+     "event": "text",
+     "data": {
+      "delta": " 추가해 보"
+     }
+    },
+    {
+     "t_ms": 1784,
+     "event": "text",
+     "data": {
+      "delta": "세요."
+     }
+    },
+    {
+     "t_ms": 1790,
+     "event": "steps_done",
+     "data": {
+      "count": 2,
+      "summary": "2단계 완료 : 장소 찾기, 추천 정리"
+     }
+    },
+    {
+     "t_ms": 1790,
+     "event": "done",
+     "data": {
+      "text": "구룡포에서 쉬어 가기 좋은 카페 두 곳을 골랐어요. 바다를 보고 싶으면 카페파도, 가옥거리를 걷다 쉬려면 까멜리아인구룡포가 가까워요. 마음에 드는 곳을 추가해 보세요.",
+      "cards": [
+       {
+        "type": "recommendation",
+        "id": 33
+       }
+      ],
+      "usage": {
+       "input": 0,
+       "cached": 0,
+       "output": 0,
+       "reasoning": 0,
+       "calls": 3
+      },
+      "message_id": 1045,
+      "mode": "plan"
+     }
+    }
+   ]
+  },
+  {
+   "name": "candidate_add",
+   "method": "POST",
+   "route": "/agent/sessions/{session_id}/recommendations/{rec_id}/candidates/{cand_id}/add",
+   "path": "/agent/sessions/d4bb6faca3064447856d260bdb6699e9/recommendations/33/candidates/45/add",
+   "query": {},
+   "body": null,
+   "status": 200,
+   "elapsed_ms": 150,
+   "response": {
+    "recommendation": {
+     "id": 33,
+     "plan_id": 240,
+     "title": "구룡포에서 쉬어 가기 좋은 카페",
+     "source": "llm",
+     "origin": "d4bb6faca3064447856d260bdb6699e9",
+     "created_at": "2026-10-09T14:37:45.069993Z",
+     "candidates": [
+      {
+       "id": 44,
+       "place_id": "kto-2834344",
+       "place": {
+        "id": "kto-2834344",
+        "title": "카페파도",
+        "content_type": "음식점",
+        "lat": 35.9768342269,
+        "lng": 129.5514895569,
+        "addr": "경상북도 포항시 남구 구룡포읍 하정로172번길 2",
+        "open_hours": "10:00~21:00 (마지막 주문 20:30)",
+        "rest_date": "연중무휴"
+       },
+       "day": 1,
+       "time_hint": "16:50",
+       "stay_minutes": 45,
+       "reason": "구룡포 앞바다가 보이는 바닷가 카페, 일정 마지막에 쉬기 좋아요",
+       "state": "in_plan",
+       "item": {
+        "item_id": 490,
+        "day": 1,
+        "order": 6,
+        "start_at": "17:35",
+        "end_at": "18:20"
+       },
+       "other_days": []
+      },
+      {
+       "id": 45,
+       "place_id": "kto-2781555",
+       "place": {
+        "id": "kto-2781555",
+        "title": "까멜리아인구룡포",
+        "content_type": "음식점",
+        "lat": 35.9913988466,
+        "lng": 129.5596812664,
+        "addr": "경상북도 포항시 남구 구룡포읍 구룡포길 133-1",
+        "open_hours": "- 월요일 9:00~19:00 - 화~금 10:00~18:00 - 토요일 10:00~21:00 - 일요일 9:00~19:00",
+        "rest_date": "연중무휴"
+       },
+       "day": 1,
+       "time_hint": "13:30",
+       "stay_minutes": 40,
+       "reason": "가옥거리 바로 옆이라 걷다가 잠깐 쉬기 좋아요",
+       "state": "in_plan",
+       "item": {
+        "item_id": 491,
+        "day": 1,
+        "order": 2,
+        "start_at": "13:33",
+        "end_at": "14:13"
+       },
+       "other_days": []
+      }
+     ]
+    },
+    "plan": {
+     "id": 240,
+     "user_id": "74bb7f62aa554ec1861a8a24288ff267",
+     "title": "엄마랑 구룡포",
+     "start_date": "2026-10-10",
+     "end_date": "2026-10-10",
+     "day_start": "12:30",
+     "day_end": "18:00",
+     "travel_mode": "walk",
+     "memo": "",
+     "version": 3,
+     "progress_version": 0,
+     "item_count": 6,
+     "created_at": "2026-10-09T14:37:37.717083Z",
+     "updated_at": "2026-10-09T14:37:46.060647Z",
+     "days": [
+      {
+       "day": 1,
+       "date": "2026-10-10",
+       "weekday": "토",
+       "end_at": "18:20",
+       "items": [
+        {
+         "id": 486,
+         "day": 1,
+         "order": 1,
+         "place_id": "kto-1909659",
+         "place": {
+          "id": "kto-1909659",
+          "title": "구룡포 일본인 가옥거리",
+          "content_type": "관광지",
+          "lat": 35.9906209551,
+          "lng": 129.5604550366,
+          "addr": "경상북도 포항시 남구 구룡포읍 호미로 277",
+          "open_hours": "상시 개방",
+          "rest_date": "연중무휴"
+         },
+         "stay_minutes": 60,
+         "start_time": null,
+         "memo": "골목과 계단을 천천히",
+         "status": "planned",
+         "travel_mode": null,
+         "leg_mode": null,
+         "travel_minutes": null,
+         "travel_distance_m": null,
+         "travel_source": null,
+         "travel_options": null,
+         "arrive_at": "12:30",
+         "start_at": "12:30",
+         "end_at": "13:30",
+         "arrived_at": null,
+         "done_at": null
+        },
+        {
+         "id": 491,
+         "day": 1,
+         "order": 2,
+         "place_id": "kto-2781555",
+         "place": {
+          "id": "kto-2781555",
+          "title": "까멜리아인구룡포",
+          "content_type": "음식점",
+          "lat": 35.9913988466,
+          "lng": 129.5596812664,
+          "addr": "경상북도 포항시 남구 구룡포읍 구룡포길 133-1",
+          "open_hours": "- 월요일 9:00~19:00 - 화~금 10:00~18:00 - 토요일 10:00~21:00 - 일요일 9:00~19:00",
+          "rest_date": "연중무휴"
+         },
+         "stay_minutes": 40,
+         "start_time": null,
+         "memo": "가옥거리 바로 옆이라 걷다가 잠깐 쉬기 좋아요",
+         "status": "planned",
+         "travel_mode": null,
+         "leg_mode": "walk",
+         "travel_minutes": 3,
+         "travel_distance_m": 129,
+         "travel_source": "road",
+         "travel_options": {
+          "walk": {
+           "minutes": 3,
+           "distance_m": 129,
+           "source": "road"
+          },
+          "car": {
+           "minutes": 7,
+           "distance_m": 596,
+           "source": "road"
+          }
+         },
+         "arrive_at": "13:33",
+         "start_at": "13:33",
+         "end_at": "14:13",
+         "arrived_at": null,
+         "done_at": null
+        },
+        {
+         "id": 487,
+         "day": 1,
+         "order": 3,
+         "place_id": "kto-2610501",
+         "place": {
+          "id": "kto-2610501",
+          "title": "구룡포항",
+          "content_type": "관광지",
+          "lat": 35.9893051205,
+          "lng": 129.555641609,
+          "addr": "경상북도 포항시 남구 구룡포읍 호미로 222-1",
+          "open_hours": "상시 개방",
+          "rest_date": "연중무휴"
+         },
+         "stay_minutes": 50,
+         "start_time": null,
+         "memo": "점심 (항구 앞 식당)",
+         "status": "planned",
+         "travel_mode": null,
+         "leg_mode": "walk",
+         "travel_minutes": 9,
+         "travel_distance_m": 564,
+         "travel_source": "road",
+         "travel_options": {
+          "walk": {
+           "minutes": 9,
+           "distance_m": 564,
+           "source": "road"
+          },
+          "car": {
+           "minutes": 7,
+           "distance_m": 973,
+           "source": "road"
+          }
+         },
+         "arrive_at": "14:22",
+         "start_at": "14:22",
+         "end_at": "15:12",
+         "arrived_at": null,
+         "done_at": null
+        },
+        {
+         "id": 488,
+         "day": 1,
+         "order": 4,
+         "place_id": "kto-2660046",
+         "place": {
+          "id": "kto-2660046",
+          "title": "구룡포과메기문화관",
+          "content_type": "문화시설",
+          "lat": 35.9927402978,
+          "lng": 129.5617992377,
+          "addr": "경상북도 포항시 남구 구룡포읍 구룡포길117번길 28-8",
+          "open_hours": "09:00~18:00 (입장 마감 17:30)",
+          "rest_date": "매주 월요일 / 공휴일 다음날 / 1월 1일 / 추석 당일"
+         },
+         "stay_minutes": 60,
+         "start_time": null,
+         "memo": "",
+         "status": "planned",
+         "travel_mode": null,
+         "leg_mode": "walk",
+         "travel_minutes": 17,
+         "travel_distance_m": 1006,
+         "travel_source": "road",
+         "travel_options": {
+          "walk": {
+           "minutes": 17,
+           "distance_m": 1006,
+           "source": "road"
+          },
+          "car": {
+           "minutes": 9,
+           "distance_m": 1471,
+           "source": "road"
+          }
+         },
+         "arrive_at": "15:29",
+         "start_at": "15:29",
+         "end_at": "16:29",
+         "arrived_at": null,
+         "done_at": null
+        },
+        {
+         "id": 489,
+         "day": 1,
+         "order": 5,
+         "place_id": "poi-gr-breakwater-north",
+         "place": {
+          "id": "poi-gr-breakwater-north",
+          "title": "구룡포 북방파제",
+          "content_type": "관광지",
+          "lat": 35.988078,
+          "lng": 129.559279,
+          "addr": "경상북도 포항시 남구 구룡포읍 구룡포리 (구룡포항 북방파제)",
+          "open_hours": "상시 개방 (기상 악화 시 출입 자제)",
+          "rest_date": "연중무휴"
+         },
+         "stay_minutes": 40,
+         "start_time": null,
+         "memo": "",
+         "status": "planned",
+         "travel_mode": null,
+         "leg_mode": "walk",
+         "travel_minutes": 13,
+         "travel_distance_m": 886,
+         "travel_source": "road",
+         "travel_options": {
+          "walk": {
+           "minutes": 13,
+           "distance_m": 886,
+           "source": "road"
+          },
+          "car": {
+           "minutes": 10,
+           "distance_m": 1138,
+           "source": "road"
+          }
+         },
+         "arrive_at": "16:42",
+         "start_at": "16:42",
+         "end_at": "17:22",
+         "arrived_at": null,
+         "done_at": null
+        },
+        {
+         "id": 490,
+         "day": 1,
+         "order": 6,
+         "place_id": "kto-2834344",
+         "place": {
+          "id": "kto-2834344",
+          "title": "카페파도",
+          "content_type": "음식점",
+          "lat": 35.9768342269,
+          "lng": 129.5514895569,
+          "addr": "경상북도 포항시 남구 구룡포읍 하정로172번길 2",
+          "open_hours": "10:00~21:00 (마지막 주문 20:30)",
+          "rest_date": "연중무휴"
+         },
+         "stay_minutes": 45,
+         "start_time": null,
+         "memo": "",
+         "status": "planned",
+         "travel_mode": "car",
+         "leg_mode": "car",
+         "travel_minutes": 13,
+         "travel_distance_m": 3265,
+         "travel_source": "road",
+         "travel_options": {
+          "walk": {
+           "minutes": 45,
+           "distance_m": 2922,
+           "source": "road"
+          },
+          "car": {
+           "minutes": 13,
+           "distance_m": 3265,
+           "source": "road"
+          }
+         },
+         "arrive_at": "17:35",
+         "start_at": "17:35",
+         "end_at": "18:20",
+         "arrived_at": null,
+         "done_at": null
+        }
+       ]
+      }
+     ],
+     "constraints": [
+      {
+       "id": 36,
+       "type": "end_before",
+       "params": {
+        "time": "18:00"
+       },
+       "hard": true,
+       "source": "llm",
+       "note": "18시 전에 끝내기"
+      }
+     ],
+     "violations": [
+      {
+       "code": "day_overflow",
+       "severity": "error",
+       "message": "1일차 일정이 18:20 에 끝나 목표 종료 시각 18:00 을 20분 넘습니다.",
+       "day": 1,
+       "item_id": 490,
+       "constraint_id": null
+      },
+      {
+       "code": "end_before",
+       "severity": "error",
+       "message": "1일차 일정이 18:20 에 끝나 18:00 전 종료 규칙을 어깁니다.",
+       "day": 1,
+       "item_id": null,
+       "constraint_id": 36
+      }
+     ]
+    }
+   }
+  },
+  {
+   "name": "candidate_add_again",
+   "method": "POST",
+   "route": "/agent/sessions/{session_id}/recommendations/{rec_id}/candidates/{cand_id}/add",
+   "path": "/agent/sessions/d4bb6faca3064447856d260bdb6699e9/recommendations/33/candidates/45/add",
+   "query": {},
+   "body": null,
+   "status": 409,
+   "elapsed_ms": 29,
+   "response": {
+    "detail": {
+     "code": "already_in_plan",
+     "message": "1일차 일정에 이미 있습니다.",
+     "item_id": 491
+    }
+   }
+  },
+  {
+   "name": "candidate_remove",
+   "method": "POST",
+   "route": "/agent/sessions/{session_id}/recommendations/{rec_id}/candidates/{cand_id}/remove",
+   "path": "/agent/sessions/d4bb6faca3064447856d260bdb6699e9/recommendations/33/candidates/45/remove",
+   "query": {},
+   "body": null,
+   "status": 200,
+   "elapsed_ms": 37,
+   "response": {
+    "recommendation": {
+     "id": 33,
+     "plan_id": 240,
+     "title": "구룡포에서 쉬어 가기 좋은 카페",
+     "source": "llm",
+     "origin": "d4bb6faca3064447856d260bdb6699e9",
+     "created_at": "2026-10-09T14:37:45.069993Z",
+     "candidates": [
+      {
+       "id": 44,
+       "place_id": "kto-2834344",
+       "place": {
+        "id": "kto-2834344",
+        "title": "카페파도",
+        "content_type": "음식점",
+        "lat": 35.9768342269,
+        "lng": 129.5514895569,
+        "addr": "경상북도 포항시 남구 구룡포읍 하정로172번길 2",
+        "open_hours": "10:00~21:00 (마지막 주문 20:30)",
+        "rest_date": "연중무휴"
+       },
+       "day": 1,
+       "time_hint": "16:50",
+       "stay_minutes": 45,
+       "reason": "구룡포 앞바다가 보이는 바닷가 카페, 일정 마지막에 쉬기 좋아요",
+       "state": "in_plan",
+       "item": {
+        "item_id": 490,
+        "day": 1,
+        "order": 5,
+        "start_at": "16:53",
+        "end_at": "17:38"
+       },
+       "other_days": []
+      },
+      {
+       "id": 45,
+       "place_id": "kto-2781555",
+       "place": {
+        "id": "kto-2781555",
+        "title": "까멜리아인구룡포",
+        "content_type": "음식점",
+        "lat": 35.9913988466,
+        "lng": 129.5596812664,
+        "addr": "경상북도 포항시 남구 구룡포읍 구룡포길 133-1",
+        "open_hours": "- 월요일 9:00~19:00 - 화~금 10:00~18:00 - 토요일 10:00~21:00 - 일요일 9:00~19:00",
+        "rest_date": "연중무휴"
+       },
+       "day": 1,
+       "time_hint": "13:30",
+       "stay_minutes": 40,
+       "reason": "가옥거리 바로 옆이라 걷다가 잠깐 쉬기 좋아요",
+       "state": "not_in_plan",
+       "item": null,
+       "other_days": []
+      }
+     ]
+    },
+    "plan": {
+     "id": 240,
+     "user_id": "74bb7f62aa554ec1861a8a24288ff267",
+     "title": "엄마랑 구룡포",
+     "start_date": "2026-10-10",
+     "end_date": "2026-10-10",
+     "day_start": "12:30",
+     "day_end": "18:00",
+     "travel_mode": "walk",
+     "memo": "",
+     "version": 4,
+     "progress_version": 0,
+     "item_count": 5,
+     "created_at": "2026-10-09T14:37:37.717083Z",
+     "updated_at": "2026-10-09T14:37:46.126669Z",
+     "days": [
+      {
+       "day": 1,
+       "date": "2026-10-10",
+       "weekday": "토",
+       "end_at": "17:38",
+       "items": [
+        {
+         "id": 486,
+         "day": 1,
+         "order": 1,
+         "place_id": "kto-1909659",
+         "place": {
+          "id": "kto-1909659",
+          "title": "구룡포 일본인 가옥거리",
+          "content_type": "관광지",
+          "lat": 35.9906209551,
+          "lng": 129.5604550366,
+          "addr": "경상북도 포항시 남구 구룡포읍 호미로 277",
+          "open_hours": "상시 개방",
+          "rest_date": "연중무휴"
+         },
+         "stay_minutes": 60,
+         "start_time": null,
+         "memo": "골목과 계단을 천천히",
+         "status": "planned",
+         "travel_mode": null,
+         "leg_mode": null,
+         "travel_minutes": null,
+         "travel_distance_m": null,
+         "travel_source": null,
+         "travel_options": null,
+         "arrive_at": "12:30",
+         "start_at": "12:30",
+         "end_at": "13:30",
+         "arrived_at": null,
+         "done_at": null
+        },
+        {
+         "id": 487,
+         "day": 1,
+         "order": 2,
+         "place_id": "kto-2610501",
+         "place": {
+          "id": "kto-2610501",
+          "title": "구룡포항",
+          "content_type": "관광지",
+          "lat": 35.9893051205,
+          "lng": 129.555641609,
+          "addr": "경상북도 포항시 남구 구룡포읍 호미로 222-1",
+          "open_hours": "상시 개방",
+          "rest_date": "연중무휴"
+         },
+         "stay_minutes": 50,
+         "start_time": null,
+         "memo": "점심 (항구 앞 식당)",
+         "status": "planned",
+         "travel_mode": null,
+         "leg_mode": "walk",
+         "travel_minutes": 10,
+         "travel_distance_m": 632,
+         "travel_source": "road",
+         "travel_options": {
+          "walk": {
+           "minutes": 10,
+           "distance_m": 632,
+           "source": "road"
+          },
+          "car": {
+           "minutes": 7,
+           "distance_m": 631,
+           "source": "road"
+          }
+         },
+         "arrive_at": "13:40",
+         "start_at": "13:40",
+         "end_at": "14:30",
+         "arrived_at": null,
+         "done_at": null
+        },
+        {
+         "id": 488,
+         "day": 1,
+         "order": 3,
+         "place_id": "kto-2660046",
+         "place": {
+          "id": "kto-2660046",
+          "title": "구룡포과메기문화관",
+          "content_type": "문화시설",
+          "lat": 35.9927402978,
+          "lng": 129.5617992377,
+          "addr": "경상북도 포항시 남구 구룡포읍 구룡포길117번길 28-8",
+          "open_hours": "09:00~18:00 (입장 마감 17:30)",
+          "rest_date": "매주 월요일 / 공휴일 다음날 / 1월 1일 / 추석 당일"
+         },
+         "stay_minutes": 60,
+         "start_time": null,
+         "memo": "",
+         "status": "planned",
+         "travel_mode": null,
+         "leg_mode": "walk",
+         "travel_minutes": 17,
+         "travel_distance_m": 1006,
+         "travel_source": "road",
+         "travel_options": {
+          "walk": {
+           "minutes": 17,
+           "distance_m": 1006,
+           "source": "road"
+          },
+          "car": {
+           "minutes": 9,
+           "distance_m": 1471,
+           "source": "road"
+          }
+         },
+         "arrive_at": "14:47",
+         "start_at": "14:47",
+         "end_at": "15:47",
+         "arrived_at": null,
+         "done_at": null
+        },
+        {
+         "id": 489,
+         "day": 1,
+         "order": 4,
+         "place_id": "poi-gr-breakwater-north",
+         "place": {
+          "id": "poi-gr-breakwater-north",
+          "title": "구룡포 북방파제",
+          "content_type": "관광지",
+          "lat": 35.988078,
+          "lng": 129.559279,
+          "addr": "경상북도 포항시 남구 구룡포읍 구룡포리 (구룡포항 북방파제)",
+          "open_hours": "상시 개방 (기상 악화 시 출입 자제)",
+          "rest_date": "연중무휴"
+         },
+         "stay_minutes": 40,
+         "start_time": null,
+         "memo": "",
+         "status": "planned",
+         "travel_mode": null,
+         "leg_mode": "walk",
+         "travel_minutes": 13,
+         "travel_distance_m": 886,
+         "travel_source": "road",
+         "travel_options": {
+          "walk": {
+           "minutes": 13,
+           "distance_m": 886,
+           "source": "road"
+          },
+          "car": {
+           "minutes": 10,
+           "distance_m": 1138,
+           "source": "road"
+          }
+         },
+         "arrive_at": "16:00",
+         "start_at": "16:00",
+         "end_at": "16:40",
+         "arrived_at": null,
+         "done_at": null
+        },
+        {
+         "id": 490,
+         "day": 1,
+         "order": 5,
+         "place_id": "kto-2834344",
+         "place": {
+          "id": "kto-2834344",
+          "title": "카페파도",
+          "content_type": "음식점",
+          "lat": 35.9768342269,
+          "lng": 129.5514895569,
+          "addr": "경상북도 포항시 남구 구룡포읍 하정로172번길 2",
+          "open_hours": "10:00~21:00 (마지막 주문 20:30)",
+          "rest_date": "연중무휴"
+         },
+         "stay_minutes": 45,
+         "start_time": null,
+         "memo": "",
+         "status": "planned",
+         "travel_mode": "car",
+         "leg_mode": "car",
+         "travel_minutes": 13,
+         "travel_distance_m": 3265,
+         "travel_source": "road",
+         "travel_options": {
+          "walk": {
+           "minutes": 45,
+           "distance_m": 2922,
+           "source": "road"
+          },
+          "car": {
+           "minutes": 13,
+           "distance_m": 3265,
+           "source": "road"
+          }
+         },
+         "arrive_at": "16:53",
+         "start_at": "16:53",
+         "end_at": "17:38",
+         "arrived_at": null,
+         "done_at": null
+        }
+       ]
+      }
+     ],
+     "constraints": [
+      {
+       "id": 36,
+       "type": "end_before",
+       "params": {
+        "time": "18:00"
+       },
+       "hard": true,
+       "source": "llm",
+       "note": "18시 전에 끝내기"
+      }
+     ],
+     "violations": []
+    }
+   }
+  },
+  {
+   "name": "session_detail_end",
+   "method": "GET",
+   "route": "/agent/sessions/{session_id}",
+   "path": "/agent/sessions/d4bb6faca3064447856d260bdb6699e9",
+   "query": {},
+   "body": null,
+   "status": 200,
+   "elapsed_ms": 30,
+   "response": {
+    "id": "d4bb6faca3064447856d260bdb6699e9",
+    "plan_id": 240,
+    "created_at": "2026-10-09T14:37:37.803523Z",
+    "updated_at": "2026-10-09T14:37:46.133930Z",
+    "messages": [
+     {
+      "id": 1015,
+      "role": "user",
+      "content": "엄마랑 구룡포 일정 짜줘",
+      "created_at": "2026-10-09T14:37:44.109081Z",
+      "steps": [],
+      "steps_summary": null,
+      "cards": []
+     },
+     {
+      "id": 1038,
+      "role": "assistant",
+      "content": "어머니와 걷기 편한 순서로 다섯 곳을 넣었어요. 12:30 일본인 가옥거리에서 시작해 구룡포항에서 점심을 먹고, 과메기문화관과 북방파제를 거쳐 카페파도에서 17:38에 마쳐요. 북방파제에서 카페까지는 멀어서 차로 이동하게 했고, 18시 전에 끝나도록 조건도 걸어 두었어요.",
+      "created_at": "2026-10-09T14:37:44.109081Z",
+      "steps": [
+       {
+        "id": "s1",
+        "kind": "memory",
+        "status": "done",
+        "title": "기억하기",
+        "detail": "어머니와 동행"
+       },
+       {
+        "id": "s2",
+        "kind": "search",
+        "status": "done",
+        "title": "장소 찾기",
+        "detail": "까멜리아인구룡포 외 4곳"
+       },
+       {
+        "id": "s3",
+        "kind": "rule",
+        "status": "done",
+        "title": "조건 반영",
+        "detail": "18:00 전 종료"
+       },
+       {
+        "id": "s4",
+        "kind": "edit",
+        "status": "done",
+        "title": "일정 조정",
+        "detail": "카페파도 추가 · 총 이동 +45분"
+       },
+       {
+        "id": "s5",
+        "kind": "review",
+        "status": "done",
+        "title": "일정 검토",
+        "detail": "문제 3건"
+       },
+       {
+        "id": "s6",
+        "kind": "edit",
+        "status": "done",
+        "title": "일정 조정",
+        "detail": "카페파도 수정 · 총 이동 -32분"
+       },
+       {
+        "id": "s7",
+        "kind": "review",
+        "status": "done",
+        "title": "일정 검토",
+        "detail": "문제 없음"
+       },
+       {
+        "id": "s8",
+        "kind": "proposal",
+        "status": "done",
+        "title": "변경안 만들기",
+        "detail": "변경 6건"
+       }
+      ],
+      "steps_summary": "8단계 완료 : 기억하기, 장소 찾기, 조건 반영, 일정 조정, 일정 검토, 일정 조정, 일정 검토, 변경안 만들기",
+      "cards": [
+       {
+        "type": "proposal",
+        "proposal": {
+         "id": 116,
+         "plan_id": 240,
+         "status": "accepted",
+         "decision": "applied",
+         "summary": "어머니와 걷기 편한 순서로 다섯 곳을 넣었어요. 12:30 일본인 가옥거리에서 시작해 구룡포항에서 점심을 먹고, 과메기문화관과 북방파제를 거쳐 카페파도에서 17:38에 마쳐요. 북방파제에서 카페까지는 멀어서 차로 이동하게 했고, 18시 전에 끝나도록 조건도 걸어 두었어요.",
+         "source": "llm",
+         "origin": "d4bb6faca3064447856d260bdb6699e9",
+         "base_version": 1,
+         "changes": [
+          {
+           "kind": "added",
+           "message": "추가: 1일차 1번째 '구룡포 일본인 가옥거리' (60분)",
+           "item_id": -1,
+           "day": 1
+          },
+          {
+           "kind": "added",
+           "message": "추가: 1일차 2번째 '구룡포항' (50분)",
+           "item_id": -2,
+           "day": 1
+          },
+          {
+           "kind": "added",
+           "message": "추가: 1일차 3번째 '구룡포과메기문화관' (60분)",
+           "item_id": -3,
+           "day": 1
+          },
+          {
+           "kind": "added",
+           "message": "추가: 1일차 4번째 '구룡포 북방파제' (40분)",
+           "item_id": -4,
+           "day": 1
+          },
+          {
+           "kind": "added",
+           "message": "추가: 1일차 5번째 '카페파도' (45분)",
+           "item_id": -5,
+           "day": 1
+          },
+          {
+           "kind": "rule_added",
+           "message": "규칙 추가: end_before {'time': '18:00'} (18시 전에 끝내기)",
+           "item_id": null,
+           "day": null
+          },
+          {
+           "kind": "day_end",
+           "message": "1일차 종료: 없음 → 17:38",
+           "item_id": null,
+           "day": 1
+          }
+         ],
+         "created_at": "2026-10-09T14:37:44.097168Z",
+         "decided_at": "2026-10-09T14:37:44.156918Z",
+         "request": "엄마랑 구룡포 일정 짜줘",
+         "ops": [
+          {
+           "type": "end_before",
+           "params": {
+            "time": "18:00"
+           },
+           "hard": true,
+           "source": "llm",
+           "note": "18시 전에 끝내기",
+           "op": "add_constraint"
+          },
+          {
+           "place_id": "kto-1909659",
+           "day": 1,
+           "order": null,
+           "stay_minutes": 60,
+           "memo": "골목과 계단을 천천히",
+           "op": "add_item"
+          },
+          {
+           "place_id": "kto-2610501",
+           "day": 1,
+           "order": null,
+           "stay_minutes": 50,
+           "memo": "점심 (항구 앞 식당)",
+           "op": "add_item"
+          },
+          {
+           "place_id": "kto-2660046",
+           "day": 1,
+           "order": null,
+           "stay_minutes": 60,
+           "memo": "",
+           "op": "add_item"
+          },
+          {
+           "place_id": "poi-gr-breakwater-north",
+           "day": 1,
+           "order": null,
+           "stay_minutes": 40,
+           "memo": "",
+           "op": "add_item"
+          },
+          {
+           "place_id": "kto-2834344",
+           "day": 1,
+           "order": null,
+           "stay_minutes": 45,
+           "memo": "",
+           "op": "add_item"
+          },
+          {
+           "travel_mode": "car",
+           "op": "update_item",
+           "item_id": -5
+          }
+         ],
+         "before": {
+          "id": 240,
+          "user_id": "74bb7f62aa554ec1861a8a24288ff267",
+          "title": "엄마랑 구룡포",
+          "start_date": "2026-10-10",
+          "end_date": "2026-10-10",
+          "day_start": "12:30",
+          "day_end": "18:00",
+          "travel_mode": "walk",
+          "memo": "",
+          "version": 1,
+          "progress_version": 0,
+          "item_count": 0,
+          "created_at": "2026-10-09T14:37:37.717083Z",
+          "updated_at": "2026-10-09T14:37:37.717083Z",
+          "days": [
+           {
+            "day": 1,
+            "date": "2026-10-10",
+            "weekday": "토",
+            "end_at": null,
+            "items": []
+           }
+          ],
+          "constraints": [],
+          "violations": []
+         },
+         "after": {
+          "id": 240,
+          "user_id": "74bb7f62aa554ec1861a8a24288ff267",
+          "title": "엄마랑 구룡포",
+          "start_date": "2026-10-10",
+          "end_date": "2026-10-10",
+          "day_start": "12:30",
+          "day_end": "18:00",
+          "travel_mode": "walk",
+          "memo": "",
+          "version": 1,
+          "progress_version": 0,
+          "item_count": 5,
+          "created_at": "2026-10-09T14:37:37.717083Z",
+          "updated_at": "2026-10-09T14:37:44.099848Z",
+          "days": [
+           {
+            "day": 1,
+            "date": "2026-10-10",
+            "weekday": "토",
+            "end_at": "17:38",
+            "items": [
+             {
+              "id": -1,
+              "day": 1,
+              "order": 1,
+              "place_id": "kto-1909659",
+              "place": {
+               "id": "kto-1909659",
+               "title": "구룡포 일본인 가옥거리",
+               "content_type": "관광지",
+               "lat": 35.9906209551,
+               "lng": 129.5604550366,
+               "addr": "경상북도 포항시 남구 구룡포읍 호미로 277",
+               "open_hours": "상시 개방",
+               "rest_date": "연중무휴"
+              },
+              "stay_minutes": 60,
+              "start_time": null,
+              "memo": "골목과 계단을 천천히",
+              "status": "planned",
+              "travel_mode": null,
+              "leg_mode": null,
+              "travel_minutes": null,
+              "travel_distance_m": null,
+              "travel_source": null,
+              "travel_options": null,
+              "arrive_at": "12:30",
+              "start_at": "12:30",
+              "end_at": "13:30",
+              "arrived_at": null,
+              "done_at": null
+             },
+             {
+              "id": -2,
+              "day": 1,
+              "order": 2,
+              "place_id": "kto-2610501",
+              "place": {
+               "id": "kto-2610501",
+               "title": "구룡포항",
+               "content_type": "관광지",
+               "lat": 35.9893051205,
+               "lng": 129.555641609,
+               "addr": "경상북도 포항시 남구 구룡포읍 호미로 222-1",
+               "open_hours": "상시 개방",
+               "rest_date": "연중무휴"
+              },
+              "stay_minutes": 50,
+              "start_time": null,
+              "memo": "점심 (항구 앞 식당)",
+              "status": "planned",
+              "travel_mode": null,
+              "leg_mode": "walk",
+              "travel_minutes": 10,
+              "travel_distance_m": 632,
+              "travel_source": "road",
+              "travel_options": {
+               "car": {
+                "minutes": 7,
+                "distance_m": 631,
+                "source": "road"
+               },
+               "walk": {
+                "minutes": 10,
+                "distance_m": 632,
+                "source": "road"
+               }
+              },
+              "arrive_at": "13:40",
+              "start_at": "13:40",
+              "end_at": "14:30",
+              "arrived_at": null,
+              "done_at": null
+             },
+             {
+              "id": -3,
+              "day": 1,
+              "order": 3,
+              "place_id": "kto-2660046",
+              "place": {
+               "id": "kto-2660046",
+               "title": "구룡포과메기문화관",
+               "content_type": "문화시설",
+               "lat": 35.9927402978,
+               "lng": 129.5617992377,
+               "addr": "경상북도 포항시 남구 구룡포읍 구룡포길117번길 28-8",
+               "open_hours": "09:00~18:00 (입장 마감 17:30)",
+               "rest_date": "매주 월요일 / 공휴일 다음날 / 1월 1일 / 추석 당일"
+              },
+              "stay_minutes": 60,
+              "start_time": null,
+              "memo": "",
+              "status": "planned",
+              "travel_mode": null,
+              "leg_mode": "walk",
+              "travel_minutes": 17,
+              "travel_distance_m": 1006,
+              "travel_source": "road",
+              "travel_options": {
+               "car": {
+                "minutes": 9,
+                "distance_m": 1471,
+                "source": "road"
+               },
+               "walk": {
+                "minutes": 17,
+                "distance_m": 1006,
+                "source": "road"
+               }
+              },
+              "arrive_at": "14:47",
+              "start_at": "14:47",
+              "end_at": "15:47",
+              "arrived_at": null,
+              "done_at": null
+             },
+             {
+              "id": -4,
+              "day": 1,
+              "order": 4,
+              "place_id": "poi-gr-breakwater-north",
+              "place": {
+               "id": "poi-gr-breakwater-north",
+               "title": "구룡포 북방파제",
+               "content_type": "관광지",
+               "lat": 35.988078,
+               "lng": 129.559279,
+               "addr": "경상북도 포항시 남구 구룡포읍 구룡포리 (구룡포항 북방파제)",
+               "open_hours": "상시 개방 (기상 악화 시 출입 자제)",
+               "rest_date": "연중무휴"
+              },
+              "stay_minutes": 40,
+              "start_time": null,
+              "memo": "",
+              "status": "planned",
+              "travel_mode": null,
+              "leg_mode": "walk",
+              "travel_minutes": 13,
+              "travel_distance_m": 886,
+              "travel_source": "road",
+              "travel_options": {
+               "car": {
+                "minutes": 10,
+                "distance_m": 1138,
+                "source": "road"
+               },
+               "walk": {
+                "minutes": 13,
+                "distance_m": 886,
+                "source": "road"
+               }
+              },
+              "arrive_at": "16:00",
+              "start_at": "16:00",
+              "end_at": "16:40",
+              "arrived_at": null,
+              "done_at": null
+             },
+             {
+              "id": -5,
+              "day": 1,
+              "order": 5,
+              "place_id": "kto-2834344",
+              "place": {
+               "id": "kto-2834344",
+               "title": "카페파도",
+               "content_type": "음식점",
+               "lat": 35.9768342269,
+               "lng": 129.5514895569,
+               "addr": "경상북도 포항시 남구 구룡포읍 하정로172번길 2",
+               "open_hours": "10:00~21:00 (마지막 주문 20:30)",
+               "rest_date": "연중무휴"
+              },
+              "stay_minutes": 45,
+              "start_time": null,
+              "memo": "",
+              "status": "planned",
+              "travel_mode": "car",
+              "leg_mode": "car",
+              "travel_minutes": 13,
+              "travel_distance_m": 3265,
+              "travel_source": "road",
+              "travel_options": {
+               "car": {
+                "minutes": 13,
+                "distance_m": 3265,
+                "source": "road"
+               },
+               "walk": {
+                "minutes": 45,
+                "distance_m": 2922,
+                "source": "road"
+               }
+              },
+              "arrive_at": "16:53",
+              "start_at": "16:53",
+              "end_at": "17:38",
+              "arrived_at": null,
+              "done_at": null
+             }
+            ]
+           }
+          ],
+          "constraints": [
+           {
+            "id": -1,
+            "type": "end_before",
+            "params": {
+             "time": "18:00"
+            },
+            "hard": true,
+            "source": "llm",
+            "note": "18시 전에 끝내기"
+           }
+          ],
+          "violations": []
+         },
+         "current_version": 4,
+         "base_changed": true,
+         "progress_changed": []
+        }
+       }
+      ]
+     },
+     {
+      "id": 1040,
+      "role": "user",
+      "content": "갈 만한 카페 추천해줘",
+      "created_at": "2026-10-09T14:37:45.924779Z",
+      "steps": [],
+      "steps_summary": null,
+      "cards": []
+     },
+     {
+      "id": 1045,
+      "role": "assistant",
+      "content": "구룡포에서 쉬어 가기 좋은 카페 두 곳을 골랐어요. 바다를 보고 싶으면 카페파도, 가옥거리를 걷다 쉬려면 까멜리아인구룡포가 가까워요. 마음에 드는 곳을 추가해 보세요.",
+      "created_at": "2026-10-09T14:37:45.924779Z",
+      "steps": [
+       {
+        "id": "s1",
+        "kind": "search",
+        "status": "done",
+        "title": "장소 찾기",
+        "detail": "까멜리아인구룡포 외 4곳"
+       },
+       {
+        "id": "s2",
+        "kind": "recommend",
+        "status": "done",
+        "title": "추천 정리",
+        "detail": "2곳"
+       }
+      ],
+      "steps_summary": "2단계 완료 : 장소 찾기, 추천 정리",
+      "cards": [
+       {
+        "type": "recommendation",
+        "recommendation": {
+         "id": 33,
+         "plan_id": 240,
+         "title": "구룡포에서 쉬어 가기 좋은 카페",
+         "source": "llm",
+         "origin": "d4bb6faca3064447856d260bdb6699e9",
+         "created_at": "2026-10-09T14:37:45.069993Z",
+         "candidates": [
+          {
+           "id": 44,
+           "place_id": "kto-2834344",
+           "place": {
+            "id": "kto-2834344",
+            "title": "카페파도",
+            "content_type": "음식점",
+            "lat": 35.9768342269,
+            "lng": 129.5514895569,
+            "addr": "경상북도 포항시 남구 구룡포읍 하정로172번길 2",
+            "open_hours": "10:00~21:00 (마지막 주문 20:30)",
+            "rest_date": "연중무휴"
+           },
+           "day": 1,
+           "time_hint": "16:50",
+           "stay_minutes": 45,
+           "reason": "구룡포 앞바다가 보이는 바닷가 카페, 일정 마지막에 쉬기 좋아요",
+           "state": "in_plan",
+           "item": {
+            "item_id": 490,
+            "day": 1,
+            "order": 5,
+            "start_at": "16:53",
+            "end_at": "17:38"
+           },
+           "other_days": []
+          },
+          {
+           "id": 45,
+           "place_id": "kto-2781555",
+           "place": {
+            "id": "kto-2781555",
+            "title": "까멜리아인구룡포",
+            "content_type": "음식점",
+            "lat": 35.9913988466,
+            "lng": 129.5596812664,
+            "addr": "경상북도 포항시 남구 구룡포읍 구룡포길 133-1",
+            "open_hours": "- 월요일 9:00~19:00 - 화~금 10:00~18:00 - 토요일 10:00~21:00 - 일요일 9:00~19:00",
+            "rest_date": "연중무휴"
+           },
+           "day": 1,
+           "time_hint": "13:30",
+           "stay_minutes": 40,
+           "reason": "가옥거리 바로 옆이라 걷다가 잠깐 쉬기 좋아요",
+           "state": "not_in_plan",
+           "item": null,
+           "other_days": []
+          }
+         ]
+        }
+       }
+      ]
+     }
+    ]
+   }
+  }
+ ]
+}

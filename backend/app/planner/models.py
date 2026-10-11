@@ -1,6 +1,8 @@
 from datetime import date, datetime, time
 
-from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, String, Text, Time, func
+from sqlalchemy import (
+    DDL, Boolean, Date, DateTime, ForeignKey, Integer, String, Text, Time, UniqueConstraint, event, func,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -19,8 +21,11 @@ class PlannerPlan(Base):
     end_date: Mapped[date] = mapped_column(Date)
     day_start: Mapped[time] = mapped_column(Time)  # 매일 일정 시작 시각
     day_end: Mapped[time] = mapped_column(Time)  # 매일 일정 종료 목표 시각
-    travel_mode: Mapped[str] = mapped_column(String(10), default="walk")  # walk | car
+    travel_mode: Mapped[str] = mapped_column(String(10), default="walk")  # 구간 기본 이동 수단: walk | car
     memo: Mapped[str] = mapped_column(Text, default="")
+    version: Mapped[int] = mapped_column(Integer, default=1)  # 일정이 바뀔 때마다 1 오른다 (제안의 기준 비교용)
+    # 진행 상태(도착·완료)가 바뀔 때마다 1 오른다. 일정 변경이 아니라 version 과 따로 센다 (앱 화면 갱신용)
+    progress_version: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
@@ -50,6 +55,11 @@ class PlannerItem(Base):
     start_time: Mapped[time | None] = mapped_column(Time, nullable=True)  # 지정 시 이 시각에 고정
     memo: Mapped[str] = mapped_column(Text, default="")
     status: Mapped[str] = mapped_column(String(10), default="planned")  # planned|visiting|done|skipped
+    # 직전 장소에서 여기까지 오는 이동 수단. None 이면 계획 기본(plan.travel_mode)
+    travel_mode: Mapped[str | None] = mapped_column(String(4), nullable=True)
+    # 여행 중 실제 도착·완료 시각 (진행 상태 API 가 기록). 현재 기준 재계산(projection)의 기준
+    arrived_at: Mapped[time | None] = mapped_column(Time, nullable=True)
+    done_at: Mapped[time | None] = mapped_column(Time, nullable=True)
 
     plan: Mapped[PlannerPlan] = relationship(back_populates="items")
 
@@ -71,16 +81,95 @@ class PlannerConstraint(Base):
 
 
 class PlannerProposal(Base):
-    """일정 변경 제안. 사용자가 승인(accept)해야 ops 가 실제 계획에 적용된다."""
+    """일정 변경 제안. 만들 때의 일정(before)과 승인 시 일정(after)을 기록으로 남긴다 (이후 바뀌지 않음)."""
 
     __tablename__ = "planner_proposal"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     plan_id: Mapped[int] = mapped_column(ForeignKey("planner_plan.id", ondelete="CASCADE"), index=True)
-    ops: Mapped[list[dict]] = mapped_column(JSONB)
+    ops: Mapped[list[dict]] = mapped_column(JSONB)  # 보낸 필드만 (exclude_unset)
     summary: Mapped[str] = mapped_column(Text, default="")
+    request: Mapped[str] = mapped_column(Text, default="")  # 이 제안을 만든 사용자 요청 원문
     source: Mapped[str] = mapped_column(String(10), default="llm")  # llm | user | event
     origin: Mapped[str] = mapped_column(String(64), default="")  # 예: agent 세션 id
     status: Mapped[str] = mapped_column(String(12), default="pending")  # pending|accepted|rejected|superseded
+    decision: Mapped[str | None] = mapped_column(String(12), nullable=True)  # applied | overwritten
+    base_version: Mapped[int] = mapped_column(Integer)
+    before: Mapped[dict] = mapped_column(JSONB)  # PlanDetail
+    after: Mapped[dict] = mapped_column(JSONB)  # PlanDetail
+    changes: Mapped[list[dict]] = mapped_column(JSONB)  # Change[]
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class PlannerRecommendation(Base):
+    """장소 추천 카드. 후보의 상태(일정에 있는지)는 저장하지 않고 조회할 때 지금 일정에서 계산한다."""
+
+    __tablename__ = "planner_recommendation"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    plan_id: Mapped[int] = mapped_column(ForeignKey("planner_plan.id", ondelete="CASCADE"), index=True)
+    title: Mapped[str] = mapped_column(String(100))
+    source: Mapped[str] = mapped_column(String(10), default="llm")
+    origin: Mapped[str] = mapped_column(String(64), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    candidates: Mapped[list["PlannerRecommendationCandidate"]] = relationship(
+        cascade="all, delete-orphan", order_by="PlannerRecommendationCandidate.position"
+    )
+
+
+class PlannerRecommendationCandidate(Base):
+    __tablename__ = "planner_recommendation_candidate"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    recommendation_id: Mapped[int] = mapped_column(
+        ForeignKey("planner_recommendation.id", ondelete="CASCADE"), index=True)
+    position: Mapped[int] = mapped_column(Integer)  # 카드 안 순서
+    place_id: Mapped[str] = mapped_column(String(40))
+    day: Mapped[int] = mapped_column(Integer)
+    time_hint: Mapped[time | None] = mapped_column(Time, nullable=True)
+    stay_minutes: Mapped[int] = mapped_column(Integer, default=60)
+    reason: Mapped[str] = mapped_column(Text, default="")
+
+
+class PlannerSafetyState(Base):
+    """주기 안전 점검이 마지막으로 본 항목별 단계. 다음 점검과 비교해 바뀐 것만 경고로 남긴다.
+    key 는 '항목 id@날짜 시작시각' 이라 사용자가 시각을 옮기면 새 항목처럼 다시 본다."""
+
+    __tablename__ = "planner_safety_state"
+    __table_args__ = (UniqueConstraint("plan_id", "key"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    plan_id: Mapped[int] = mapped_column(ForeignKey("planner_plan.id", ondelete="CASCADE"), index=True)
+    key: Mapped[str] = mapped_column(String(64))
+    risk: Mapped[str] = mapped_column(String(10))  # safe | caution | danger
+
+
+class PlannerSafetyAlert(Base):
+    """상황 변화로 일정의 위험 단계가 바뀌었을 때 남기는 경고 (나중에 Guide Agent 를 부르는 기준)."""
+
+    __tablename__ = "planner_safety_alert"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    plan_id: Mapped[int] = mapped_column(ForeignKey("planner_plan.id", ondelete="CASCADE"), index=True)
+    level: Mapped[str] = mapped_column(String(10))  # safe | caution | danger
+    needs_action: Mapped[bool] = mapped_column(Boolean)
+    status: Mapped[str] = mapped_column(String(8), default="new")  # new | seen
+    message: Mapped[str] = mapped_column(Text)
+    plan_version: Mapped[int] = mapped_column(Integer)
+    situation: Mapped[str] = mapped_column(String(64))  # safety 상황 fingerprint
+    checked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    changes: Mapped[list[dict]] = mapped_column(JSONB)  # SafetyChange[]
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+# 이미 만들어진 테이블에 새 컬럼 추가 (해커톤 기간에는 Alembic 을 쓰지 않는다). create_all 직후 매번 실행, 있으면 건너뛴다
+_UPGRADES = [
+    "ALTER TABLE planner_item ADD COLUMN IF NOT EXISTS travel_mode VARCHAR(4)",
+    "ALTER TABLE planner_item ADD COLUMN IF NOT EXISTS arrived_at TIME",
+    "ALTER TABLE planner_item ADD COLUMN IF NOT EXISTS done_at TIME",
+    "ALTER TABLE planner_plan ADD COLUMN IF NOT EXISTS progress_version INTEGER NOT NULL DEFAULT 0",
+]
+for _sql in _UPGRADES:
+    event.listen(Base.metadata, "after_create", DDL(_sql).execute_if(dialect="postgresql"))
