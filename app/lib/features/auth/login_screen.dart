@@ -298,7 +298,7 @@ class _LoginIdScreenState extends State<LoginIdScreen> {
             _idError = '아이디를 확인해 주세요';
           }
         default:
-          showInfo(context, '서버에 연결하지 못했어요');
+          showInfo(context, authErrorMessage(e, session.baseUrl));
       }
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -371,6 +371,13 @@ class _LoginIdScreenState extends State<LoginIdScreen> {
   }
 }
 
+/// 가입이 막힌 서버 (403 admin_only) 안내.
+const signupClosedMessage = '지금은 가입할 수 없어요. 운영팀에 계정을 요청해 주세요.';
+
+/// 로그인·가입에서 따로 처리하지 않은 오류: 진짜 연결 실패만 "서버에 연결하지 못했어요 (주소)", 나머지는 서버 메시지 ([userMessage]).
+String authErrorMessage(ApiException e, String baseUrl) =>
+    e.isNetwork || e.code == 'network' || e.code == 'timeout' || e.code == 'upstream_unavailable' ? '서버에 연결하지 못했어요 ($baseUrl)' : userMessage(e);
+
 /// 35_Signup (Figma 73:6173). 입력 중 규칙 확인 (account §3.1).
 class SignupScreen extends StatefulWidget {
   const SignupScreen({super.key});
@@ -388,6 +395,9 @@ class _SignupScreenState extends State<SignupScreen> {
   String? _idServer;
   String? _pwServer;
   String? _nameServer;
+
+  /// 서버가 가입을 막아 둠 (403 admin_only).
+  bool _closed = false;
 
   static final _idRe = RegExp(r'^[a-z0-9][a-z0-9._-]{3,31}$');
 
@@ -445,8 +455,11 @@ class _SignupScreenState extends State<SignupScreen> {
             } else {
               _idServer = '영문 소문자·숫자 4~32자';
             }
+          case 'admin_only':
+            // 공개 서버는 가입을 막아 둔다 (게이트웨이 403, docs/deploy/README.md §3.1) — 토스트 말고 화면 안 안내
+            _closed = true;
           default:
-            showInfo(context, '서버에 연결하지 못했어요');
+            showInfo(context, authErrorMessage(e, session.baseUrl));
         }
       });
     } finally {
@@ -465,6 +478,18 @@ class _SignupScreenState extends State<SignupScreen> {
           Text('가입하기', style: AppText.title),
           const SizedBox(height: 4),
           Text('아이디와 비밀번호만 있으면 돼요', style: AppText.meta.copyWith(fontSize: 14)),
+          if (_closed)
+            Container(
+              key: const ValueKey('signup-closed'),
+              margin: const EdgeInsets.only(top: 12),
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(color: AppColors.warningSoft, border: Border.all(color: AppColors.warningLine), borderRadius: BorderRadius.circular(12)),
+              child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                const Icon(Icons.info_outline, size: 20, color: AppColors.warning),
+                const SizedBox(width: 10),
+                Expanded(child: Text(signupClosedMessage, style: AppText.label.copyWith(color: AppColors.text))),
+              ]),
+            ),
           const SizedBox(height: 28),
           AuthField(
             label: '아이디',
