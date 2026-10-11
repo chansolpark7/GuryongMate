@@ -68,6 +68,14 @@ class _GuideNoteScreenState extends State<GuideNoteScreen> {
     _chat?.addListener(_onChat);
     _chat?.init();
     _load();
+    _input.addListener(_onInput);
+  }
+
+  /// 입력을 시작·비우면 빠른 실행 칩을 숨기고·보인다 (글자마다 다시 그리지 않게 빈칸 여부가 바뀔 때만).
+  bool _composing = false;
+  void _onInput() {
+    final c = _input.text.isNotEmpty;
+    if (c != _composing && mounted) setState(() => _composing = c);
   }
 
   @override
@@ -255,7 +263,15 @@ class _GuideNoteScreenState extends State<GuideNoteScreen> {
         ChangeNotifierProvider.value(
           value: chat,
           child: Column(key: const ValueKey('guide-talk'), crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-            for (final (i, x) in turns.indexed) TurnView(turn: x, isLast: i == turns.length - 1, onFollowUp: _ask, onOpenCards: () => _openCards(x)),
+            for (final (i, x) in turns.indexed)
+              TurnView(
+                turn: x,
+                isLast: i == turns.length - 1,
+                onFollowUp: _ask,
+                onOpenCards: () => _openCards(x),
+                // 현장 가이드 = 동행 중 (다음 일정 · 근처 볼거리 · 해설 더 짧게)
+                quickActions: _composing ? null : (t) => quickActions(t, day: 1, trip: true),
+              ),
           ]),
         ),
       ],
