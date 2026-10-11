@@ -1,22 +1,25 @@
-# 게이트웨이 (운영, 공개 서버). 경로는 개발과 같은 routes.caddy 를 쓰고, 그 앞에서 데모 조작 API 를 관리 토큰으로 막는다.
+# 게이트웨이 (운영, 공개 서버). 경로는 개발과 같은 routes.caddy 를 쓰고, 그 앞에서 가입만 관리 토큰으로 막는다.
 # 관리 토큰: 환경변수 GATEWAY_ADMIN_TOKEN (서버 .env). 요청 헤더 X-Admin-Token 이 같아야 통과한다. 비어 있으면 항상 막는다.
 # 막는 것 (docs/deploy/README.md §3):
-#   PUT /safety/sim               가상 상황·가상 시각·실제<->가상 전환 (GET 은 앱 연결 확인용이라 연다)
-#   POST /planner/safety/scan     안전 주기 점검 즉시 실행 (모든 사용자 계획 대상)
-#   POST /trip/plans/{id}/tick    trip 틱 (재생 시각 now 를 받는다)
-#   POST /auth/signup             가입 (계정은 관리 토큰으로 만든다 — deploy/create_user.sh)
+#   POST /auth/signup             가입 (아무나 계정을 만들어 LLM 비용을 쓰지 못하게 — 계정은 deploy/create_user.sh)
+# 여는 것 (2026-10-11 결정: 팀·멘토가 관제 대시보드·진행 스크립트를 토큰 없이 쓴다. 비용이 들지 않는 데모 조작):
+#   PUT /safety/sim               가상 상황·가상 시각·실제<->가상 전환 (서버 전체에 걸린다)
+#   POST /planner/safety/scan     안전 점검 즉시 실행 — planner 도 관리 토큰을 확인하므로 게이트웨이가 토큰을 붙여 넘긴다
+#   POST /trip/plans/{id}/tick    trip 틱 (로그인한 사용자 자기 계획만)
 {
 	admin off
 }
 
 :80 {
-	@admin_only expression `((path('/safety/sim', '/safety/sim/') && !method('GET', 'HEAD')) || path('/planner/safety/scan', '/planner/safety/scan/') || path_regexp('^/trip/plans/[^/]+/tick/?$') || path('/auth/signup', '/auth/signup/')) && ({http.request.header.X-Admin-Token} != "{$GATEWAY_ADMIN_TOKEN}" || "{$GATEWAY_ADMIN_TOKEN}" == "")`
+	@admin_only expression `path('/auth/signup', '/auth/signup/') && ({http.request.header.X-Admin-Token} != "{$GATEWAY_ADMIN_TOKEN}" || "{$GATEWAY_ADMIN_TOKEN}" == "")`
+	@scan path /planner/safety/scan /planner/safety/scan/
 
 	route {
 		handle @admin_only {
 			header Content-Type application/json
-			respond `{"detail":{"code":"admin_only","message":"관리 토큰(X-Admin-Token)이 필요한 API 입니다."}}` 403
+			respond `{"detail":{"code":"admin_only","message":"가입은 운영팀에 요청해 주세요 (관리 토큰이 필요한 API 입니다)."}}` 403
 		}
+		request_header @scan X-Admin-Token "{$GATEWAY_ADMIN_TOKEN}"
 		import routes.caddy
 	}
 }

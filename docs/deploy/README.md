@@ -145,16 +145,18 @@ VM 의 파일 (`~/guryongmate`):
 - 비밀번호는 각자 앱에서 바꿀 수 있다 (`PUT /users/me/password`). Google 로그인은 계정을 자동으로 만들어 이 제한을 우회하므로 서버에서는 켜지 않는다 (`ACCOUNT_GOOGLE_CLIENT_IDS` 비움).
 - 앱에서 가입 화면을 열어 두려면: `infra/gateway/Caddyfile.prod` 의 `/auth/signup` 조건을 빼고 배포한다 (§3.3 의 호출 수 제한은 그대로 걸린다).
 
-### 3.2 관리 토큰 (데모 조작 API)
-게이트웨이(`infra/gateway/Caddyfile.prod`)가 아래 요청을 헤더 `X-Admin-Token` 이 `.env` 의 `GATEWAY_ADMIN_TOKEN` 과 같을 때만 넘긴다. 아니면 `403 {"detail": {"code": "admin_only"}}`.
-토큰이 비어 있으면 항상 막는다. 경로는 대소문자·끝 `/`·`%` 인코딩과 상관없이 막힌다 (로컬에서 확인).
+### 3.2 관리 토큰 (가입만, 2026-10-11 변경)
+게이트웨이(`infra/gateway/Caddyfile.prod`)는 **가입(`POST /auth/signup`)만** 헤더 `X-Admin-Token` 이 `.env` 의 `GATEWAY_ADMIN_TOKEN` 과 같을 때 넘긴다. 아니면 `403 {"detail": {"code": "admin_only"}}`.
+토큰이 비어 있으면 항상 막는다. 경로는 대소문자·끝 `/`·`%` 인코딩과 상관없이 막힌다.
 
-| 막는 것 | 왜 |
-|---|---|
-| `PUT /safety/sim` | 가상 상황·가상 시각·실제↔가상 전환은 **서버 전체**에 걸린다 (`GET` 은 앱 연결 확인용이라 연다) |
-| `POST /planner/safety/scan` | 모든 사용자의 계획을 점검한다. 백엔드도 `AUTH_REQUIRED=true` 면 관리 토큰이 맞을 때만 연다 (`app.core.auth.admin_request`) |
-| `POST /trip/plans/{id}/tick` | 재생 시각(`now`)을 받는 시연용 틱 |
-| `POST /auth/signup` | §3.1 |
+| API | 지금 | 왜 |
+|---|---|---|
+| `POST /auth/signup` | **관리 토큰 필요** | 아무나 계정을 만들어 LLM 비용을 쓰지 못하게 (§3.1) |
+| `PUT /safety/sim` | 열림 | 팀·멘토가 관제 대시보드로 시연·시험. 비용 없음. **서버 전체에 걸리므로** 쓰고 나면 [환경 원래대로] |
+| `POST /planner/safety/scan` | 열림 | planner 가 `AUTH_REQUIRED=true` 면 관리 토큰을 확인하므로(`app.core.auth.admin_request`) **게이트웨이가 토큰을 붙여** 넘긴다 |
+| `POST /trip/plans/{id}/tick` | 열림 | 로그인한 사용자의 자기 계획만 |
+
+(처음 배포 때는 위 세 API 도 관리 토큰으로 막았다. 팀·멘토 시험을 위해 2026-10-11 에 가입만 남겼다.)
 
 - 관리 토큰 보기: `deploy/admin_token.sh` (화면에만 출력).
 - **발표 진행 스크립트**: `--admin-token` 또는 환경변수 `GURYONG_ADMIN_TOKEN` (CLI `scripts/planner/cli.py` 도 같은 환경변수). 모든 요청에 헤더로 붙는다.
