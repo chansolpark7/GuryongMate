@@ -209,12 +209,14 @@ async def place_title(api: ServiceApi, plan: dict, place_id: str) -> str:
 
 async def run_turn(session_id: str, plan_id: int, user_text: str, llm: LLMProvider, api: ServiceApi, *,
                    repropose: dict | None = None, trip: dict | None = None, fetch_trip: bool = True,
-                   hidden: bool = False, place_id: str | None = None) -> AsyncIterator[Event]:
+                   hidden: bool = False, place_id: str | None = None,
+                   trigger: dict | None = None) -> AsyncIterator[Event]:
     """repropose: 다시 만들 제안 (ProposalDetail). 빈 초안에서 시작하고, 새 제안이 그것을 대체한다.
     trip: 여행 상태 (TripState). fetch_trip 이면 trip 에서 조회한다. active 면 동행 모드.
     hidden: 사용자 메시지를 화면에 보이지 않게 저장 (선제 턴의 '[이벤트] …').
     place_id: 사용자가 그 장소의 가이드 노트를 보며 묻는다 (앱). 숨김 맥락 한 줄(사용자 메시지로 남기지 않음) + 현장 해설 도구,
     그 턴의 메시지(사용자·답)에 place_id 를 남긴다. 세션은 그대로 하나다 (맥락·제안·선제 턴이 이어진다).
+    trigger: 선제 턴의 계기 (schemas.Trigger). 그 턴의 답(assistant 행)에 남기고 done 에도 싣는다.
 
     대화 기록은 턴이 끝날 때 한 번 저장한다. 오류로 끝나거나 연결이 끊겨도 그때까지의 완결된 기록
     (도구 호출과 결과의 짝이 맞는 부분)과 이미 만든 카드는 저장한다.
@@ -297,6 +299,8 @@ async def run_turn(session_id: str, plan_id: int, user_text: str, llm: LLMProvid
         rows[-1].cards = cards or None
         for r in rows:  # 장소 맥락 질문: 그 턴의 사용자 메시지와 답 모두 (앱이 장소별로 걸러 보여준다)
             r.place_id = place_id
+            if trigger and r.role == "assistant":  # 선제 턴: 답만 (숨김 '[이벤트]' 행·도구 결과는 아님)
+                r.trigger = trigger
         return rows
 
     async def save(note: str | None = None) -> int | None:
@@ -528,7 +532,7 @@ async def run_turn(session_id: str, plan_id: int, user_text: str, llm: LLMProvid
         log.info("session=%s mode=%s%s usage %s", sid, "guide" if trip else "plan",
                  f" place={place_id}" if place_id else "", usage)
         yield _ev("done", text=full_text, cards=cards, usage=usage, message_id=message_id,
-                  mode="guide" if trip else "plan")
+                  mode="guide" if trip else "plan", trigger=trigger)
     finally:
         if not saved:
             # 연결 끊김(취소)이나 예상 못 한 예외: 여기서는 await 할 수 없어 짧게 동기로 저장한다

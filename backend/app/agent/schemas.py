@@ -9,8 +9,9 @@
     proposal       ProposalDetail (planner)                변경 제안 카드
     recommendation RecommendationView (planner)            장소 추천 카드
     steps_done     {"count", "summary"}                    진행 영역을 한 줄로 접기
-    done           {"text", "cards": [{"type", "id"}], "usage", "message_id", "mode"}  턴 종료
-                   (usage: LLM 토큰 사용량, message_id: 저장된 답변 메시지, mode: plan | guide)
+    done           {"text", "cards": [{"type", "id"}], "usage", "message_id", "mode", "trigger"}  턴 종료
+                   (usage: LLM 토큰 사용량, message_id: 저장된 답변 메시지, mode: plan | guide,
+                    trigger: 선제 턴이면 Trigger, 아니면 null)
     error          {"code", "message"}                     오류 (이 뒤로 이벤트 없음)
 """
 from datetime import datetime
@@ -77,6 +78,16 @@ class SessionView(BaseModel):
     updated_at: datetime
 
 
+class Trigger(BaseModel):
+    """Agent 가 먼저 말을 건 메시지(선제 턴)의 계기. 앱은 이것으로 앞 답변과 구분되는 카드로 그린다."""
+
+    kind: Literal["event"] = "event"
+    type: str = Field(description="trip 이벤트 종류: delay | safety_raised | …")
+    event_id: int | None = Field(None, description="trip 이벤트 id")
+    reason: str | None = Field(None, description="delay 의 payload.reason (violations | behind_schedule), 없으면 null")
+    at: str | None = Field(None, description="이벤트 시각 (ISO, 이벤트의 now — 가상 시계면 가상 시각 — 없으면 created_at)")
+
+
 class MessageView(BaseModel):
     """화면에 보일 메시지 (도구 실행 기록·숨김 알림은 제외)."""
 
@@ -90,6 +101,7 @@ class MessageView(BaseModel):
     cards: list[dict[str, Any]] = Field(
         [], description='[{"type": "proposal", "proposal": ProposalDetail} | {"type": "recommendation", '
                         '"recommendation": RecommendationView}] — 조회 시점의 상태')
+    trigger: Trigger | None = Field(None, description="Agent 가 먼저 말을 건 답(선제 턴)이면 그 계기, 아니면 null")
 
 
 class SessionDetail(SessionView):
@@ -107,6 +119,7 @@ class ChatResult(BaseModel):
     usage: dict[str, int] | None = Field(None, description="이 턴의 LLM 토큰 사용량 (input, cached, output, reasoning, calls)")
     message_id: int | None = Field(None, description="저장된 답변 메시지 id (선제 턴 결과를 trip 이 이벤트에 기록)")
     mode: Literal["plan", "guide"] | None = Field(None, description="plan: 계획 모드 / guide: 동행 모드 (여행 중)")
+    trigger: Trigger | None = Field(None, description="선제 턴이면 그 계기 (MessageView.trigger 와 같은 값), 아니면 null")
 
 
 class GuidePrepareRequest(Strict):

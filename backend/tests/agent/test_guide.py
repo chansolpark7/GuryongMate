@@ -106,6 +106,8 @@ def test_event_turn_creates_proposal(client, trip_plan, up):  # noqa: F811
     [card] = res["cards"]
     assert card["type"] == "proposal" and card["proposal"]["origin"] == sid and card["proposal"]["status"] == "pending"
     assert isinstance(res["message_id"], int)
+    assert res["trigger"] == {"kind": "event", "type": "delay", "event_id": 41, "reason": None,
+                              "at": "2026-10-10T14:20:00+09:00"}
     assert up.trip_calls == calls_before  # 본문의 TripState 를 쓰고 다시 조회하지 않는다
 
     opening = th.llm.calls[n][-1]
@@ -125,11 +127,53 @@ def test_event_turn_creates_proposal(client, trip_plan, up):  # noqa: F811
     assert [m["role"] for m in msgs] == ["user", "assistant", "assistant"]
     assert not any("[이벤트]" in m["content"] for m in msgs)
     assert msgs[-1]["id"] == res["message_id"] and msgs[-1]["cards"][0]["proposal"]["id"] == card["proposal"]["id"]
+    assert [m["trigger"] for m in msgs] == [None, None, res["trigger"]]  # 선제 턴 답에만 계기
 
     # 다음 턴의 LLM 은 이벤트와 답변을 기록으로 안다
     up.trip = trip_state(pid, items)
     chat(client, sid, "고마워", [["네!"]])
     assert any(m["role"] == "user" and m["content"].startswith("[이벤트]") for m in th.llm.calls[-1])
+
+
+def test_event_trigger_survives_mixed_turns(client, trip_plan, up):  # noqa: F811
+    """선제 턴 답(도구 호출 전·후 여러 행이 한 말풍선으로 합쳐져도)에만 trigger. 일반 대화·장소 질문(place_id)은 null."""
+    sid, pid, items = trip_plan
+    up.trip = trip_state(pid, items)
+    assert last(chat(client, sid, "여기 어때?", [["좋은 곳이에요."]]), "done")["trigger"] is None
+    ask_place = {"message": "여기 왜 유명해?", "place_id": "p-house"}
+    th.llm.script = [["백 년 된 거리예요."]]
+    th.sse(client.post(f"/agent/sessions/{sid}/chat", json=ask_place, headers=H))
+
+    behind = {**delay_event(pid, items), "id": 77, "now": "2026-10-10T14:50:00+09:00",
+              "payload": {"reason": "behind_schedule", "delay_minutes": 40}}
+    th.llm.script = [["먼저 확인해 볼게요.", ("check_safety", {})], ["40분 늦어지고 있어요."]]
+    res = ok(client.post(f"/agent/sessions/{sid}/events", json={"event": behind, "trip": trip_state(pid, items)},
+                         headers=H))
+    assert res["trigger"] == {"kind": "event", "type": "delay", "event_id": 77, "reason": "behind_schedule",
+                              "at": "2026-10-10T14:50:00+09:00"}
+    safety = {"id": 78, "type": "safety_raised", "message": "방파제 풍랑 주의", "created_at": "2026-10-10T15:00:00+09:00",
+              "payload": {"reason": {"not": "a string"}}}
+    th.llm.script = [["방파제에 풍랑 주의보가 났어요."]]
+    res2 = ok(client.post(f"/agent/sessions/{sid}/events", json={"event": safety, "trip": trip_state(pid, items)},
+                          headers=H))
+    assert res2["trigger"] == {"kind": "event", "type": "safety_raised", "event_id": 78, "reason": None,
+                               "at": "2026-10-10T15:00:00+09:00"}  # now 가 없으면 created_at
+    th.llm.script = [["네."]]
+    th.sse(client.post(f"/agent/sessions/{sid}/chat", json=ask_place, headers=H))
+
+    msgs = ok(client.get(f"/agent/sessions/{sid}", headers=H))["messages"]
+    assert [(m["role"], m["place_id"], (m["trigger"] or {}).get("event_id")) for m in msgs] == [
+        ("user", None, None), ("assistant", None, None),
+        ("user", "p-house", None), ("assistant", "p-house", None),
+        ("assistant", None, 77), ("assistant", None, 78),
+        ("user", "p-house", None), ("assistant", "p-house", None)]
+    assert msgs[4]["content"] == "먼저 확인해 볼게요.\n\n40분 늦어지고 있어요."  # 도구 호출 전·후 답이 한 말풍선
+    assert msgs[4]["trigger"] == res["trigger"] and msgs[5]["trigger"] == res2["trigger"]
+
+    # 같은 이벤트를 다시 보내면 이전 결과 그대로 (trigger 포함)
+    again = ok(client.post(f"/agent/sessions/{sid}/events", json={"event": behind, "trip": trip_state(pid, items)},
+                           headers=H))
+    assert again["trigger"] == res["trigger"]
 
 
 def test_event_busy_409(client, trip_plan, up):  # noqa: F811

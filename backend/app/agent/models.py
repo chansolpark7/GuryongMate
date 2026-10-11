@@ -37,6 +37,9 @@ class AgentMessage(Base):
     cards: Mapped[list[dict] | None] = mapped_column(JSONB, nullable=True)
     # 장소 맥락이 있는 턴 (앱 가이드 노트 화면의 질문, ChatRequest.place_id): 그 턴의 사용자 메시지와 답 모두에 남긴다
     place_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # 선제 턴(POST /sessions/{id}/events)의 답: 이 말을 먼저 걸게 한 이벤트 {"kind": "event", "type", "event_id", "reason", "at"}.
+    # 그 턴의 assistant 행에만 남긴다 (숨김 '[이벤트]' 행·일반 대화는 null)
+    trigger: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -66,6 +69,7 @@ class AgentUsage(Base):
 # 이미 만들어진 테이블에 새 컬럼 추가 (planner/models.py 와 같은 방식, Alembic 미사용). create_all 직후 매번, 있으면 건너뛴다
 _UPGRADES = [
     "ALTER TABLE agent_message ADD COLUMN IF NOT EXISTS place_id VARCHAR(64)",
+    "ALTER TABLE agent_message ADD COLUMN IF NOT EXISTS trigger JSONB",
 ]
 for _sql in _UPGRADES:
     event.listen(Base.metadata, "after_create", DDL(_sql).execute_if(dialect="postgresql"))
