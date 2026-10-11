@@ -296,7 +296,7 @@ def compact_outlook(o: dict) -> dict:
     if o["hazards"]:
         out["signals"] = [f"[{'참고' if h['level'] == 'info' else LEVEL[h['level']]}] {h['reason']}" for h in o["hazards"][:6]]
     if o["safe_windows"]:
-        kinds = {"breakwater": "방파제", "flood": "해안 저지대", "outdoor": "야외"}
+        kinds = {"breakwater": "방파제", "flood": "해안 저지대", "coast": "해안", "outdoor": "야외"}
         out["ok_windows"] = [f"{kinds[w['place_kind']]} {w['start'][11:16]}~{w['end'][11:16]}" for w in o["safe_windows"]]
     if o["warnings"]:
         out["warnings"] = o["warnings"]

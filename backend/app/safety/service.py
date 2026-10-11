@@ -250,7 +250,8 @@ class SafetyService:
                                                      max(start, now), now, warns.fetched_at) + hazards
 
         safe: list[SafeWindow] = []
-        for kind, sens in (("breakwater", {"breakwater"}), ("flood", {"flood"}), ("outdoor", set())):
+        for kind, sens in (("breakwater", {"breakwater"}), ("flood", {"flood"}), ("coast", {"coast"}),
+                           ("outdoor", set())):
             levels = {h.time: risk.worst([risk.hour_level(h, sens), *(
                 w.level for w in risk.timed_warning_hazards(self._active(active, max(h.time, now)), sens,
                                                             max(h.time, now), now))]) for h in hours}
@@ -312,7 +313,7 @@ class SafetyService:
 
         prepared = []
         for v in req.visits:
-            lat, lng, label, notes, indoor = v.lat, v.lng, v.label, [], v.indoor
+            lat, lng, label, notes, indoor, cats = v.lat, v.lng, v.label, [], v.indoor, v.categories
             if v.path is not None:  # 이동 경로: 장소를 찾지 않는다. 차 안은 실내처럼 (비·바람은 참고까지)
                 lat, lng = v.path[0]
                 indoor = v.mode == "car"
@@ -329,13 +330,15 @@ class SafetyService:
                     label = label or p.title
                     if indoor is None and p.content_type:
                         indoor = p.content_type in risk.INDOOR_TYPES
+                    if cats is None:
+                        cats = list(p.category_names)
                 elif lat is None or lng is None:
                     notes.append("장소 좌표를 알 수 없어 지역 공통 정보로만 판단했다."
                                  if p is None and place_error is None else
                                  "장소 정보를 받지 못해 방파제·침수 구역인지 알 수 없다.")
             start = datetime.combine(v.date, v.start, KST)
             end = datetime.combine(v.date, v.end, KST) if v.end else start + timedelta(minutes=60)
-            prepared.append((v, lat, lng, label, notes, indoor, start, end,
+            prepared.append((v, lat, lng, label, notes, indoor, cats, start, end,
                              risk.classify(start, end, now, last, fc.ok)))
         if any(v.place_id and v.path is None for v, *_ in prepared):
             data["places"] = SourceStatus(ok=place_error is None, error=place_error)
@@ -352,28 +355,33 @@ class SafetyService:
         tides: dict[date, Fetched] = {}
 
         results = []
-        for v, lat, lng, label, notes, indoor, start, end, t in prepared:
+        for v, lat, lng, label, notes, indoor, cats, start, end, t in prepared:
             pts = geo.densify(v.path) if v.path is not None else None
             if pts is not None:
                 sens = risk.path_sensitivity(pts)
+                coast = risk.coast_label("바닷가 길")
                 if v.mode == "car":
-                    sens &= {"flood"}  # 차는 방파제에 들어가지 않는다. 침수 구역(잠긴 길)은 그대로
+                    sens &= {"flood"}  # 차는 방파제·해안 길에 내리지 않는다. 침수 구역(잠긴 길)은 그대로
             else:
-                sens = risk.sensitivity(lat, lng)
+                # 해안: 분류·이름 먼저, 모르면 좌표(해안선 30m). 실내면 바닷가여도 실내 규칙 (settle)
+                kind = risk.coast_kind(cats, label)
+                sens = risk.sensitivity(lat, lng) | ({"coast"} if kind else set())
+                sens = risk.settle(sens, bool(indoor))
+                coast = risk.coast_label(kind)
             hazards: list[Hazard] = []
             sensor_hz: list[Hazard] = []
             # 장소 조회 장애로 좌표를 모르면 방파제·침수 구역 여부를 판단할 수 없다 -> 낮게 판단하지 않고 판단 보류
             missing = lat is None and v.place_id is not None and place_error is not None
             if t.horizon in ("now", "short_range"):
                 if t.forecast_available:
-                    hazards += risk.forecast_hazards(self._hours(fc, max(start, now), end), sens, bool(indoor))
+                    hazards += risk.forecast_hazards(self._hours(fc, max(start, now), end), sens, bool(indoor), coast)
                 else:
                     missing = True
                 obs = self._obs(start)  # 지금 관측값이 끝난 뒤 방문은 예보로만 판단
                 if start - now <= risk.WARNING_WINDOW and obs:
                     if warns is not None and warns.ok:
                         hazards += risk.timed_warning_hazards(active, sens, max(start, now), now, warns.fetched_at,
-                                                              bool(indoor))
+                                                              bool(indoor), coast)
                     else:
                         missing = True
                 if lat is not None and sensors is not None and obs:
@@ -424,7 +432,7 @@ class SafetyService:
                 place_id=v.place_id, label=label, start=start, end=end, indoor=None if v.path is not None else indoor,
                 horizon=t.horizon, forecast_available=t.forecast_available, confidence=t.confidence, risk=level,
                 unassessed_reason=unassessed, data_missing=missing, hazards=hazards,
-                sensitivity=[risk.SENS_LABEL[s] for s in sorted(sens)] + (["실내"] if indoor and v.path is None else []),
+                sensitivity=risk.sens_labels(sens) + (["실내"] if indoor and v.path is None else []),
                 notes=notes,
                 advice=risk.visit_advice(t, level, sens, now, start, hazards, missing, bool(indoor), better, searched,
                                          travel=v.mode),
@@ -454,7 +462,7 @@ class SafetyService:
         fc, last = self._forecast(now)
         warns = self.src.warnings()
         active = warns.value.active if warns.ok and warns.value else []
-        kinds = {"breakwater": ({"breakwater"}, False), "flood": ({"flood"}, False),
+        kinds = {"breakwater": ({"breakwater"}, False), "flood": ({"flood"}, False), "coast": ({"coast"}, False),
                  "outdoor": (set(), False), "indoor": (set(), True)}
         hours: list[SituationHour] = []
         if fc.ok and fc.value:

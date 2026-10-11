@@ -3,9 +3,12 @@
 - 방파제: AI CCTV·스피커 좌표를 이은 선 + 버퍼. 위험구역 폴리곤은 E-UM 이 제공하지 않아 우리가 정의했다.
 - 침수 감시 구역: 수위 센서(맨홀·지표면·하천) 주변 반경. 실시간 센서 응답이 오면 그 좌표를 쓰고,
   여기 값은 예보만 보는 경우(먼 날짜)와 센서 API 장애 때 쓴다.
+- 해안: OSM 해안선(coastline.json) 30m 안 (아래 COAST_RADIUS_M). 장소 분류로 해안을 모를 때의 보조 판단.
 """
+import json
 import math
 from dataclasses import dataclass
+from pathlib import Path
 
 
 @dataclass(frozen=True)
@@ -49,6 +52,48 @@ def flood_zone(sensor_id: int, name: str, lat: float, lng: float) -> Zone:
 
 
 STATIC_FLOOD_ZONES = tuple(flood_zone(i, n, la, lo) for i, t, n, la, lo in WATER_SENSORS if t in FLOOD_SENSOR_TYPES)
+
+# 해안: 바닷물과 맞닿은 선(OSM natural=coastline, 구룡포읍 구간을 5m 로 단순화한 coastline.json) COAST_RADIUS_M 안.
+# 구룡포항 안쪽은 해안선이 부두(안벽)를 따라가므로 항구 앞길(호미로 부두 쪽)까지 들어오고, 한 블록 안쪽 골목
+# (가옥거리·구룡포길, 해안선에서 약 100m)은 들어오지 않는다. 장소 분류(항구·해수욕장 등)로 모르는 곳의 보조 판단이다.
+COAST_RADIUS_M = 30
+_COAST_CELL = 0.002  # 격자 색인 칸 (위경도, 약 200m)
+
+
+def _load_coast() -> tuple[tuple[tuple[float, float], ...], ...]:
+    data = json.loads((Path(__file__).with_name("coastline.json")).read_text(encoding="utf-8"))
+    return tuple(tuple((a, b) for a, b in line) for line in data["lines"])
+
+
+COASTLINE = _load_coast()
+
+
+def _coast_index() -> dict[tuple[int, int], list[tuple[tuple[float, float], tuple[float, float]]]]:
+    """해안선 선분을 격자 칸에 나눠 둔다 (경로 점마다 해안선 전체와 거리를 재지 않게)."""
+    pad = COAST_RADIUS_M / 111_320 * 2  # 반경의 2배 (경도 1도가 위도 1도보다 짧아도 넉넉하게)
+    idx: dict = {}
+    for line in COASTLINE:
+        for a, b in zip(line, line[1:]):
+            lat0, lat1 = min(a[0], b[0]) - pad, max(a[0], b[0]) + pad
+            lng0, lng1 = min(a[1], b[1]) - pad, max(a[1], b[1]) + pad
+            for i in range(math.floor(lat0 / _COAST_CELL), math.floor(lat1 / _COAST_CELL) + 1):
+                for j in range(math.floor(lng0 / _COAST_CELL), math.floor(lng1 / _COAST_CELL) + 1):
+                    idx.setdefault((i, j), []).append((a, b))
+    return idx
+
+
+_COAST_INDEX = _coast_index()
+
+
+def coast_distance_m(p: tuple[float, float]) -> float | None:
+    """해안선까지 거리(m). 가까운 해안선이 없으면(격자 칸에 선분 없음 = 수십 m 넘게 떨어짐) None."""
+    segs = _COAST_INDEX.get((math.floor(p[0] / _COAST_CELL), math.floor(p[1] / _COAST_CELL)))
+    return min(_to_segment(p, a, b) for a, b in segs) if segs else None
+
+
+def near_coast(p: tuple[float, float]) -> bool:
+    d = coast_distance_m(p)
+    return d is not None and d <= COAST_RADIUS_M
 
 
 def distance_m(a: tuple[float, float], b: tuple[float, float]) -> float:

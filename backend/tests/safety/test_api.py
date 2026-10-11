@@ -244,7 +244,8 @@ def test_outlook_safe_windows(use):
     assert by["outdoor"][-1][1] == "18:00"
     calm = ok(use(CountingMock()).get("/safety/outlook", params={"date": "2026-10-05", "now": NOW.isoformat()}))
     assert {(w["place_kind"], w["start"][11:16], w["end"][11:16]) for w in calm["safe_windows"]} == {
-        ("breakwater", "09:00", "18:00"), ("flood", "09:00", "18:00"), ("outdoor", "09:00", "18:00")}
+        ("breakwater", "09:00", "18:00"), ("flood", "09:00", "18:00"), ("coast", "09:00", "18:00"),
+        ("outdoor", "09:00", "18:00")}
     far = ok(use(CountingMock()).get("/safety/outlook", params={"date": "2027-08-01", "now": NOW.isoformat()}))
     assert far["safe_windows"] == []  # 예보가 없으면 '괜찮은 시간'도 말하지 않는다
 

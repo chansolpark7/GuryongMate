@@ -116,7 +116,8 @@
 
 // ItemView
 {"id": 12, "day": 1, "order": 2, "place_id": "kto-2660046",
- "place": {"id": "kto-2660046", "title": "구룡포과메기문화관", "content_type": "문화시설", "lat": 35.99, "lng": 129.55,
+ "place": {"id": "kto-2660046", "title": "구룡포과메기문화관", "content_type": "문화시설",
+           "category_names": ["문화관광", "전시시설", "전시관"], "lat": 35.99, "lng": 129.55,
            "addr": "...", "open_hours": "09:00~18:00", "rest_date": "매주 월요일"},   // 못 불러오면 null
  "stay_minutes": 60, "start_time": null, "memo": "", "status": "planned",
  "travel_mode": null,                          // 이 항목에 정한 '여기까지 오는 수단'. null = 계획 기본
@@ -386,10 +387,13 @@ planner ── GET /safety/situation (fingerprint) ──▶ safety      바뀌�
         ◀─ 항목별 위험 단계·근거·행동 지침 ─────────
 ```
 
+**방문**: 장소 좌표·`content_type`(실내 추정)·`category_names`(→ `categories`, 항구·해수욕장 같은 해안 판단)를 함께 보내
+safety 가 places 를 다시 묻지 않게 한다 ([`docs/safety/README.md` §3](../safety/README.md)).
+
 **이동 구간**: 직전 장소에서 다음 장소로 가는 길을 routing 의 실제 경로선(`POST /routing/route`)으로 받아,
 그 구간 시간(출발 = 도착 − 이동시간 ~ 도착) 동안 그 길을 지나는 것으로 safety 에 묻는다 (`/safety/assess` 의 `path`).
-- 도보: 야외 기준. 경로가 지나는 방파제·침수 감시 구역을 그대로 적용한다.
-- 차량: 차 안이라 비·바람·특보는 참고(`info`)까지. 침수 감시 구역(잠긴 길)은 그대로, 방파제는 차가 들어가지 않으므로 보지 않는다.
+- 도보: 야외 기준. 경로가 지나는 방파제·침수 감시 구역·해안(해안선 30m)을 그대로 적용한다.
+- 차량: 차 안이라 비·바람·특보는 참고(`info`)까지. 침수 감시 구역(잠긴 길)은 그대로, 방파제·해안은 차에서 내리지 않으므로 보지 않는다.
 - 경로선을 못 받으면(routing 장애) 두 장소를 잇는 직선으로 대신한다.
 - 경로선은 **오늘~4일 뒤 이동만** 받는다 (그 뒤는 예보가 없어 판단하지 않으므로 직선으로 충분). 하루 캐시하고,
   엔진이 길을 못 찾은 구간도 캐시한다. 연결 장애·5xx 면 20초 동안 묻지 않고, 한 구간의 4xx 는 그 구간만 직선으로 대신한다.

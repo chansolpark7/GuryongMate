@@ -37,19 +37,38 @@ RECHECK_LEAD_DAYS = 3  # 여행일 며칠 전부터 단기예보로 판단 가�
 
 # (기준값, 등급). 위에서부터 처음 넘는 값
 RAIN_MM = [(30, "danger"), (10, "caution"), (3, "info")]  # 시간당 강수량. 30mm/h 는 기상청 '매우 강한 비'
-WIND_MS = [(14, "danger"), (9, "caution")]  # 방파제 기준. 14m/s 는 육상 강풍주의보 기준
-WAVE_M = [(3.0, "danger"), (1.5, "caution")]  # 방파제 기준. 3m 는 풍랑주의보 기준
+WIND_MS = [(14, "danger"), (9, "caution")]  # 방파제·해안 기준. 14m/s 는 육상 강풍주의보 기준
+WAVE_M = [(3.0, "danger"), (1.5, "caution")]  # 방파제·해안 기준. 3m 는 풍랑주의보 기준
+
+# 해안: 바다와 맞닿은 야외 (항구·포구, 해수욕장·해변, 해안 산책로, 등대 …). 파도가 넘치고 물보라가 치는 곳이라
+# 바람·파고를 방파제와 같은 기준으로 본다 (그 밖의 야외처럼 낮추지 않는다). 비는 그 밖의 야외와 같다.
+# 판단 순서: places 분류(category_names, 한국관광공사 분류의 마지막 단계) -> 장소 이름 -> 좌표(해안선 30m, geo.near_coast)
+COAST_CATEGORIES = {
+    "항구/포구": "항구", "해변. 해수욕장": "해수욕장", "해안절경": "해안절경", "등대": "등대",
+    "방파제": "방파제",  # 구룡포 북·남방파제 밖의 방파제 (두 방파제는 좌표로 방파제 구역이 된다)
+    "바다낚시": "바다낚시", "윈드서핑/제트스키": "해상 레저",
+}
+# 분류로 모를 때 이름으로 본다. '항' 으로 끝나는 이름은 쓰지 않는다 ('포항' 이 들어간 이름이 많다)
+COAST_TITLE_WORDS = {"해수욕장": "해수욕장", "해변": "해변", "포구": "포구", "등대": "등대", "방파제": "방파제",
+                     "해안": "해안 산책로", "낚시공원": "바다낚시공원"}
 
 ASSUMPTIONS = [
     "E-UM 수위 등급: 1 평상시, 2 주의, 3 이상 위험으로 해석 (E-UM 이 기준을 공개하지 않음)",
     "방파제: 풍속 9m/s·파고 1.5m 이상 주의, 14m/s·3m 이상 위험 (특보 기준을 참고해 정한 값)",
+    "해안(항구·해수욕장·해안 산책로·등대 등 바다와 맞닿은 야외, 또는 해안선 30m 안): 풍속·파고를 방파제와 같은 기준으로 본다",
     "침수 감시 구역: 수위 센서 반경 200m",
     "강수: 시간당 3mm 참고, 10mm 주의, 30mm 위험",
 ]
 
 SKY = {1: "맑음", 3: "구름많음", 4: "흐림"}
 PTY = {0: "없음", 1: "비", 2: "비/눈", 3: "눈", 4: "소나기", 5: "빗방울", 6: "빗방울눈날림", 7: "눈날림"}
-SENS_LABEL = {"breakwater": "방파제", "flood": "침수 감시 구역"}
+SENS_LABEL = {"breakwater": "방파제", "flood": "침수 감시 구역", "coast": "해안"}
+COAST = "해안"  # 근거 문구 앞에 붙이는 성질 이름 (예: '해안(항구) — 풍속 16m/s 예보')
+
+
+def sens_labels(sens: set[str]) -> list[str]:
+    """성질 이름을 우선순위 순서로 (방파제, 침수 감시 구역, 해안)."""
+    return [label for s, label in SENS_LABEL.items() if s in sens]
 
 
 def worst(levels) -> str:
@@ -118,12 +137,13 @@ def path_sensitivity(points: list[tuple[float, float]], flood_zones=geo.STATIC_F
     out: set[str] = set()
     for p in points:
         out |= sensitivity(*p, flood_zones=flood_zones)
-        if out == {"breakwater", "flood"}:
+        if {"breakwater", "flood"} <= out:  # 방파제가 있으면 해안은 보지 않는다 (settle)
             break
-    return out
+    return settle(out)
 
 
 def sensitivity(lat: float | None, lng: float | None, flood_zones=geo.STATIC_FLOOD_ZONES) -> set[str]:
+    """좌표로 본 장소 성질. 해안은 해안선 30m 안 (분류·이름으로 본 해안은 coast_kind)."""
     if lat is None or lng is None:
         return set()
     p = (lat, lng)
@@ -132,7 +152,35 @@ def sensitivity(lat: float | None, lng: float | None, flood_zones=geo.STATIC_FLO
         out.add("breakwater")
     if geo.zones_at(p, flood_zones):
         out.add("flood")
-    return out
+    if geo.near_coast(p):
+        out.add("coast")
+    return settle(out)
+
+
+def settle(sens: set[str], indoor: bool = False) -> set[str]:
+    """성질 우선순위 정리: 방파제 > 침수 감시 구역 > 해안 > 그 밖의 야외.
+    - 방파제면 해안은 뺀다 (방파제 기준이 바람·파고·특보 모두 같거나 더 엄격하다)
+    - 실내면 해안은 뺀다 (바다가 보이는 카페도 실내 규칙). 침수 감시 구역은 실내여도 그대로 (앞길이 잠길 수 있음)
+    - 침수 감시 구역이면서 해안이면 둘 다 남겨 근거를 합친다 (가장 높은 단계)"""
+    if "breakwater" in sens or indoor:
+        return sens - {"coast"}
+    return sens
+
+
+def coast_kind(categories: list[str] | None, title: str | None) -> str | None:
+    """장소 분류·이름으로 본 해안 종류 (항구·해수욕장 …). 해안이 아니거나 모르면 None."""
+    for c in reversed(categories or []):  # 마지막(가장 세부) 분류부터
+        if c in COAST_CATEGORIES:
+            return COAST_CATEGORIES[c]
+    for word, kind in COAST_TITLE_WORDS.items():
+        if word in (title or ""):
+            return kind
+    return None
+
+
+def coast_label(kind: str | None) -> str:
+    """근거 문구 앞에 붙일 성질 이름. 종류를 모르면(좌표로 본 해안) '해안(바닷가)'."""
+    return f"{COAST}({kind or '바닷가'})"
 
 
 # ---------- 예보 ----------
@@ -145,6 +193,7 @@ def _hour_signals(h: ForecastHour, sens: set[str], indoor: bool = False) -> list
     """한 시간 예보 -> (type, level, 값, 항목명, 단위, 실내라 낮췄는지). 장소 성질에 따라 등급을 조정한다.
 
     - 방파제: 바람·파고·비 그대로 / 침수 감시 구역: 비 그대로 (실내여도 앞길이 잠기면 위험)
+    - 해안: 바람·파고 그대로, 비는 그 밖과 같게
     - 그 밖: 비·바람 한 단계 낮게 (비는 낮춰도 '참고'로 남긴다), 파고 무시
     - 그 밖의 실내: 비·바람은 '참고'까지만 (이동할 때만 영향)
     """
@@ -162,14 +211,14 @@ def _hour_signals(h: ForecastHour, sens: set[str], indoor: bool = False) -> list
                         "강수", "mm/h", capped))
     wind = grade(h.wsd, WIND_MS)
     if wind != "none":
-        hot = "breakwater" in sens
+        hot = bool(sens & {"breakwater", "coast"})
         lv = wind if hot else down(wind)
         capped = indoor and not hot and lv != _cap_info(lv)
         lv = _cap_info(lv) if indoor and not hot else lv
         if lv != "none":
             out.append(("wind", lv, h.wsd or 0.0, "풍속", "m/s", capped))
     wave = grade(h.wav, WAVE_M)
-    if wave != "none" and "breakwater" in sens:
+    if wave != "none" and sens & {"breakwater", "coast"}:
         out.append(("wave", wave, h.wav or 0.0, "파고", "m", False))
     return out
 
@@ -178,8 +227,11 @@ def hour_level(h: ForecastHour, sens: set[str], indoor: bool = False) -> str:
     return worst(s[1] for s in _hour_signals(h, sens, indoor))
 
 
-def forecast_hazards(hours: list[ForecastHour], sens: set[str], indoor: bool = False) -> list[Hazard]:
-    """시간별 예보를 같은 종류·등급끼리 묶어 '14~19시 풍속 최대 16m/s' 형태로 만든다."""
+def forecast_hazards(hours: list[ForecastHour], sens: set[str], indoor: bool = False,
+                     coast: str | None = None) -> list[Hazard]:
+    """시간별 예보를 같은 종류·등급끼리 묶어 '14~19시 풍속 최대 16m/s' 형태로 만든다.
+    해안이라 그대로 적용한 바람·파고는 사유 앞에 성질을 붙인다 ('해안(항구) — …', coast: coast_label 값)."""
+    by_coast = "coast" in sens and "breakwater" not in sens
     groups: dict[tuple, list[tuple[datetime, float]]] = {}
     for h in sorted(hours, key=lambda x: x.time):
         for typ, lv, val, label, unit, capped in _hour_signals(h, sens, indoor):
@@ -190,6 +242,8 @@ def forecast_hazards(hours: list[ForecastHour], sens: set[str], indoor: bool = F
         peak = max(v for _, v in pts)
         span = f"{first:%m/%d %H}시" if first == last else f"{first:%m/%d %H}~{(last + timedelta(hours=1)):%H}시"
         reason = f"{span} {label} {'최대 ' if len(pts) > 1 else ''}{peak:g}{unit} 예보"
+        if by_coast and typ in ("wind", "wave"):
+            reason = f"{coast or COAST} — {reason}"
         if capped:
             reason += f" ({INDOOR_NOTE})"
         out.append(Hazard(type=typ, level=lv, reason=reason, source="기상청 단기예보", at=first))
@@ -198,49 +252,53 @@ def forecast_hazards(hours: list[ForecastHour], sens: set[str], indoor: bool = F
 
 # ---------- 특보 ----------
 
-# 특보 종류 -> (방파제, 침수 감시 구역, 그 밖) 의 (주의보 등급, 경보 등급)
+# 특보 종류 -> (방파제, 침수 감시 구역, 해안, 그 밖) 의 (주의보 등급, 경보 등급)
+# 해안: 강풍·풍랑 주의보 주의 / 경보 위험. 태풍·해일은 바닷가에 바로 닿으므로 방파제와 같게. 호우·대설은 그 밖과 같게
 WARNING_IMPACT = {
-    "호우": (("caution", "danger"), ("caution", "danger"), ("info", "caution")),
-    "강풍": (("danger", "danger"), ("info", "caution"), ("info", "caution")),
-    "풍랑": (("danger", "danger"), ("none", "none"), ("none", "none")),
-    "태풍": (("danger", "danger"), ("danger", "danger"), ("caution", "danger")),
-    "폭풍해일": (("danger", "danger"), ("danger", "danger"), ("caution", "caution")),
-    "해일": (("danger", "danger"), ("danger", "danger"), ("caution", "caution")),
-    "대설": (("info", "caution"), ("info", "caution"), ("info", "caution")),
+    "호우": (("caution", "danger"), ("caution", "danger"), ("info", "caution"), ("info", "caution")),
+    "강풍": (("danger", "danger"), ("info", "caution"), ("caution", "danger"), ("info", "caution")),
+    "풍랑": (("danger", "danger"), ("none", "none"), ("caution", "danger"), ("none", "none")),
+    "태풍": (("danger", "danger"), ("danger", "danger"), ("danger", "danger"), ("caution", "danger")),
+    "폭풍해일": (("danger", "danger"), ("danger", "danger"), ("danger", "danger"), ("caution", "caution")),
+    "해일": (("danger", "danger"), ("danger", "danger"), ("danger", "danger"), ("caution", "caution")),
+    "대설": (("info", "caution"), ("info", "caution"), ("info", "caution"), ("info", "caution")),
 }
 
 
 def warning_hazards(active: list[ActiveWarning], sens: set[str], at: datetime | None = None,
-                    indoor: bool = False) -> list[Hazard]:
-    """지금 발효 중인 특보의 영향. 실내(방파제·침수 구역 아님)는 '그 밖' 영향을 참고까지만 본다."""
+                    indoor: bool = False, coast: str | None = None) -> list[Hazard]:
+    """지금 발효 중인 특보의 영향. 실내(방파제·침수 구역 아님)는 '그 밖' 영향을 참고까지만 본다.
+    해안 기준이 단계를 올렸으면 사유 앞에 성질을 붙인다 (coast: coast_label 값)."""
     out = []
     for w in active:
         impact = WARNING_IMPACT.get(w.kind)
         idx = 1 if w.grade == "경보" else 0
-        note = ""
+        note = prefix = ""
         if impact is None:  # 건조·폭염·한파·황사 등: 참고로만
             lv = "info"
         else:
-            other = impact[2][idx]
+            other = impact[3][idx]
             if indoor and other != _cap_info(other):
                 other, note = _cap_info(other), f", {INDOOR_NOTE}"
             levels = [impact[0][idx] if "breakwater" in sens else "none",
                       impact[1][idx] if "flood" in sens else "none", other]
             lv = worst(levels)
+            if "coast" in sens and ORDER.index(impact[2][idx]) > ORDER.index(lv):
+                lv, prefix = impact[2][idx], f"{coast or COAST} — "
         if lv != "none":
-            out.append(Hazard(type="warning", level=lv, reason=f"{w.name} 발효 중 ({w.areas[:40]}{note})",
+            out.append(Hazard(type="warning", level=lv, reason=f"{prefix}{w.name} 발효 중 ({w.areas[:40]}{note})",
                               source="기상특보", at=at))
     return out
 
 
 def timed_warning_hazards(active: list[ActiveWarning], sens: set[str], start: datetime, now: datetime,
-                          at: datetime | None = None, indoor: bool = False) -> list[Hazard]:
+                          at: datetime | None = None, indoor: bool = False, coast: str | None = None) -> list[Hazard]:
     """특보를 방문 시각에 맞춰 적용한다. 특보는 '지금' 상태라
     - 6시간 안: 그대로 / 24시간 안: 참고(info)로만, 그 시각 위험은 예보로 판단 / 그 뒤: 쓰지 않는다."""
     lead = start - now
     if lead > WARNING_WINDOW:
         return []
-    hz = warning_hazards(active, sens, at, indoor)
+    hz = warning_hazards(active, sens, at, indoor, coast)
     if lead <= WARNING_FULL:
         return hz
     return [h.model_copy(update={"level": "info", "reason": h.reason.replace(
@@ -366,7 +424,7 @@ def visit_advice(t: Timing, risk: Level | None, sens: set[str], now: datetime, s
     travel: 이동 경로 평가면 수단 (walk | car). 문구를 '방문' 대신 '이동' 으로 바꾼다."""
     if travel and t.horizon not in ("past", "medium_range", "long_range") and risk is not None:
         return _travel_advice(t, risk, sens, hazards, travel, better)
-    sens_txt = ", ".join(SENS_LABEL[s] for s in sorted(sens))
+    sens_txt = ", ".join(sens_labels(sens))
     if t.horizon == "past":
         return "이미 지난 시간이라 평가하지 않았다."
     if t.horizon in ("medium_range", "long_range"):
@@ -408,7 +466,7 @@ def _travel_advice(t: Timing, risk: Level, sens: set[str], hazards: list[Hazard]
                    better: list[tuple[datetime, datetime, bool]] | None) -> str:
     top = "; ".join(h.reason for h in hazards[:3])
     hedge = " 예보는 바뀔 수 있으니 단정하지 마라." if t.horizon == "short_range" else ""
-    where = ", ".join(SENS_LABEL[s] for s in sorted(sens)) or "야외"
+    where = ", ".join(sens_labels(sens)) or "야외"
     how = "걸어서" if mode == "walk" else "차로"
     if risk in ("danger", "caution"):
         alt = f" 이 경로에 신호가 없는 시간대: {windows_text(better)}." if better else ""
