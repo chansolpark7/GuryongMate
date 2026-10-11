@@ -72,10 +72,13 @@ class MemoryList {
 
 /// 가이드 노트 목록 한 줄 (32). 장소 이름은 일정에서 찾는다.
 class GuideNoteSummary {
-  GuideNoteSummary({required this.placeId, required this.status});
+  GuideNoteSummary({required this.placeId, required this.status, this.updatedAt});
   final String placeId;
   final String status; // pending | preparing | ready | failed | stale
 
+  /// 노트가 바뀐 시각 (다시 준비되면 바뀐다 — 열린 17 이 새 노트를 다시 읽는 기준).
+  final String? updatedAt;
+
   factory GuideNoteSummary.fromJson(Map<String, dynamic> j) =>
-      GuideNoteSummary(placeId: j['place_id'] as String, status: j['status'] as String? ?? 'pending');
+      GuideNoteSummary(placeId: j['place_id'] as String, status: j['status'] as String? ?? 'pending', updatedAt: j['updated_at'] as String?);
 }

@@ -8,10 +8,11 @@ import 'package:provider/provider.dart';
 import '../../core/format.dart';
 import '../../core/models/plan.dart';
 import '../../core/models/safety.dart';
-import '../../core/models/trip.dart';
+import '../../core/models/account.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/common.dart';
 import '../../core/widgets/safety_widgets.dart';
+import '../guide/guide_prep_screen.dart';
 import '../map/map_layers.dart';
 import '../planner/plan_controller.dart';
 import '../safety/safety_detail_sheet.dart';
@@ -296,76 +297,95 @@ class _TodayScreenState extends State<TodayScreen> {
             ),
           ]),
         ),
-        DraggableScrollableSheet(
-          initialChildSize: 0.49,
-          minChildSize: 0.19,
-          maxChildSize: 0.86,
-          snap: true,
-          snapSizes: const [0.19, 0.49, 0.86],
-          builder: (context, scroll) => Container(
-            decoration: const BoxDecoration(
-              color: AppColors.surface,
-              borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-              boxShadow: [BoxShadow(color: Color(0x14111827), blurRadius: 16, offset: Offset(0, -2))],
-            ),
-            child: ListView(
-              controller: scroll,
-              padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
-              children: [
-                const Grabber(),
-                if (s == null && t.stateError != null)
-                  _StateError(onRetry: t.refreshState)
-                else if (s == null)
-                  const _PanelSkeleton()
-                else if (allDone)
-                  _AllDone(onFinish: widget.onEndTrip)
-                else if (beforeFirst)
-                  _BeforeFirst(
-                    first: next,
-                    now: t.serverNow(),
-                    walk: _firstWalk,
-                    onPreview: () => t.onOpenGuide?.call(next.placeId),
-                  )
-                else if (moving && next != null)
-                  _MovingSection(trip: t, from: t.item(s.currentItemId), next: next, onArrived: null)
-                else if (current != null)
-                  _NowSection(
-                    trip: t,
-                    item: current,
-                    safety: c.safety?.visit(current.id),
-                    stale: t.locationOff,
-                    onListen: () => t.onOpenGuide?.call(current.placeId),
-                    onBadge: () => showSafetyDetailSheet(context, c, current),
+        NotificationListener<DraggableScrollableNotification>(
+          // 패널을 펼치면 노트 목록을 가볍게 다시 읽는다 (10초 안에 읽었으면 건너뜀)
+          onNotification: (n) {
+            if (n.extent > 0.6) t.loadGuideNotes(minGap: const Duration(seconds: 10));
+            return false;
+          },
+          child: DraggableScrollableSheet(
+            initialChildSize: 0.49,
+            minChildSize: 0.19,
+            maxChildSize: 0.86,
+            snap: true,
+            snapSizes: const [0.19, 0.49, 0.86],
+            builder: (context, scroll) => Container(
+              decoration: const BoxDecoration(
+                color: AppColors.surface,
+                borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+                boxShadow: [BoxShadow(color: Color(0x14111827), blurRadius: 16, offset: Offset(0, -2))],
+              ),
+              child: ListView(
+                controller: scroll,
+                padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+                children: [
+                  const Grabber(),
+                  if (s == null && t.stateError != null)
+                    _StateError(onRetry: t.refreshState)
+                  else if (s == null)
+                    const _PanelSkeleton()
+                  else if (allDone)
+                    _AllDone(onFinish: widget.onEndTrip)
+                  else if (beforeFirst)
+                    _BeforeFirst(
+                      first: next,
+                      now: t.serverNow(),
+                      walk: _firstWalk,
+                      onPreview: () => t.onOpenGuide?.call(next.placeId),
+                    )
+                  else if (moving && next != null)
+                    _MovingSection(trip: t, from: t.item(s.currentItemId), next: next, onArrived: null)
+                  else if (current != null)
+                    _NowSection(
+                      trip: t,
+                      item: current,
+                      safety: c.safety?.visit(current.id),
+                      stale: t.locationOff,
+                      onListen: () => t.onOpenGuide?.call(current.placeId),
+                      onBadge: () => showSafetyDetailSheet(context, c, current),
+                    ),
+                  if (s != null && !allDone && !beforeFirst && !moving && next != null) ...[
+                    const Divider(height: 28, color: AppColors.line),
+                    _NextSection(trip: t, next: next, number: items.indexOf(next) + 1, guiding: target?.id == next.id, onGuide: () => _startGuide(t, next)),
+                  ],
+                  if (s != null && !allDone) ...[
+                    const Divider(height: 28, color: AppColors.line),
+                    // 여행 시작~첫 도착 전에도 목록을 보인다 (한 줄 요약은 머리에, redesign §2.3 — Figma 14-S2 와 다름)
+                    _RemainingSection(
+                      items: beforeFirst ? items : remaining.where((i) => i.id != next?.id || moving).toList(),
+                      total: beforeFirst,
+                      end: (t.today?.endAt ?? items.lastOrNull?.endAt),
+                      safety: c.safety,
+                      selected: popup?.id,
+                      onTap: _focus,
+                    ),
+                    // 가이드 노트 n/m 준비됨 → 32 (여행 중에도 다시 준비할 수 있게, 2026-10-11)
+                    if (t.guideNotes != null && items.isNotEmpty) ...[
+                      const SizedBox(height: 6),
+                      _GuideNotesLine(notes: t.guideNotes!, placeIds: {for (final i in items) i.placeId}.toList(), onTap: () => _openGuidePrep(t)),
+                    ],
+                  ],
+                  const SizedBox(height: 12),
+                  Center(
+                    child: TextButton(
+                      onPressed: t.busy ? null : widget.onEndTrip,
+                      child: Text('여행 종료', style: AppText.meta.copyWith(color: AppColors.text3, decoration: TextDecoration.underline)),
+                    ),
                   ),
-                if (s != null && !allDone && !beforeFirst && !moving && next != null) ...[
-                  const Divider(height: 28, color: AppColors.line),
-                  _NextSection(trip: t, next: next, number: items.indexOf(next) + 1, guiding: target?.id == next.id, onGuide: () => _startGuide(t, next)),
                 ],
-                if (s != null && !allDone) ...[
-                  const Divider(height: 28, color: AppColors.line),
-                  // 여행 시작~첫 도착 전에도 목록을 보인다 (한 줄 요약은 머리에, redesign §2.3 — Figma 14-S2 와 다름)
-                  _RemainingSection(
-                    items: beforeFirst ? items : remaining.where((i) => i.id != next?.id || moving).toList(),
-                    total: beforeFirst,
-                    end: (t.today?.endAt ?? items.lastOrNull?.endAt),
-                    safety: c.safety,
-                    selected: popup?.id,
-                    onTap: _focus,
-                  ),
-                ],
-                const SizedBox(height: 12),
-                Center(
-                  child: TextButton(
-                    onPressed: t.busy ? null : widget.onEndTrip,
-                    child: Text('여행 종료', style: AppText.meta.copyWith(color: AppColors.text3, decoration: TextDecoration.underline)),
-                  ),
-                ),
-              ],
+              ),
             ),
           ),
         ),
       ]),
     );
+  }
+
+  Future<void> _openGuidePrep(TripController t) async {
+    t.pushed(true);
+    await Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => GuidePrepScreen(plan: t.plan)));
+    t.pushed(false);
+    unawaited(t.loadGuideNotes());
   }
 
   Widget _buildMap(PlanController c, TripController t, List<PlanItem> items, List<PlanItem> done, PlanItem? current, PlanItem? target, PlanItem? popup) {
@@ -844,6 +864,52 @@ class _RemainingSection extends StatelessWidget {
             ),
           ),
       ]);
+}
+
+/// Today 남은 일정 아래 한 줄: "가이드 노트 n/m 준비됨 · k곳 다시 준비 필요 ›" / "가이드 노트 준비 중 n/m ›" → 32.
+/// stale 노트도 현장에서 그대로 쓰므로 준비됨에 센다 (docent §3.2).
+class _GuideNotesLine extends StatelessWidget {
+  const _GuideNotesLine({required this.notes, required this.placeIds, required this.onTap});
+  final Map<String, GuideNoteSummary> notes;
+  final List<String> placeIds;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final st = [for (final p in placeIds) notes[p]?.status];
+    final ready = st.where((s) => s == 'ready' || s == 'stale').length;
+    final stale = st.where((s) => s == 'stale').length;
+    final preparing = st.any((s) => s == 'pending' || s == 'preparing');
+    final m = placeIds.length;
+    final base = AppText.meta.copyWith(color: AppColors.text2, fontWeight: FontWeight.w500);
+    return Material(
+      color: Colors.transparent,
+      borderRadius: BorderRadius.circular(10),
+      child: InkWell(
+        key: const ValueKey('today-guide-line'),
+        borderRadius: BorderRadius.circular(10),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+          child: Row(children: [
+            Icon(preparing ? Icons.autorenew : Icons.description_outlined, size: 16, color: AppColors.ai),
+            const SizedBox(width: 6),
+            Expanded(
+              child: Text.rich(
+                TextSpan(children: [
+                  TextSpan(text: preparing ? '가이드 노트 준비 중 $ready/$m' : '가이드 노트 $ready/$m 준비됨'),
+                  if (stale > 0 && !preparing) TextSpan(text: ' · $stale곳 다시 준비 필요', style: base.copyWith(color: AppColors.warning, fontWeight: FontWeight.w700)),
+                ]),
+                style: base,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            const Icon(Icons.chevron_right, size: 18, color: AppColors.text3),
+          ]),
+        ),
+      ),
+    );
+  }
 }
 
 class _BeforeFirst extends StatelessWidget {

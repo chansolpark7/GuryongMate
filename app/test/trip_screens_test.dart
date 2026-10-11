@@ -181,12 +181,15 @@ void main() {
 
     await tester.scrollUntilVisible(find.text('출처'), 200, scrollable: find.byType(Scrollable).first);
     await settle(tester);
+    // 칩 → AI 시트로 넘기지 않고 17 안에서 바로 질문 (2026-10-11 — 예전에는 18 시트 헤더 "… · 현장 해설" 을 확인했다)
     await tester.tap(find.text('집들은 언제 지어졌어요?'));
     await settle(tester, 20);
     await until(tester, () => !chatOf(tester).busy);
     await settle(tester);
-    expect(find.text('구룡포 일본인 가옥거리 · 현장 해설'), findsOneWidget, reason: '18 헤더 컨텍스트');
+    expect(find.text('현장 가이드'), findsOneWidget, reason: '17 그대로');
+    expect(find.text('이 장소에서 나눈 이야기'), findsOneWidget);
     expect(find.textContaining('2단계 완료'), findsOneWidget);
+    expect((r.gw.sent('POST', '/agent/sessions/{sid}/chat').last.body as Map)['place_id'], 'kto-1909659');
 
     await say(tester, '다음부터는 더 짧게 해줘요');
     await until(tester, () => !chatOf(tester).busy);

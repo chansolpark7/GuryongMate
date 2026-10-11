@@ -8,9 +8,9 @@ import 'package:flutter/widgets.dart';
 import '../../core/api/api_client.dart';
 import '../../core/api/guryong_api.dart';
 import '../../core/app_session.dart';
+import '../../core/models/account.dart';
 import '../../core/models/plan.dart';
 import '../../core/models/safety.dart';
-import '../../core/models/trip.dart';
 import '../chat/chat_controller.dart';
 import '../planner/plan_controller.dart';
 import 'location.dart';
@@ -169,6 +169,34 @@ class TripController extends ChangeNotifier with WidgetsBindingObserver {
   bool _disposed = false;
   bool _polling = false;
 
+  /// 셸의 대화 (현장 가이드 17 이 같은 세션으로 묻는다).
+  ChatController? get chat => _chat;
+
+  // ---------- 가이드 노트 (Today 한 줄 · 열린 17 갱신) ----------
+
+  /// 장소 → 노트 요약 (`GET /docent/plans/{id}/notes`). null 이면 아직 읽지 않음.
+  Map<String, GuideNoteSummary>? guideNotes;
+  DateTime? _notesAt;
+  Future<void>? _notesLoading;
+
+  bool get guidePreparing => guideNotes?.values.any((n) => n.status == 'pending' || n.status == 'preparing') ?? false;
+
+  /// 노트 목록을 다시 읽는다 (가볍게: 동행 시작·도착 이벤트·패널을 펼칠 때·준비 중이면 폴링 때). [minGap] 안에 읽었으면 건너뛴다.
+  Future<void> loadGuideNotes({Duration minGap = Duration.zero}) {
+    final at = _notesAt;
+    if (at != null && clock.now().difference(at) < minGap) return Future.value();
+    return _notesLoading ??= _loadGuideNotes().whenComplete(() => _notesLoading = null);
+  }
+
+  Future<void> _loadGuideNotes() async {
+    try {
+      final list = await api.guideNotes(planId);
+      _notesAt = clock.now();
+      guideNotes = {for (final n in list) n.placeId: n};
+      _notify();
+    } catch (_) {}
+  }
+
   void attachChat(ChatController chat) {
     _chat?.removeListener(_onChat);
     _chat = chat..addListener(_onChat);
@@ -240,6 +268,7 @@ class TripController extends ChangeNotifier with WidgetsBindingObserver {
     WidgetsBinding.instance.addObserver(this);
     _scheduleState();
     unawaited(loadZones());
+    unawaited(loadGuideNotes());
     await poll(backlog: true);
     await _startLocation();
   }
@@ -434,6 +463,8 @@ class TripController extends ChangeNotifier with WidgetsBindingObserver {
       final list = await api.tripEvents(planId, after: after, limit: 50);
       if (offline) offline = false;
       ingest(list, backlog: backlog);
+      // 준비 중인 노트가 있으면 폴링 때 같이 (10초에 한 번) — Today 한 줄 · 열린 17 이 새 노트로
+      if (guidePreparing) unawaited(loadGuideNotes(minGap: const Duration(seconds: 10)));
     } on ApiException catch (e) {
       if (e.isNetwork) {
         offline = true;
@@ -491,6 +522,7 @@ class TripController extends ChangeNotifier with WidgetsBindingObserver {
         refreshState();
       case 'arrived':
         plan.load(silent: true).catchError((_) {});
+        if (!backlog) unawaited(loadGuideNotes()); // 도착하면 서버가 그 장소 노트를 자동 준비한다 (docent §3.2)
         final cur = state;
         final stillHere = cur != null && cur.visiting && cur.currentItemId == (e.card?.itemId ?? e.payload['item_id']);
         if ((!backlog || (stillHere && e.seenAt == null)) && e.card != null) _showArrival(e);

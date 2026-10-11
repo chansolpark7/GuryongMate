@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../core/models/plan.dart';
 import '../../core/models/trip.dart';
 import '../../core/theme/app_theme.dart';
+import '../../core/widgets/rich_answer.dart';
 import '../../core/widgets/common.dart';
 import 'trip_controller.dart';
 import 'trip_overlay.dart';
@@ -158,7 +159,7 @@ class _Row extends StatelessWidget {
           const SizedBox(width: 12),
           Expanded(
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text(e.message, style: AppText.label.copyWith(fontWeight: FontWeight.w700, color: AppColors.text), maxLines: 2, overflow: TextOverflow.ellipsis),
+              Text(plainSummary(e.message), style: AppText.label.copyWith(fontWeight: FontWeight.w700, color: AppColors.text), maxLines: 2, overflow: TextOverflow.ellipsis),
               Text([e.timeText, if (status.isNotEmpty) status].join(' · '), style: AppText.caption),
             ]),
           ),

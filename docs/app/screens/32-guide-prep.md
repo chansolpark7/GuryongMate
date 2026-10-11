@@ -17,3 +17,7 @@ Figma: 화면 `73:5746` · Spec `73:5880` · 흐름 F10
 - **데이터**: `GET /docent/plans/{plan_id}/notes` (일정에 있는 장소만 보여줌 — 빠진 장소 노트는 서버에 남지만 숨김). 진행: `POST /agent/plans/{plan_id}/guide/prepare` → 202 `{job_id}` → `GET /agent/plans/{plan_id}/guide/jobs/{job_id}` 3초. 진행률·남은 시간 필드는 미정([gaps](../gaps.md) b9) → 없으면 노트 목록을 3초마다 다시 읽어 ready 수로 바를 그리고 "약 n분"은 (남은 곳 × 20초)로 어림.
 - **버튼**: [가이드 준비](Purple, 준비 안 된 곳이 있을 때) / [준비 중…](비활성) / 모두 ready 면 [다시 준비](Secondary, stale 이 있을 때만).
 - **동작**: failed/stale 칩 → 같은 prepare · ready 행 → 17 미리보기.
+
+## 2026-10-11 변경
+- **진입 추가**: 14 Today 남은 일정 아래 "가이드 노트 n/m 준비됨 ›" 줄 (여행 중). Planner ⋯ [현장 가이드 준비] 는 그대로 (여행 전).
+- 17 의 [다시 준비]/[가이드 준비] 도 같은 작업 API 를 장소 하나·`force: true` 로 부른다 (17 안에서 끝까지 기다림).

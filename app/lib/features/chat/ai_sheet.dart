@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 
 import '../../core/models/agent.dart';
 import '../../core/theme/app_theme.dart';
+import '../../core/widgets/rich_answer.dart';
 import '../../core/widgets/common.dart';
 import '../planner/plan_controller.dart';
 import '../settings/memory_screen.dart';
@@ -370,11 +371,14 @@ class _Welcome extends StatelessWidget {
 
 /// 한 턴: 사용자 말풍선 → 진행 영역(status + 단계, steps_done 이면 한 줄로 접힘) → 답변 → 기억 칩 → 오류 → 카드.
 class TurnView extends StatelessWidget {
-  const TurnView({super.key, required this.turn, required this.isLast, required this.onFollowUp, this.onShowPending});
+  const TurnView({super.key, required this.turn, required this.isLast, required this.onFollowUp, this.onShowPending, this.onOpenCards});
   final ChatTurn turn;
   final bool isLast;
   final ValueChanged<String> onFollowUp;
   final VoidCallback? onShowPending;
+
+  /// 현장 가이드(17) 안: 카드 대신 "일정 변경 제안을 만들었어요 ›" 한 줄 → AI 시트의 그 카드로 (2026-10-11).
+  final VoidCallback? onOpenCards;
 
   @override
   Widget build(BuildContext context) {
@@ -397,7 +401,7 @@ class TurnView extends StatelessWidget {
         ],
         if (text.isNotEmpty) ...[
           SizedBox(height: event != null ? 4 : 12),
-          Text(text, style: AppText.body),
+          RichAnswer(text), // 문단 · **굵게** · 목록 (2026-10-11)
         ],
         if (event?.type == 'safety_raised') HazardEvidenceBox(event: event!),
         if (pendingNotice) PendingNoticeLine(onTap: onShowPending),
@@ -410,17 +414,50 @@ class TurnView extends StatelessWidget {
           _ErrorBox(turn: turn, onRetry: turn.retryable && turn.user.isNotEmpty ? () => chat.retry(turn) : null),
         ],
         if (turn.stopped) Padding(padding: const EdgeInsets.only(top: 8), child: Text('응답을 중단했어요', style: AppText.caption)),
-        for (final c in turn.cards) ...[
-          const SizedBox(height: 12),
-          switch (c) {
-            ProposalEntry() => ProposalCard(entry: c),
-            RecommendationEntry() => RecommendationCard(entry: c),
-          },
-        ],
-        if (isLast && lastPending != null && turn.done) _FollowUps(entry: lastPending, eventType: event?.type, text: text, onPick: onFollowUp),
+        if (onOpenCards != null && turn.cards.isNotEmpty)
+          _CardLink(label: turn.proposals.isNotEmpty ? '일정 변경 제안을 만들었어요' : '장소 추천을 만들었어요', onTap: onOpenCards!)
+        else
+          for (final c in turn.cards) ...[
+            const SizedBox(height: 12),
+            switch (c) {
+              ProposalEntry() => ProposalCard(entry: c),
+              RecommendationEntry() => RecommendationCard(entry: c),
+            },
+          ],
+        if (onOpenCards == null && isLast && lastPending != null && turn.done) _FollowUps(entry: lastPending, eventType: event?.type, text: text, onPick: onFollowUp),
       ]),
     );
   }
+}
+
+/// 카드 대신 한 줄 (17): 누르면 AI 시트의 그 카드로.
+class _CardLink extends StatelessWidget {
+  const _CardLink({required this.label, required this.onTap});
+  final String label;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.only(top: 10),
+        child: Material(
+          color: AppColors.aiSoft,
+          borderRadius: BorderRadius.circular(12),
+          child: InkWell(
+            key: const ValueKey('guide-card-link'),
+            borderRadius: BorderRadius.circular(12),
+            onTap: onTap,
+            child: Container(
+              height: 40,
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              child: Row(children: [
+                const Icon(Icons.auto_awesome, size: 16, color: AppColors.ai),
+                const SizedBox(width: 6),
+                Expanded(child: Text('$label ›', style: AppText.meta.copyWith(color: AppColors.ai, fontWeight: FontWeight.w700))),
+              ]),
+            ),
+          ),
+        ),
+      );
 }
 
 class _UserBubble extends StatelessWidget {
