@@ -7,6 +7,7 @@ import '../../core/format.dart';
 import '../../core/models/safety.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/common.dart';
+import '../legal/legal_doc_screen.dart';
 import 'memory_screen.dart';
 
 const scenarioLabels = {'calm': '평상시', 'rain': '비', 'wind_tomorrow': '내일 강풍', 'flood': '침수 센서', 'storm': '폭풍'};
@@ -280,6 +281,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ]),
         ],
         if (!widget.serverOnly) ...[
+          const _GroupTitle('앱 정보'),
+          _Group(children: [
+            for (final (i, d) in LegalDoc.values.indexed) ...[
+              if (i > 0) const Divider(height: 1, indent: 16, endIndent: 16, color: AppColors.line),
+              ListTile(
+                key: ValueKey('settings-${d.name}'),
+                leading: const Icon(Icons.description_outlined, color: AppColors.text2),
+                title: Text(d.title, style: AppText.label),
+                trailing: const Icon(Icons.chevron_right, color: AppColors.text3),
+                onTap: () => openLegalDoc(context, d),
+              ),
+            ],
+          ]),
           const SizedBox(height: 16),
           Center(child: TextButton(onPressed: _deleteAccount, child: Text('계정 삭제', style: AppText.label.copyWith(color: AppColors.danger)))),
           Center(child: Text('구룡메이트 ${AppConfig.version}${AppConfig.demo ? ' (demo)' : ''}', style: AppText.caption)),

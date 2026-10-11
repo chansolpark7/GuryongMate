@@ -56,5 +56,8 @@ void main() {
     await _pump(tester, '일제강점기 구룡포에 정착한 일본인들의 거리예요.');
     expect(find.text('일제강점기 구룡포에 정착한 일본인들의 거리예요.'), findsOneWidget);
     expect(find.byType(Column), findsNothing, reason: '한 문단이면 Text 하나 (예전과 같음)');
+
+    await _pump(tester, '방침은 [개인정보처리방침](privacy.md)을 따릅니다.');
+    expect(find.text('방침은 개인정보처리방침을 따릅니다.'), findsOneWidget, reason: '대화에서는 링크 기호만 숨김');
   });
 }

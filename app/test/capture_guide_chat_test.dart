@@ -1,13 +1,25 @@
 // 현장 가이드 대화·다시 준비·Today 가이드 줄 + 가벼운 마크다운 (docs/app/today-map-redesign.md §7) 변경 전·후 캡처.
 // 같은 fixture 장면을 docs/app/review/guide-chat/{before|after}/*.png (390×844) 로 저장한다. 변경 전 코드(dev)에서도 돌도록 공용 API 만 쓴다.
 //   flutter test test/capture_guide_chat_test.dart --dart-define=CAPTURE=true --dart-define=CAPTURE_DIR=../docs/app/review/guide-chat/after
+import 'dart:async';
+import 'dart:io';
+import 'dart:ui' as ui;
+
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:guryong_mate/core/app_session.dart';
+import 'package:guryong_mate/core/token_store.dart';
+import 'package:guryong_mate/features/legal/legal_doc_screen.dart';
+import 'package:guryong_mate/main.dart';
+import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'capture_test.dart' show loadFonts;
-import 'capture_today_map_test.dart' show captureTest, capture, dragSheet, flush, open, scene, snap, tripOf;
+import 'capture_today_map_test.dart' show captureTest, capture, dragSheet, flush, open, outDir, scene, snap, tripOf;
 import 'support/fixture_gateway.dart';
-import 'support/harness.dart' show setUpHarness;
+import 'support/harness.dart' show phone, setUpHarness;
 import 'support/trip_replay.dart';
 
 const _house = 'kto-1909659';
@@ -43,6 +55,22 @@ Future<void> _scrollTo(WidgetTester tester, Finder f) async {
   if (f.evaluate().isEmpty) await tester.scrollUntilVisible(f, 300, scrollable: find.byType(Scrollable).first, maxScrolls: 15);
   await tester.ensureVisible(f);
   await flush(tester);
+}
+
+final _legalRoot = GlobalKey();
+
+/// 셸 밖 화면(로그인·문서)용 캡처 — capture_today_map_test 의 snap 은 셸 루트만 찍는다.
+Future<void> _snapLegal(WidgetTester tester, String name) async {
+  await flush(tester);
+  await tester.pump(const Duration(milliseconds: 400));
+  final boundary = _legalRoot.currentContext!.findRenderObject()! as RenderRepaintBoundary;
+  await tester.runAsync(() async {
+    final image = await boundary.toImage(pixelRatio: 1);
+    final png = await image.toByteData(format: ui.ImageByteFormat.png);
+    final file = File('$outDir/$name.png');
+    await file.parent.create(recursive: true);
+    await file.writeAsBytes(png!.buffer.asUint8List());
+  });
 }
 
 void main() {
@@ -133,5 +161,26 @@ void main() {
         scrollable: find.descendant(of: find.byType(DraggableScrollableSheet).first, matching: find.byType(Scrollable)).first);
     await flush(tester);
     await snap(tester, 's4_today_guide_line');
+  });
+
+  captureTest('l 이용약관 · 개인정보처리방침 (로그인 링크 → 문서)', (tester) async {
+    await phone(tester);
+    await tester.runAsync(() async {
+      for (final d in LegalDoc.values) {
+        await rootBundle.loadString(d.asset);
+      }
+    });
+    final gw = FixtureGateway([]);
+    SharedPreferences.setMockInitialValues({'base_url': 'http://gateway.test'});
+    final s = await AppSession.load(clientFactory: gw.client, tokenStore: MemoryTokenStore());
+    await tester.pumpWidget(RepaintBoundary(key: _legalRoot, child: ChangeNotifierProvider.value(value: s, child: const GuryongApp())));
+    await flush(tester, 10);
+    await _snapLegal(tester, 'l1_login_links');
+    unawaited(openLegalDoc(tester.element(find.byType(Scaffold).first), LegalDoc.privacy));
+    await flush(tester, 10);
+    await _snapLegal(tester, 'l2_privacy');
+    await tester.drag(find.byType(Scrollable).first, const Offset(0, -420));
+    await flush(tester);
+    await _snapLegal(tester, 'l3_privacy_table');
   });
 }

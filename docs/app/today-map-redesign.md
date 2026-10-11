@@ -143,3 +143,46 @@ Figma 와 달라진 곳은 `docs/app/screens/` 14·16·00-existing(07) 에 "2026
 - 시트 접힘 높이를 잰 값으로 맞추는 것은 테스트에서 [삭제] 가 보이는 것까지만 확인 — 위반 칩이 여러 줄인 fixture 는 없다.
 - 작은 창 높이는 172 로 어림해 자리를 고른다 (실제 내용 높이 약 154). 글자 크기를 키우면 위쪽 여유가 줄 수 있다.
 - 도착 알림은 Today 위 고정 자리(top+226)다. 위험 경고 띠·오프라인 띠·위치 꺼짐 배너가 함께 길게 뜨면 위 막대와 가까워질 수 있다 (예전 큰 카드보다는 덜함).
+
+## 7. 현장 가이드를 Today 에서 바로 + 가벼운 마크다운 + 약관 (2026-10-11, 브랜치 `feat/guide-chat-app`)
+
+가이드 노트(17)의 질문이 AI 시트로 넘어가 화면을 떠나야 했고, stale 노트는 칩만 있고 다시 준비할 길이 없었다. Today 에서는 노트 준비 상태가 안 보였다.
+백엔드는 `feat/guide-chat-api` 가 대화 요청 `place_id`(선택)·`MessageView.place_id` 를 더한다 — 이 브랜치는 그 모양에 맞춘 앱만 바꾸고 `backend/` 는 건드리지 않았다.
+
+### 바뀐 화면
+| 화면 | 바뀐 것 | 코드 |
+|---|---|---|
+| 17 질문 | '이런 것도 물어보세요' 칩·입력 → **이 화면에서** `chat {message, place_id}`. 출처 아래 "이 장소에서 나눈 이야기" = 메시지 `place_id` 가 이 장소인 턴만, 진행 단계·스트리밍 답·기억 칩은 AI 시트 `TurnView` 그대로. 같은 세션이라 AI 시트에도 남는다. 오프라인 + 칩이면 지금처럼 저장된 답. 응답 중이면 [중단] | `guide_note_screen.dart` `_ask`, `ChatController.send(placeId:)`, `ChatTurn.placeId`, `AgentMessage.placeId`, `GuryongApi.chat(placeId:)` |
+| 17 제안 카드 | 답에 제안·추천이 생기면 카드 대신 한 줄 "일정 변경 제안을 만들었어요 ›" → AI 시트 Full 의 그 카드(메시지 id 로 스크롤) | `TurnView(onOpenCards:)`, `_CardLink` (`guide-card-link`) |
+| 17 다시 준비 | stale: 칩 대신 "관심사가 바뀌었어요 · [다시 준비]"(`guide-stale`) → `POST …/guide/prepare {place_ids:[이 장소], force:true}` → "다시 준비하고 있어요"(`guide-preparing`, 예전 노트는 그대로) → 잡 3초 폴링, 끝나면 노트 다시 읽기. 없음·failed: [지금 설명 듣기] + [가이드 준비] | `_prepare`·`_pollJob`·`_NoteLine`·`_NoNote` |
+| 17 새 노트 | 열린 동안 노트가 stale·준비 중이면 노트 목록(`GET /docent/plans/{id}/notes`)을 3초마다 읽어 상태·`updated_at` 이 바뀌면 노트를 다시 읽는다 → 서버 자동 재준비(stale → pending → ready)도 화면에 반영 | `_onTrip`·`_watchNotes`, `GuideNoteSummary.updatedAt` |
+| 14 Today | 남은 일정 아래 "📝 가이드 노트 n/m 준비됨"(+ Amber "· k곳 다시 준비 필요", 준비 중이면 "준비 중 n/m") › → 32. 목록은 동행 시작·도착 이벤트·패널을 펼칠 때(10초 간격)·32 에서 돌아올 때, 준비 중이면 이벤트 폴링 때(10초 간격) | `_GuideNotesLine` (`today-guide-line`), `TripController.guideNotes`·`loadGuideNotes` |
+| 마크다운 | 공용 `RichAnswer`: 문단(빈 줄·줄바꿈) · **굵게** · `- `/`1. ` 목록 · `[글](대상)`. 덜 닫힌 `**` 는 기호만 숨김. 제목·인용은 기호만 떼고, 표·HTML 은 글자 그대로. AI 시트 답변·선제 메시지·17 본문(short·long)·qa 답·17 대화. 14-S3 미리보기·24 알림 목록 한 줄은 `plainSummary`(기호만 제거). 예전 줄글 노트는 줄마다 문단 | `core/widgets/rich_answer.dart` |
+| 약관 | `docs/legal/*.md` → `app/assets/legal/` (오프라인). 01 로그인 문구의 [이용약관]·[개인정보처리방침] 밑줄 링크, 33 설정 "앱 정보" 두 줄 → 문서 화면(`RichAnswer(document: true)`: 제목 #·##, 표는 행 카드 "머리 · 값", 인용 상자, 문서 사이 링크는 앱 안 화면) | `features/legal/legal_doc_screen.dart`, `login_screen.dart` `_Consent`, `settings_screen.dart` |
+
+마크다운은 패키지 대신 작은 파서로 했다 — `flutter_markdown` 은 유지보수가 끝났고, 필요한 것이 문단·굵게·목록(+ 문서 모드 제목·표) 정도라 직접 짜는 쪽이 작고 스트리밍 중 덜 닫힌 기호도 다루기 쉽다.
+그대로: Planner ⋯ [현장 가이드 준비](여행 전), 32 화면 자체.
+Figma 와 달라진 곳은 `docs/app/screens/` 14·17·32·33·00-existing(01) 에 "2026-10-11 변경" 으로 적었다.
+
+### 테스트
+- `flutter test`: **77 통과**, 20 건너뜀(캡처 전용 — 이번 캡처 4묶음 더함).
+- 새 `guide_chat_test` (5): ① 17 에 이 장소 메시지만(다른 장소·place_id 없는 대화 숨김) · 칩 → 화면 안 질문, 요청 `place_id` · 진행 단계 · 제안은 한 줄 → AI 시트의 그 카드 ② stale → [다시 준비] `{place_ids, force:true}` → "다시 준비하고 있어요"(예전 본문 유지) → 잡 끝 → 새 노트 ③ 노트 없음 → [가이드 준비] → 준비 중 → 노트 ④ 열린 채 서버 자동 재준비(목록 stale → pending → ready) → 새 노트 ⑤ Today "가이드 노트 2/5 준비됨 · 1곳 다시 준비 필요" → "준비 중 1/5" → 32.
+- 새 `rich_answer_test` (4): 문단·목록·제목/인용 기호·평문 줄바꿈·plainSummary / 굵게·덜 닫힌 ** / 목록·평문 그대로·링크 기호 / 문서 모드(제목 단계·표 머리·인용·구분선).
+- 새 `legal_test` (4): docs/legal ↔ assets/legal 같은지 2(다르면 실패 — 문서가 원본) / 로그인 링크 → 약관(# 제목) → 약관 안 [개인정보처리방침] → 방침(표 행 "수집 항목 · …") → 로그인 [개인정보처리방침] / 설정 두 줄 → 각 문서.
+- 바꾼 기존 테스트: `trip_screens_test` 장면 ② — 칩이 AI 시트(18 헤더 "… · 현장 해설")로 가지 않고 17 안에서 질문하게 바뀌어, 헤더 확인 대신 "17 그대로 · 이 장소에서 나눈 이야기 · 2단계 완료 · 요청 place_id" 를 본다. "더 짧게" → 기억 칩은 17 입력칸에서 그대로 통과. 다른 기존 텍스트 finder 는 마크다운 뒤에도 그대로 통과(한 문단 답은 Text 하나).
+- 고친 버그(테스트 중 발견): 문서 화면이 build 마다 asset Future 를 새로 만들어 다시 그려질 때마다 처음부터 기다렸다 → State 에 한 번.
+
+### 캡처 (`docs/app/review/guide-chat/`, fixture 390×844)
+- `flutter test test/capture_guide_chat_test.dart --dart-define=CAPTURE=true --dart-define=CAPTURE_DIR=../docs/app/review/guide-chat/after` (before 는 같은 파일을 dev 2a9b8e6 에서).
+- m1·m1b 긴 해설(마크다운) — 전: `**`·`-`·번호가 글자 그대로 / 후: 문단·굵게·목록. m2 계획 답변 — 전: 기호 그대로 / 후: 번호 목록·굵게.
+- g1 17 대화 — 전: 대화 목록 없음(출처까지) / 후: 이 장소 질문·답(목록·굵게)·접힌 단계·기억 칩·"일정 변경 제안을 만들었어요 ›".
+- s1 stale — 전: Amber 칩 / 후: "관심사가 바뀌었어요 · [다시 준비]". s2 다시 준비 중(후만). s3 노트 없음 — 후: [지금 설명 듣기] + [가이드 준비]. s4 Today 패널 — 후: "가이드 노트 3/5 준비됨 · 1곳 다시 준비 필요 ›".
+- l1 로그인 링크 · l2 방침 · l3 방침 표(행 카드) — 후만.
+
+### 남은 문제
+- **실제 스택 확인 못 함**: 백엔드 `feat/guide-chat-api` 가 아직 dev 에 머지되지 않았다(작업 중, 커밋 없음). 머지 전에는 `place_id` 를 보내면 422 가 날 수 있어 fixture 로만 확인했다. 머지 뒤 worktree 스택(`AGENT_PROVIDER=scripted`) + 관제 [데모 계획으로 시작] 으로 17 질문·[다시 준비]·Today 줄을 보고 `docs/app/review/guide-chat/live/` 에 캡처할 것. 계약은 그 브랜치 작업 파일에서 `ChatRequest.place_id`·`MessageView.place_id`(사용자·답 메시지 모두)로 맞는 것을 확인했다.
+- 17 대화 목록은 출처 아래(본문 끝)라 노트가 길면 질문 뒤 맨 아래로 내려간다(답을 따라감, 직접 스크롤하면 멈춤). 노트를 다시 보려면 위로 올려야 한다.
+- 대화는 계획당 세션 하나라 응답도 한 번에 하나다: AI 시트가 답하는 동안 17 에서 물으면 "구룡메이트가 답하는 중이에요" 안내만 나온다.
+- Today 가이드 줄의 n/m 은 **오늘** 장소 기준, 32 는 계획 전체 기준이라 여러 날 계획이면 숫자가 다르다.
+- 노트 목록 폴링(17 이 stale 노트를 보는 동안 3초)은 가볍지만 화면을 오래 열어 두면 계속 돈다.
+- 마크다운 문서 모드의 표는 행 카드로 바꿔 보여준다(가로 표 아님). 외부 링크(http)는 브라우저를 열지 않고 주소만 알린다(`url_launcher` 없음).
