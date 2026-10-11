@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show ScrollDirection;
+import 'package:flutter/scheduler.dart';
 import 'package:provider/provider.dart';
 
 import '../../core/models/agent.dart';
@@ -68,6 +69,10 @@ class _AiSheetState extends State<_AiSheet> {
   /// 선제 메시지로 열 때(특정 메시지로 스크롤)는 처음부터 끈다.
   late bool _pinBottom = !widget.full;
 
+  /// 시트가 Full 쪽인지 (헤더의 크게 보기/줄이기). 첫 build 엔 아직 붙지 않았으니 widget.full 로 시작하고,
+  /// 그 뒤엔 크기 리스너가 절반/전체 경계를 넘을 때만 바꾼다 (버튼·손으로 끌기 모두).
+  late bool _isFull = widget.full;
+
   /// 선제 메시지로 스크롤하기 위한 턴 키 (message id 별).
   final _turnKeys = <int, GlobalKey>{};
 
@@ -84,6 +89,7 @@ class _AiSheetState extends State<_AiSheet> {
     };
     _input.text = widget.prefill ?? '';
     _input.addListener(() => setState(() {}));
+    _sheet.addListener(_onSheetSize);
     if (_chat.focusMessageId != null) _pinBottom = false;
     WidgetsBinding.instance.addPostFrameCallback((_) => _jumpToBottom());
     _chat.init().then((_) {
@@ -101,6 +107,7 @@ class _AiSheetState extends State<_AiSheet> {
     _chat.removeListener(_autoScroll);
     _chat.removeListener(_focusMessage);
     _chat.onNotice = null;
+    _sheet.removeListener(_onSheetSize);
     _sheet.dispose();
     _input.dispose();
     _focus.dispose();
@@ -186,9 +193,20 @@ class _AiSheetState extends State<_AiSheet> {
   }
 
   void _toggleSize() {
-    final full = _sheet.isAttached && _sheet.size > (_half + _full) / 2;
-    _sheet.animateTo(full ? _half : _full, duration: const Duration(milliseconds: 250), curve: Curves.easeOut);
-    setState(() {});
+    if (!_sheet.isAttached) return;
+    _sheet.animateTo(_isFull ? _half : _full, duration: const Duration(milliseconds: 250), curve: Curves.easeOut);
+  }
+
+  void _onSheetSize() {
+    if (!_sheet.isAttached) return;
+    final full = _sheet.size > (_half + _full) / 2;
+    if (full == _isFull || !mounted) return;
+    // 레이아웃 중(시트가 처음 붙을 때 등)에 바뀌면 다음 프레임에
+    if (SchedulerBinding.instance.schedulerPhase == SchedulerPhase.persistentCallbacks) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _onSheetSize());
+      return;
+    }
+    setState(() => _isFull = full);
   }
 
   @override
@@ -209,7 +227,7 @@ class _AiSheetState extends State<_AiSheet> {
         expand: false,
         builder: (context, scroll) {
           _scroll = scroll;
-          final full = _sheet.isAttached && _sheet.size > (_half + _full) / 2;
+          final full = _isFull;
           return Container(
             decoration: const BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
             child: Column(children: [
@@ -263,6 +281,8 @@ class _AiSheetState extends State<_AiSheet> {
                               isLast: i == chat.turns.length - 1,
                               onFollowUp: _send,
                               onShowPending: _scrollToPending,
+                              // 입력 중이면 빠른 실행 칩을 숨긴다
+                              quickActions: _input.text.isEmpty ? (t) => quickActions(t, day: plan.day, trip: plan.tripActive) : null,
                             ),
                         // 시트가 열려 있을 때 온 도착 카드 (대화 기록에는 남지 않는 로컬 카드, 16)
                         if (chat.arrivalCard != null && tripHub.controller != null)
@@ -322,6 +342,27 @@ class _Header extends StatelessWidget {
       );
 }
 
+/// 계획 모드 빠른 실행 (c10): agent 에 check_safety·safety_outlook 이 있으므로 "날씨·안전 확인"을 둔다. (아이콘, 이름, 보낼 말)
+List<(IconData, String, String)> planActions(int day) => [
+      (Icons.route, '경로 최적화', 'Day $day 동선을 이동 시간이 짧아지도록 최적화해줘'),
+      (Icons.verified_user_outlined, '날씨·안전 확인', 'Day $day 날씨와 안전 확인해줘'),
+      (Icons.restaurant, '점심 장소 찾기', 'Day $day 점심 먹을 곳을 추천해줘'),
+      (Icons.add, '빈 시간 채우기', 'Day $day 빈 시간에 갈 만한 곳 추천해줘'),
+    ];
+
+/// 일반 답(카드 없음) 뒤 빠른 실행 칩 (이름, 보낼 말). 계획 모드는 지금 보는 날의 _Welcome 문구, 동행 중은 다음 일정·근처 볼거리
+/// (+ 현장 가이드 대화면 해설 더 짧게). 방금 한 요청과 같은 칩은 뺀다.
+List<(String, String)> quickActions(ChatTurn turn, {required int day, required bool trip}) {
+  final all = trip
+      ? [
+          ('다음 일정 알려줘', '다음 일정 알려줘'),
+          ('근처 볼거리 추천해줘', '근처에 볼 만한 곳 추천해줘'),
+          if (turn.placeId != null) ('해설 더 짧게', '해설을 더 짧게 해줘'),
+        ]
+      : [for (final (_, label, prompt) in planActions(day)) if (label != '점심 장소 찾기') (label, prompt)];
+  return all.where((a) => a.$2 != turn.user.trim()).toList();
+}
+
 class _Welcome extends StatelessWidget {
   const _Welcome({required this.day, required this.onPick});
   final int day;
@@ -329,13 +370,7 @@ class _Welcome extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // 빠른 실행 (c10): agent 에 check_safety·safety_outlook 이 있으므로 "날씨·안전 확인"을 둔다.
-    final actions = [
-      (Icons.route, '경로 최적화', 'Day $day 동선을 이동 시간이 짧아지도록 최적화해줘'),
-      (Icons.verified_user_outlined, '날씨·안전 확인', 'Day $day 날씨와 안전 확인해줘'),
-      (Icons.restaurant, '점심 장소 찾기', 'Day $day 점심 먹을 곳을 추천해줘'),
-      (Icons.add, '빈 시간 채우기', 'Day $day 빈 시간에 갈 만한 곳 추천해줘'),
-    ];
+    final actions = planActions(day);
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       Text('무엇을 도와드릴까요? 일정을 직접 바꿔드릴 수 있어요.', style: AppText.body),
       const SizedBox(height: 14),
@@ -372,7 +407,7 @@ class _Welcome extends StatelessWidget {
 
 /// 한 턴: 사용자 말풍선 → 진행 영역(status + 단계, steps_done 이면 한 줄로 접힘) → 답변 → 기억 칩 → 오류 → 카드.
 class TurnView extends StatelessWidget {
-  const TurnView({super.key, required this.turn, required this.isLast, required this.onFollowUp, this.onShowPending, this.onOpenCards});
+  const TurnView({super.key, required this.turn, required this.isLast, required this.onFollowUp, this.onShowPending, this.onOpenCards, this.quickActions});
   final ChatTurn turn;
   final bool isLast;
   final ValueChanged<String> onFollowUp;
@@ -381,10 +416,14 @@ class TurnView extends StatelessWidget {
   /// 현장 가이드(17) 안: 카드 대신 "일정 변경 제안을 만들었어요 ›" 한 줄 → AI 시트의 그 카드로 (2026-10-11).
   final VoidCallback? onOpenCards;
 
+  /// 마지막 턴이 카드 없이 끝났을 때 답 아래 빠른 실행 칩 (이름, 보낼 말). null 이면 안 보인다 (입력 중 등).
+  final List<(String, String)> Function(ChatTurn)? quickActions;
+
   @override
   Widget build(BuildContext context) {
     final chat = context.read<ChatController>();
     final (text, pendingNotice) = splitPendingNotice(turn.text.toString().trim());
+    final quick = isLast && turn.done && turn.cards.isEmpty && turn.error == null && !chat.busy && text.isNotEmpty ? quickActions?.call(turn) : null;
     final lastPending = turn.proposals.where((e) => e.state == ProposalState.pending).lastOrNull;
     // 선제 메시지: 이벤트의 agent.message_id 와 같은 id 의 메시지 (events.md §3.1)
     final event = turn.messageId == null ? null : chat.proactive[turn.messageId];
@@ -425,6 +464,7 @@ class TurnView extends StatelessWidget {
               RecommendationEntry() => RecommendationCard(entry: c),
             },
           ],
+        if (quick != null && quick.isNotEmpty) ChipRow(key: const ValueKey('quick-actions'), chips: quick, onPick: onFollowUp),
         if (onOpenCards == null && isLast && lastPending != null && turn.done) _FollowUps(entry: lastPending, eventType: event?.type, text: text, onPick: onFollowUp),
       ]),
     );
@@ -734,8 +774,8 @@ class _ActivitySummaryState extends State<ActivitySummary> {
   Widget build(BuildContext context) {
     final t = widget.turn;
     final failed = t.steps.any((s) => s.failed);
-    final took = t.endedAt == null ? null : t.elapsed; // 끝난 턴만 걸린 시간 한 번
-    final summary = (t.stepsSummary ?? '').replaceFirst(' : ', ' · ') + (took == null ? '' : ' · ${formatElapsed(took)}');
+    final took = t.endedAt == null ? null : t.elapsed; // 끝난 턴만 걸린 시간 한 번 (1초 미만은 생략)
+    final summary = (t.stepsSummary ?? '').replaceFirst(' : ', ' · ') + (took == null || took.inSeconds < 1 ? '' : ' · ${formatElapsed(took)}');
     return Material(
       color: AppColors.background,
       borderRadius: BorderRadius.circular(12),
@@ -791,26 +831,36 @@ class _FollowUps extends StatelessWidget {
           '조금 더 여유롭게',
         ],
     };
-    return Padding(
-      padding: const EdgeInsets.only(top: 12),
-      child: Wrap(spacing: 8, runSpacing: 8, children: [
-        for (final c in chips)
-          Material(
-            color: AppColors.surface,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16), side: const BorderSide(color: AppColors.aiLine)),
-            child: InkWell(
-              borderRadius: BorderRadius.circular(16),
-              onTap: () => onPick(c),
-              child: Container(
-                height: 32,
-                padding: const EdgeInsets.symmetric(horizontal: 12),
-                child: Center(widthFactor: 1, child: Text(c, style: AppText.meta.copyWith(color: AppColors.ai, fontWeight: FontWeight.w500))),
+    return ChipRow(chips: [for (final c in chips) (c, c)], onPick: onPick);
+  }
+}
+
+/// 답 아래 작은 칩 줄 (제안 후속 칩 · 빠른 실행 칩 공용). (보이는 글자, 보낼 말)
+class ChipRow extends StatelessWidget {
+  const ChipRow({super.key, required this.chips, required this.onPick});
+  final List<(String, String)> chips;
+  final ValueChanged<String> onPick;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.only(top: 12),
+        child: Wrap(spacing: 8, runSpacing: 8, children: [
+          for (final (label, prompt) in chips)
+            Material(
+              color: AppColors.surface,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16), side: const BorderSide(color: AppColors.aiLine)),
+              child: InkWell(
+                borderRadius: BorderRadius.circular(16),
+                onTap: () => onPick(prompt),
+                child: Container(
+                  height: 32,
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  child: Center(widthFactor: 1, child: Text(label, style: AppText.meta.copyWith(color: AppColors.ai, fontWeight: FontWeight.w500))),
+                ),
               ),
             ),
-          ),
-      ]),
-    );
-  }
+        ]),
+      );
 }
 
 class _InputBar extends StatelessWidget {
