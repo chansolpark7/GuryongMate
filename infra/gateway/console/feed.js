@@ -18,6 +18,7 @@ export function initFeed() {
   $("feed-more").addEventListener("click", () => { showAll = !showAll; render(); });
   on("events", render);
   on("trip", render);
+  on("guide", renderGuide);
   // 960px 폭(발표 시 에뮬레이터와 나란히)에서는 접힌 상태로 시작
   apply(prefs.feedOpen ?? window.innerWidth >= 1200);
   render();
@@ -60,6 +61,7 @@ function render() {
     }
   }
   updateBadge();
+  renderGuide();
   const ul = $("feed-list");
   if (!list.length) {
     firstLoad = true; // 계획을 바꾸거나 지운 뒤 처음 읽는 것은 강조하지 않는다
@@ -71,6 +73,19 @@ function render() {
   ul.replaceChildren(...shown.map(card));
   $("feed-more").hidden = list.length <= SHOW;
   $("feed-more").textContent = showAll ? "최근 것만" : `더 보기 (${list.length - SHOW})`;
+}
+
+/** 가이드 노트 준비 한 줄 (계정 초기화에서 "가이드 노트도 지금 준비"를 켰을 때). 이벤트 목록과 따로 그려 폴링에 흔들리지 않게. */
+function renderGuide() {
+  const j = S.guideJob;
+  const el = $("feed-guide");
+  el.hidden = !j || j.plan_id !== S.planId;
+  if (el.hidden) return;
+  const done = j.status !== "running";
+  el.className = `feed-guide${done ? (j.failed ? " fail" : " ok") : ""}`;
+  el.textContent = done
+    ? `📝 가이드 노트 ${j.ready}/${j.total} 준비됨${j.failed ? ` · ${j.failed}곳 실패` : ""}`
+    : `📝 가이드 노트 준비 중 ${j.finished}/${j.total}${j.eta_sec ? ` · 약 ${Math.max(1, Math.round(j.eta_sec / 60))}분 남음` : ""}`;
 }
 
 function card(e) {

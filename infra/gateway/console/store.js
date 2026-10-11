@@ -27,11 +27,12 @@ export const S = {
   play: null, // 시간 재생 {speed, stop, t0, r0}
   arm: null, // 날씨 그리기 도구 (종류, null = 꺼짐)
   locLog: [], // 최근 위치 전송 결과 (개발자 정보) [{at, kind, accepted, ignored, events}]
+  guideJob: null, // 계정 초기화에서 부른 가이드 준비 작업 (GET /agent/plans/{id}/guide/jobs/{job_id}, 피드 맨 위 한 줄)
 };
 
 const listeners = new Map();
 
-/** 상태가 바뀌었음을 알린다. topic: conn | sim | safety | plans | plan | trip | events | alerts | motion | play | prefs */
+/** 상태가 바뀌었음을 알린다. topic: conn | sim | safety | plans | plan | trip | events | alerts | motion | play | prefs | guide */
 export function emit(topic) {
   for (const fn of listeners.get(topic) || []) {
     try { fn(); } catch (e) { console.error(e); }
@@ -111,4 +112,9 @@ export function setPref(key, value) {
   prefs[key] = value;
   try { localStorage.setItem(PREF_KEY, JSON.stringify(prefs)); } catch { /* 이번 창에서만 */ }
   emit("prefs");
+}
+
+export function setGuideJob(job) {
+  S.guideJob = job;
+  emit("guide");
 }

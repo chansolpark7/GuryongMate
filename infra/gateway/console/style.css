@@ -263,6 +263,10 @@ ul.hz li { margin: 1px 0; }
 .feed-head { display: flex; align-items: center; padding: 10px 8px 6px 14px; }
 .feed-head h2 { font-size: 15px; margin: 0; flex: 1; }
 #feed-list { list-style: none; margin: 0; padding: 4px 10px 8px; overflow-y: auto; flex: 1; }
+.feed-guide { margin: 4px 10px 0; padding: 8px 10px; border-radius: 10px; font-size: 13px; background: var(--ai-soft); color: var(--text); }
+.feed-guide.ok { background: var(--success-soft); }
+.feed-guide.fail { background: var(--warning-soft); }
+.feed-guide[hidden] { display: none; }
 .feed-empty { color: var(--text3); font-size: 13px; padding: 16px 6px; text-align: center; }
 .fcard {
   display: flex; gap: 10px; padding: 10px 12px; margin: 6px 0; border-radius: 12px; background: var(--surface);
@@ -514,6 +518,11 @@ dialog label input { font-size: 15px; color: var(--text); }
 .reset-card.env { margin-top: 14px; }
 .reset-card .warn-text { color: var(--warning); }
 .reset-confirm { margin: 6px 0 4px !important; }
+.reset-opts { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 8px 0 2px; font-size: 13px; }
+.reset-opts .radio { display: flex; align-items: center; gap: 5px; cursor: pointer; }
+.reset-opts .radio input { min-height: auto; margin: 0; }
+.reset-card .check { margin: 6px 0 0; font-size: 13px; }
+.reset-card p.muted { font-size: 12px; color: var(--text3); }
 .reset-log { margin: 10px 0 6px; padding-left: 22px; font-size: 13px; }
 .reset-log:empty { display: none; }
 .reset-log li.ok::marker { content: "✓  "; color: var(--success); }
