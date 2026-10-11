@@ -1,6 +1,7 @@
 # deploy — 공개 테스트·발표 서버 (GCP VM)
 
 팀원·멘토가 직접 써 보는 **테스트 서버** 겸 **발표 데모 서버**. 개발과 서버를 나눈다.
+팀원·멘토의 시험은 모두 **웹 앱**(`http://34.64.209.209:8000/`) + **관제 대시보드**(`/console/`)로 한다. 안드로이드 APK 는 배포하지 않는다 (§7).
 
 | | 개발 | 서버 |
 |---|---|---|
@@ -19,7 +20,7 @@ containerd 저장소는 이미지를 **압축본(content) + 풀린 본(snapshot)
 ```
 노트북 (main 체크아웃)                                      GCP VM ~/guryongmate
 deploy/update.sh                                             docker-compose.prod.yml, .env, backend.env
-  ① main 확인  ② docker build (5개 이미지)                    ┌ gateway :8000  ← 방화벽은 이 포트만
+  ① main 확인  ② flutter build web + docker build (5개)     ┌ gateway :8000  ← 방화벽은 이 포트만 (/ 웹 앱, /console/, API)
   ③ docker save | gzip | ssh 'gunzip | docker load' ───────►  │ account places planner safety routing trip docent agent
   ④ compose up  ⑤ 헬스 체크  ⑥ 실패 시 이전 태그로             └ db, embedding(ONNX), valhalla, places-init   (포트 매핑 없음)
 ```
@@ -37,7 +38,7 @@ VM 과 같은 Docker 29.9.0 · compose 5.6.0 · containerd 저장소(`docker:29-
 |---|---:|---:|---|
 | `guryongmate/backend` | 98MB | 423MB | 서비스 8개 + places-init 이 같은 이미지 |
 | `guryongmate/embedding-onnx` | 447MB | 1,047MB | 모델 포함 (임베딩 표 int8 + 나머지 fp32, 약 530MB). python 기반 레이어는 backend 와 공유 |
-| `guryongmate/gateway` | 18MB | 67MB | caddy:2.8-alpine + 설정 |
+| `guryongmate/gateway` | 18MB | 67MB | caddy:2.8-alpine + 설정 + 관제 대시보드 (웹 앱 없이 잰 값. 웹 앱 증가분은 아래 §1.3) |
 | `guryongmate/db` | 115MB | 400MB | postgres:16-alpine + pgvector |
 | `guryongmate/valhalla` | 162MB | 646MB | valhalla-scripted 3.9.0 (osmium 없음) |
 | **이미지 합계** | **840MB** | **2,584MB** | `docker system df`: Images 2.706GB |
@@ -96,11 +97,28 @@ onnxruntime + tokenizers + 모델 파일만 담는다 (torch 없음, 첫 실행 
 빌드 옵션: `docker build --build-arg QUANTIZE=int8|fp32 services/embedding-onnx` (`export.py`). 개발 compose 는 torch 서버 그대로다.
 DB 의 임베딩은 서버마다 그 서버의 임베딩 컨테이너로 적재되므로(`places-init`) 섞이지 않는다.
 
+### 1.3 웹 앱 (gateway 이미지에 포함, 2026-10-11)
+
+`deploy/build.sh` 가 `deploy/build_web.sh`(Flutter 웹 빌드 → `app/build/web`, 약 19MB)를 먼저 돌리고 gateway 이미지에 `COPY` 한다.
+노트북에서 웹 앱이 들어간 gateway 이미지와 들어가지 않은 이미지를 같은 방식으로 재 보면 (Docker Desktop containerd 저장소, `docker image ls`·`docker save | gzip -1`):
+
+| | 웹 앱 없음 | 웹 앱 포함 | 차이 |
+|---|---:|---:|---:|
+| gateway 이미지 (`docker image ls`, 압축본 + 풀린 본) | 70.1MB | 95.9MB | **+25.8MB** |
+| 전송 (`docker save \| gzip -1`) | 18.7MB | 25.3MB | **+6.6MB** |
+
+- 웹 앱 파일: `main.dart.js` 4.2MB, CanvasKit 13MB(`canvaskit.wasm` 7MB + 크롬용 `chromium/canvaskit.wasm` 6MB, JS 빌드가 쓰지 않는 skwasm·wimp·디버그 기호는 지운다), 글꼴·약관 등 1.6MB.
+- VM 디스크: 웹 앱이 바뀐 업데이트마다 gateway 레이어 약 26MB 가 새로 생긴다. `update.sh` 는 현재·이전 태그를 남기므로 웹 앱 몫은 **최대 약 52MB**
+  (업데이트 도중 잠깐 세 벌 약 78MB, 끝나면 정리). §1.1 의 여유(첫 배포 뒤 약 2.2GB) 안이다.
+- 웹 앱 소스(`app/lib`·`app/web`·`app/assets`·`app/pubspec.*`)가 그대로면 gateway 이미지는 다시 보내지 않고 태그만 붙인다 (`deploy/lib.sh` 의 `WEB_SOURCES`, 라벨 `guryong.src`).
+- 같은 Flutter 버전으로 빌드한다 (노트북마다 다르면 결과물이 조금 달라진다. 지금 3.47).
+
 ---
 
 ## 2. 첫 배포 (한 번)
 
-노트북에 필요한 것: Git Bash(Windows)·macOS·Linux 셸, Docker, ssh 키로 VM 접속, python (비밀 생성·계정 만들기용).
+노트북에 필요한 것: Git Bash(Windows)·macOS·Linux 셸, Docker(BuildKit — `docker build --build-context`), ssh 키로 VM 접속, python (비밀 생성·계정 만들기용),
+**Flutter SDK** (웹 앱 빌드, `flutter` 가 PATH 에. 없으면 `deploy/build_web.sh` 가 분명한 오류로 멈춘다).
 
 1. **GCP 방화벽**: 게이트웨이 포트(기본 `tcp:8000`)만 연다 (§7). DB·내부 서비스는 포트 매핑이 없어 VM 밖으로 나가지 않는다.
 2. **main 체크아웃** (원본 폴더 또는 main worktree): `git switch main && git pull`.
@@ -195,11 +213,13 @@ git switch main && git pull && git merge --no-ff dev && git push      # main 은
 deploy/update.sh
 ```
 
-`update.sh` 순서: ① main·깨끗한 작업 트리·`origin/main` 과 같은지 ② 이미지 5개 빌드 (태그 = 커밋 앞 10자리) ③ 바뀐 이미지만 스트림 전송
+`update.sh` 순서: ① main·깨끗한 작업 트리·`origin/main` 과 같은지 ② 웹 앱 빌드(`deploy/build_web.sh`) + 이미지 5개 빌드 (태그 = 커밋 앞 10자리, 웹 앱은 gateway 이미지에) ③ 바뀐 이미지만 스트림 전송
 ④ compose 파일 교체(이전 것 `.prev`)·`.env` 의 `IMAGE_TAG`/`PREV_TAG` 바꾸고 `compose up --wait` ⑤ 헬스 체크
-(`/health`, 서비스마다 `/<서비스>/docs`, `/agent/info`, `/routing/status`) ⑥ 실패하면 실패한 서비스 로그를 보여주고 이전 태그·compose 로 되돌린다.
+(`/health`, 웹 앱 `/`, `/console/`, 서비스마다 `/<서비스>/docs`, `/agent/info`, `/routing/status`) ⑥ 실패하면 실패한 서비스 로그를 보여주고 이전 태그·compose 로 되돌린다.
 성공하면 현재·이전 태그 말고는 이미지를 지운다.
 
+- **웹 앱만 바뀌어도 같은 명령 한 번**이다 (`deploy/update.sh`). gateway 이미지만 새로 보내고(약 25MB) 나머지는 태그만 붙인다.
+  웹 앱은 서비스 워커 캐시를 끄고(`--pwa-strategy=none`) 게이트웨이가 `Cache-Control: no-cache` 로 내려주므로, 팀원은 **새로고침만** 하면 새 앱이 뜬다.
 - DB 스키마: 새 테이블은 서비스 시작 때 `create_all` 로 생긴다. 컬럼 변경은 자동이 아니다 (해커톤 기간 Alembic 없음) — 그런 변경이면 배포 전에 따로 정한다.
 - 장소 데이터: `places-init` 이 비어 있는 것만 채운다. 스냅샷을 바꿨으면 VM 에서 `docker compose -f docker-compose.prod.yml run --rm places python -m app.places.ingest load --embed`.
 - 발표 직전에는 배포하지 않는다. 하더라도 `deploy/status.sh` 와 진행 스크립트 `prep` 으로 확인한다.
@@ -232,12 +252,28 @@ gcloud compute instances add-tags <VM 이름> --tags=guryongmate --zone=<zone>
 - 게이트웨이 포트만 연다. ssh(22)는 GCP 기본 규칙. DB(5432)·내부 서비스는 compose 에 포트 매핑이 없어 열 필요도 없다.
 - 확인: 노트북에서 `curl http://34.64.209.209:8000/health` → `{"status":"ok","service":"gateway"}`.
 
-**앱 설정** (팀원·멘토에게 보낼 안내):
-1. 앱 설치본(APK)을 받는다.
-2. 설정 → 서버 주소: `http://34.64.209.209:8000` → [연결 확인] 에 `agent: claude…` 가 보이면 된다.
-3. 받은 아이디·비밀번호로 로그인 (가입 화면은 서버에서 막혀 있다). 로그인 후 설정에서 비밀번호를 바꾼다.
-4. 대화는 사용자마다 시간당 30턴·하루 150턴까지. 넘으면 몇 분 뒤 다시 하라는 안내가 나온다.
-5. 다른 사람의 계획·대화는 보이지 않는다. 가상 상황(데모용 악천후)은 발표 진행자가 바꾸며 서버 전체에 보인다.
+**웹 앱** — 팀원·멘토는 설치 없이 브라우저로 쓴다 (안드로이드 APK 는 배포하지 않는다).
+- 게이트웨이가 `/` 에서 웹 앱을, `/console/` 에서 관제 대시보드를 내려준다. API 와 같은 주소라 서버 주소 설정이 필요 없다 (앱이 페이지 주소를 서버로 쓴다).
+- 크롬·엣지·사파리 최신판. 데스크톱 브라우저에서는 앱이 휴대폰 폭으로 가운데에 보인다. 휴대폰 브라우저로 열어도 된다.
+- 처음 열 때 게이트웨이에서 약 3.5MB(zstd 압축, CanvasKit 포함)를 받는다. 글꼴(Noto Sans KR, Google Fonts)·지도 타일(OpenStreetMap)은 인터넷에서 받는다.
+
+**팀원·멘토에게 보낼 안내** (그대로 복사):
+```
+구룡메이트 시험 서버
+- 앱:        http://34.64.209.209:8000/
+- 관제 화면: http://34.64.209.209:8000/console/   (같은 아이디로 로그인)
+- 계정: 운영팀이 만들어 드린 아이디·비밀번호로 로그인하세요 (가입은 막혀 있어요). 로그인 뒤 설정에서 비밀번호를 바꿀 수 있어요.
+- 위치: 웹에서는 휴대폰 GPS 를 쓰지 않아요. 여행을 시작한 뒤 관제 화면 지도에서 파란 점을 끌거나,
+        일정 번호를 눌러 [걸어가기]·[여기로 이동] → [여기서 머물기] 로 위치를 옮기면 앱에 도착·해설이 떠요.
+        (앱 설정 > 장소로 이동 으로도 옮길 수 있어요)
+- 시각·날씨(가상 시각, 비·폭풍 같은 가상 상황)는 서버 전체 공용이에요. 다른 사람도 같이 보니,
+  쓰고 나면 관제 화면에서 [지금(실제)으로] 와 날씨 [평상시] 로 원래대로 돌려 주세요.
+- AI 대화는 한 사람당 시간당 30번·하루 150번까지예요. 넘으면 몇 분 뒤에 다시 하라는 안내가 나와요.
+- 다른 사람의 계획·대화는 보이지 않아요. HTTP(암호화 없음)라 실제 개인 정보·평소 쓰는 비밀번호는 넣지 마세요.
+```
+- 계정 만들기: §3.1 (`deploy/create_user.sh` 또는 `deploy/users.txt` + `first_deploy.sh`).
+- 앱 로그인 정보는 브라우저 localStorage 에 남는다 (http 주소에서는 보안 저장소를 못 쓴다). 공용 PC 면 설정에서 로그아웃.
+- 안드로이드·데스크톱 앱을 따로 빌드하면 기본 서버 주소가 이 서버(`http://34.64.209.209:8000`)다 (app/README.md).
 
 HTTP(평문)다. 실제 개인 정보·평소 쓰는 비밀번호를 넣지 않도록 안내한다.
 
@@ -253,7 +289,23 @@ deploy/teardown.sh --all      # 컨테이너·DB·길찾기 볼륨·이미지·~
 
 ---
 
-## 9. 로컬에서 확인한 것 (2026-10-10, 실제 VM·Claude 호출 없음)
+## 9. 로컬에서 확인한 것
+
+### 9.1 웹 앱 (2026-10-11, 실제 VM·Claude 호출 없음)
+개발 compose(포트 8030, `AGENT_PROVIDER=scripted`, `AUTH_REQUIRED=true`) + 같은 스택 네트워크에 붙인 **운영 gateway 이미지**(`Caddyfile.prod`, 포트 8031)로 확인했다.
+
+| 확인 | 결과 |
+|---|---|
+| `flutter test` | 전체 통과 |
+| `deploy/build_web.sh` | 약 1분 (캐시 있으면 10초 안팎), `app/build/web` 19MB |
+| 개발 gateway | `/`·`/index.html`·`/main.dart.js`·`/canvaskit/…wasm` 200, 없는 앱 경로(`/x/y`) → index.html 200, 없는 `.js` 404, `/console/`·`/planner/docs`·`/places/docs`·`/agent/info`·`/routing/status`·`/health` 200. 웹 파일은 `Cache-Control: no-cache`, wasm·js 는 zstd/gzip 압축 |
+| 운영 gateway (`Caddyfile.prod`) | 위와 같은 경로 200, `POST /auth/signup` 토큰 없음·틀린 토큰 403 `admin_only`, `GET /safety/sim` 200 |
+| 크롬 1440·390 (헤드리스 + 앱 내 브라우저) | 로그인 → 새 계획 → 각본 LLM 대화(SSE 진행 단계) → 제안 [전체 적용] → 여행 시작(권한 화면 없음, 데모 위치) → 관제 대시보드·위치 전송으로 도착 → 「도착했어요」·가이드 화면 질문 → Map 탭·시트 → 설정·이용약관. 새로고침해도 로그인 유지 |
+| 운영 gateway 로 가입 | 가입 화면 안에 「지금은 가입할 수 없어요. 운영팀에 계정을 요청해 주세요.」 |
+
+캡처: [docs/app/review/web/](../app/review/web/) (데스크톱 `desktop-*`, 모바일 폭 390 `mobile-*`).
+
+### 9.2 배포 스크립트 (2026-10-10, 실제 VM·Claude 호출 없음)
 
 운영 compose 를 노트북에서 실제로 띄워 확인했다 (`-p guryongmate-prod`, 포트 8010, `AGENT_PROVIDER=scripted`, 실제 E-UM·기상청 키).
 배포 스크립트는 `VM=local`(VM 쪽 명령을 노트북에서 실행)로 시험했다: `VM=local VM_DIR=guryongmate-localtest ALLOW_BRANCH=1 deploy/update.sh`
