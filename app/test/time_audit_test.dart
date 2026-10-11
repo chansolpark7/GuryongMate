@@ -113,5 +113,5 @@ void main() {
     await settle(tester, 30);
     expect(find.textContaining('${first['end_at']}까지 예정'), findsOneWidget,
         reason: '12:30 에 와도 13:00 고정이면 13:00 에 시작해 체류만큼 머문다 (projection 과 같은 기준)');
-  }, skip: true); // 버그 B4
+  });
 }

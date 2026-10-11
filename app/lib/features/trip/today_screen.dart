@@ -744,6 +744,14 @@ class _GuideCard extends StatelessWidget {
 
 int _nowMin(DateTime now) => now.hour * 60 + now.minute;
 
+/// 운영시간 원문에 시간 범위가 정확히 하나일 때 여는 시각(분). 그 외는 판단하지 않는다 (planner validation.open_range 와 같은 규칙).
+int? _opensAt(String? openHours) {
+  if (openHours == null || openHours.contains('입실') || openHours.contains('퇴실')) return null;
+  final m = RegExp(r'(\d{1,2}):(\d{2})\s*[~\-]\s*(\d{1,2}):(\d{2})').allMatches(openHours).toList();
+  if (m.length != 1) return null;
+  return int.parse(m.first.group(1)!) * 60 + int.parse(m.first.group(2)!);
+}
+
 /// ETA 칩 (Components_Companion): 제시간 / n분 여유 (Green) · n분 늦음 (Amber) · HH:MM 종료 · 규칙 넘음 / n분 늦음 (Red, 대기 중인 지연 제안).
 class EtaChip extends StatelessWidget {
   const EtaChip({super.key, required this.delay, this.violation});
@@ -797,8 +805,13 @@ class _NowSection extends StatelessWidget {
     final now = _nowMin(trip.serverNow());
     final end = toMinutes(item.endAt);
     final arrived = toMinutes(since);
-    // 실제 도착 + 체류 = 예정 끝 (진행 기준). 없으면 계획 end_at
-    final until = arrived != null ? arrived + item.stayMinutes : end;
+    // 실제 도착부터, 고정 시각·문 여는 시각 전이면 그때까지 기다린 뒤 체류 = 예정 끝 (진행 기준, 서버 재계산과 같게 — audit-2026-10-12 B4).
+    // 없으면 계획 end_at
+    var start = arrived;
+    for (final w in [toMinutes(item.startTime), _opensAt(item.place?.openHours)]) {
+      if (start != null && w != null && w > start) start = w;
+    }
+    final until = start != null ? start + item.stayMinutes : end;
     final left = until == null ? null : until - now;
     final over = left != null && left < 0;
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
