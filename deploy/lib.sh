@@ -22,7 +22,10 @@ image_context() { case $1 in
   backend) echo . ;; embedding-onnx) echo services/embedding-onnx ;; gateway) echo infra/gateway ;;
   db) echo services/db ;; valhalla) echo services/valhalla ;; esac; }
 image_sources() { case $1 in
-  backend) echo backend data/places/snapshot data/places/manual scripts ;; *) image_context "$1" ;; esac; }
+  backend) echo backend data/places/snapshot data/places/manual scripts ;;
+  gateway) echo infra/gateway $WEB_SOURCES ;; *) image_context "$1" ;; esac; }
+# 웹 앱(gateway 이미지에 들어감)의 소스. 이게 바뀌면 gateway 이미지를 다시 보낸다
+WEB_SOURCES="app/lib app/web app/assets app/pubspec.yaml app/pubspec.lock"
 
 log()  { printf '\033[36m==>\033[0m %s\n' "$*" >&2; }
 ok()   { printf '\033[32m OK\033[0m %s\n' "$*" >&2; }
@@ -74,7 +77,7 @@ check_main() {
 current_tag() { git -C "$ROOT" rev-parse --short=10 HEAD; }
 
 # VM 에서 health 확인 (게이트웨이 /health, 서비스 문서, /agent/info). 실패하면 1
-VM_HEALTH_PATHS="/health /places/docs /planner/docs /agent/docs /safety/docs /routing/docs /trip/docs /docent/docs /account/docs /agent/info /routing/status"
+VM_HEALTH_PATHS="/health / /console/ /places/docs /planner/docs /agent/docs /safety/docs /routing/docs /trip/docs /docent/docs /account/docs /agent/info /routing/status"
 vm_health() {
   local tries=${1:-30} out
   out=$(vm "port=$API_PORT; for i in \$(seq 1 $tries); do curl -fsS http://127.0.0.1:\$port/health >/dev/null && break; sleep 2; done
