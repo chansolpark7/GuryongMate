@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:clock/clock.dart';
 
 import 'package:flutter/foundation.dart';
 
@@ -55,6 +56,12 @@ class ChatTurn {
   String? stepsSummary;
 
   bool thinking = false;
+
+  /// 경과 시간 (진행 카드 머리 · 접힌 요약). 이전 기록에서 불러온 턴은 null.
+  DateTime? startedAt;
+  DateTime? endedAt;
+  Duration? get elapsed => startedAt == null ? null : (endedAt ?? clock.now()).difference(startedAt!);
+
   final text = StringBuffer();
   final cards = <ChatCard>[];
   bool done = false;
@@ -272,6 +279,7 @@ class ChatController extends ChangeNotifier {
   }
 
   void _run(ChatTurn turn, Stream<SseEvent> stream) {
+    turn.startedAt = clock.now();
     turns.add(turn);
     busy = true;
     _notify();
@@ -339,7 +347,8 @@ class ChatController extends ChangeNotifier {
   void _finish(ChatTurn turn) {
     turn
       ..done = true
-      ..thinking = false;
+      ..thinking = false
+      ..endedAt ??= clock.now();
     for (final s in turn.steps) {
       if (s.running) s.status = turn.stopped || turn.error != null ? 'error' : 'done';
     }

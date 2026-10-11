@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show ScrollDirection;
 import 'package:provider/provider.dart';
@@ -397,7 +398,7 @@ class TurnView extends StatelessWidget {
           turn.collapsed ? ActivitySummary(turn: turn) : ActivityCard(turn: turn),
         ] else if (!turn.done && text.isEmpty) ...[
           const SizedBox(height: 12),
-          const _Thinking(label: '생각 중…'),
+          const ThinkingRow(label: '생각 중…'),
         ],
         if (text.isNotEmpty) ...[
           SizedBox(height: event != null ? 4 : 12),
@@ -486,16 +487,29 @@ class _UserBubble extends StatelessWidget {
       );
 }
 
-class _Thinking extends StatelessWidget {
-  const _Thinking({required this.label});
+/// "생각 중" 한 줄: 스피너 + 글자. 첫 응답 전(카드 없음)과 진행 카드 안(단계 사이)에서 같은 모양.
+/// 스피너 칸은 단계 목록의 아이콘 칸(20)과 같은 폭이라 카드 안에서 줄이 맞는다.
+class ThinkingRow extends StatelessWidget {
+  const ThinkingRow({super.key, required this.label});
   final String label;
 
   @override
   Widget build(BuildContext context) => Row(children: [
-        const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.ai)),
-        const SizedBox(width: 8),
-        Text(label, style: AppText.meta.copyWith(color: AppColors.ai)),
+        const SizedBox(
+          width: 20,
+          child: Center(child: SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.ai))),
+        ),
+        const SizedBox(width: 10),
+        Flexible(child: Text(label, style: AppText.meta.copyWith(color: AppColors.ai))),
       ]);
+}
+
+/// 경과 시간: 60초 미만 "12초", 넘으면 "1분 5초" (딱 떨어지면 "2분").
+String formatElapsed(Duration d) {
+  final s = d.inSeconds;
+  if (s < 60) return '$s초';
+  final m = s ~/ 60, r = s % 60;
+  return r == 0 ? '$m분' : '$m분 $r초';
 }
 
 /// 기억 칩 (18): "기억했어요 · {text}" + "나에 대해 ›" (31).
@@ -567,24 +581,94 @@ IconData stepIcon(String kind) => switch (kind) {
       _ => Icons.more_horiz,
     };
 
-/// 진행 중: "✨ {status}" + 단계 목록 (running 스피너 Purple / done Green ✓ + detail / error Red + detail).
-class ActivityCard extends StatelessWidget {
+/// 진행 중: "✨ {status}" + 경과 시간 + 단계 목록 (running 스피너 Purple / done Green ✓ + detail / error Red + detail).
+/// 턴이 끝나지 않았으면 항상 무언가 움직인다: ✨ 은은한 펄스, running 단계가 없으면(단계 사이 LLM 이 다음 행동을
+/// 생각하는 동안) 맨 아래 "다음 단계를 생각하고 있어요…" 줄 — 답 글자가 오기 시작하면 숨긴다.
+class ActivityCard extends StatefulWidget {
   const ActivityCard({super.key, required this.turn});
   final ChatTurn turn;
 
   @override
-  Widget build(BuildContext context) => Container(
-        padding: const EdgeInsets.all(14),
-        decoration: BoxDecoration(borderRadius: BorderRadius.circular(16), border: Border.all(color: AppColors.aiLine)),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Row(children: [
-            const Icon(Icons.auto_awesome, size: 16, color: AppColors.ai),
-            const SizedBox(width: 6),
-            Expanded(child: Text((turn.status ?? '요청을 확인하고 있어요').replaceFirst(RegExp(r'\.$'), ''), style: AppText.section.copyWith(fontSize: 15))),
-          ]),
-          if (turn.steps.isNotEmpty) ...[const SizedBox(height: 8), StepList(steps: turn.steps)],
+  State<ActivityCard> createState() => _ActivityCardState();
+}
+
+class _ActivityCardState extends State<ActivityCard> with SingleTickerProviderStateMixin {
+  late final _pulse = AnimationController(vsync: this, duration: const Duration(milliseconds: 1400), value: 1);
+  Timer? _tick;
+
+  bool get _live => !widget.turn.done;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _sync();
+  }
+
+  @override
+  void didUpdateWidget(ActivityCard old) {
+    super.didUpdateWidget(old);
+    _sync();
+  }
+
+  /// 진행 중이면 ✨ 펄스 + 1초마다 경과 시간 갱신, 끝나면 멈춘다. 애니메이션 줄이기(접근성)면 ✨ 는 가만히.
+  void _sync() {
+    final still = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
+    if (_live && !still) {
+      if (!_pulse.isAnimating) _pulse.repeat(reverse: true);
+    } else if (_pulse.isAnimating || _pulse.value != 1) {
+      _pulse
+        ..stop()
+        ..value = 1;
+    }
+    if (_live) {
+      _tick ??= Timer.periodic(const Duration(seconds: 1), (_) => mounted ? setState(_sync) : null);
+    } else {
+      _tick?.cancel();
+      _tick = null;
+    }
+  }
+
+  @override
+  void dispose() {
+    _tick?.cancel();
+    _pulse.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final turn = widget.turn;
+    final elapsed = turn.elapsed;
+    final thinking = _live && turn.text.isEmpty && !turn.steps.any((s) => s.running);
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(borderRadius: BorderRadius.circular(16), border: Border.all(color: AppColors.aiLine)),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          AnimatedBuilder(
+            key: const ValueKey('activity-sparkle'),
+            animation: _pulse,
+            builder: (_, child) {
+              final t = Curves.easeInOut.transform(_pulse.value);
+              return Opacity(opacity: 0.4 + 0.6 * t, child: Transform.scale(scale: 0.8 + 0.2 * t, child: child));
+            },
+            child: const Icon(Icons.auto_awesome, size: 16, color: AppColors.ai),
+          ),
+          const SizedBox(width: 6),
+          Expanded(child: Text((turn.status ?? '요청을 확인하고 있어요').replaceFirst(RegExp(r'\.$'), ''), style: AppText.section.copyWith(fontSize: 15))),
+          if (elapsed != null) ...[
+            const SizedBox(width: 8),
+            Text(formatElapsed(elapsed), key: const ValueKey('activity-elapsed'), style: AppText.caption.copyWith(color: AppColors.text3)),
+          ],
         ]),
-      );
+        if (turn.steps.isNotEmpty) ...[const SizedBox(height: 8), StepList(steps: turn.steps)],
+        if (thinking) ...[
+          if (turn.steps.isEmpty) const SizedBox(height: 10),
+          ThinkingRow(key: const ValueKey('activity-thinking'), label: turn.steps.isEmpty ? '생각하고 있어요…' : '다음 단계를 생각하고 있어요…'),
+        ],
+      ]),
+    );
+  }
 }
 
 class StepList extends StatelessWidget {
@@ -650,7 +734,8 @@ class _ActivitySummaryState extends State<ActivitySummary> {
   Widget build(BuildContext context) {
     final t = widget.turn;
     final failed = t.steps.any((s) => s.failed);
-    final summary = (t.stepsSummary ?? '').replaceFirst(' : ', ' · ');
+    final took = t.endedAt == null ? null : t.elapsed; // 끝난 턴만 걸린 시간 한 번
+    final summary = (t.stepsSummary ?? '').replaceFirst(' : ', ' · ') + (took == null ? '' : ' · ${formatElapsed(took)}');
     return Material(
       color: AppColors.background,
       borderRadius: BorderRadius.circular(12),
