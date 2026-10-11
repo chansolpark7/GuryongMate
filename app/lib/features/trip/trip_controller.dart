@@ -57,6 +57,8 @@ class TripTiming {
 /// - 모드는 `GET /trip/plans/{id}/state` 의 active 로 정한다 (README §3.1).
 /// - 이벤트는 위치 전송 응답과 폴링(`GET …/events?after=`) 두 경로로 받고, 같은 id 는 한 번만 처리한다 (events.md §4).
 /// - 화면에는 동시에 하나씩: 위험 구역 경고 1 + (도착 카드 또는 선제 미리보기) 1 + 토스트 1. 우선순위는 안전 > 일정 영향 > 안내 (events.md §2).
+typedef TodayChrome = ({double barBottom, Rect? fab});
+
 class TripController extends ChangeNotifier with WidgetsBindingObserver {
   TripController({
     required this.api,
@@ -154,6 +156,10 @@ class TripController extends ChangeNotifier with WidgetsBindingObserver {
   int pushDepth = 0;
   bool sheetOpen = false;
 
+  /// Today 가 지도 위에 둔 것 (Today·오버레이 공통 좌표): 위 막대 아래 y · AI·현재 위치 버튼 칸(숨으면 null).
+  /// 버튼이 패널을 따라 움직이므로 도착 카드·미리보기·토스트가 이것을 보고 버튼과 겹치지 않게 자리를 잡는다.
+  final todayChrome = ValueNotifier<TodayChrome?>(null);
+
   void Function({int? messageId, String? prefill, bool send, String? placeTitle})? onOpenAi;
   void Function(String placeId, {String? length, TripEvent? event})? onOpenGuide;
   void Function(TripEvent event)? onShowDetour;
@@ -209,6 +215,7 @@ class TripController extends ChangeNotifier with WidgetsBindingObserver {
     _stopCompanion();
     _chat?.removeListener(_onChat);
     session.removeListener(_onSession);
+    todayChrome.dispose();
     super.dispose();
   }
 

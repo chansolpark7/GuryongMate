@@ -82,7 +82,17 @@ class _TodayScreenState extends State<TodayScreen> {
   /// 위 막대(Pill·데모 칩·안내 카드) — 작은 창이 그 아래로만 뜨게 높이를 잰다.
   final _topBar = GlobalKey();
 
-  static const _fabTop = 222.0;
+  /// 패널 높이 (화면 비율, 시트 알림으로 갱신). 바뀌면 버튼·작은 창만 다시 그린다.
+  final _extent = ValueNotifier<double>(_half);
+  Size _size = Size.zero;
+
+  static const _half = 0.49;
+
+  /// 패널을 이보다 펼치면(0.86 쪽) 버튼을 숨긴다 — 접힘 0.19 · 반 0.49 에서는 보인다.
+  static const _fabHideAt = 0.6;
+
+  /// 오른쪽 버튼 칸: 현재 위치(44) · 10 · AI(56), 패널 위 12 (Map 과 같은 순서·간격).
+  static const _fabW = 56.0, _fabH = 44.0 + 10 + 56, _fabGap = 12.0;
 
   /// 14-S2: 지금 위치 → 첫 장소 도보 시간.
   int? _firstWalk;
@@ -100,6 +110,7 @@ class _TodayScreenState extends State<TodayScreen> {
   @override
   void dispose() {
     _tick?.cancel();
+    _extent.dispose();
     super.dispose();
   }
 
@@ -176,8 +187,26 @@ class _TodayScreenState extends State<TodayScreen> {
     return top + 11 + (box != null && box.hasSize ? box.size.height : 48) + 8;
   }
 
-  /// 오른쪽 AI FAB(56) + 현재 위치(44) 버튼 칸 (지도 크기 기준).
-  List<Rect> _fabRect(Size map) => [Rect.fromLTWH(map.width - 16 - 56, MediaQuery.paddingOf(context).top + _fabTop, 56, 56 + 12 + 44)];
+  /// 오른쪽 현재 위치(44) + AI(56) 버튼 칸 — 패널 위 가장자리에 붙어 함께 움직인다 (화면 = 지도 크기 기준).
+  /// 패널을 크게 펼치거나 위 막대(Pill·안내 카드)에 닿을 만큼 올라가면 숨긴다 (null).
+  Rect? _fabBox(Size size, double extent) {
+    if (size.isEmpty || extent > _fabHideAt) return null;
+    final r = _fabAt(size, extent);
+    return r.top < _topBarBottom() ? null : r;
+  }
+
+  /// 패널 위 가장자리에 붙인 버튼 칸 (보이든 숨든).
+  static Rect _fabAt(Size size, double extent) => Rect.fromLTWH(size.width - 16 - _fabW, size.height * (1 - extent) - _fabGap - _fabH, _fabW, _fabH);
+
+  /// 작은 창이 피할 칸 (버튼이 숨어 있으면 없음).
+  List<Rect> _fabRect(Size map) => [?_fabBox(map, _extent.value)];
+
+  /// 오버레이(도착 카드·미리보기·토스트)가 버튼을 피하게 지금 배치를 알린다. 프레임 뒤에만 (오버레이가 다시 그려진다).
+  void _publishChrome(TripController t) {
+    if (!mounted) return;
+    final v = (barBottom: _topBarBottom(), fab: _fabBox(_size, _extent.value));
+    if (t.todayChrome.value != v) t.todayChrome.value = v;
+  }
 
   /// 핀·남은 일정 행 → 지도에서 그 핀 + 작은 창 (탭 이동 없음, redesign §2.2).
   void _focus(PlanItem i) {
@@ -251,9 +280,12 @@ class _TodayScreenState extends State<TodayScreen> {
     if (beforeFirst) _ensureFirstWalk(t, next);
     final popup = _popup == null ? null : items.where((i) => i.id == _popup).firstOrNull;
     final top = MediaQuery.paddingOf(context).top;
+    afterFrame(() => _publishChrome(t));
 
     return Scaffold(
-      body: Stack(children: [
+      body: LayoutBuilder(builder: (context, box) {
+        _size = box.biggest;
+        return Stack(children: [
         Positioned.fill(child: _buildMap(c, t, items, done, current, target, popup)),
         Positioned(
           left: 16,
@@ -281,34 +313,52 @@ class _TodayScreenState extends State<TodayScreen> {
             ],
           ]),
         ),
-        Positioned(
-          right: 16,
-          top: top + _fabTop,
-          child: Column(children: [
-            AiFab(onTap: t.openAiFromFab, hasSuggestion: t.hasSuggestion),
-            const SizedBox(height: 12),
-            _RoundButton(
-              icon: Icons.my_location,
-              tooltip: '현재 위치',
-              onTap: () {
-                final l = _loc(t);
-                if (l != null && _ready) _map.move(l, 16.5);
-              },
-            ),
-          ]),
+        // 현재 위치 · AI 버튼: 패널 위 가장자리에 붙어 함께 움직이고, 크게 펼치면 투명 + 눌리지 않음 (Map 과 같은 방식, 2026-10-12)
+        ValueListenableBuilder<double>(
+          valueListenable: _extent,
+          builder: (context, extent, _) {
+            final fab = _fabBox(box.biggest, extent);
+            final at = fab ?? _fabAt(box.biggest, extent.clamp(0, _fabHideAt)); // 숨을 때는 사라지기 시작한 자리에서 흐려진다
+            return Positioned(
+              left: at.left,
+              top: at.top,
+              width: _fabW,
+              child: IgnorePointer(
+                ignoring: fab == null,
+                child: AnimatedOpacity(
+                  opacity: fab == null ? 0 : 1,
+                  duration: const Duration(milliseconds: 150),
+                  child: Column(key: const ValueKey('today-fab'), children: [
+                    _RoundButton(
+                      icon: Icons.my_location,
+                      tooltip: '현재 위치',
+                      onTap: () {
+                        final l = _loc(t);
+                        if (l != null && _ready) _map.move(l, 16.5);
+                      },
+                    ),
+                    const SizedBox(height: 10),
+                    AiFab(onTap: t.openAiFromFab, hasSuggestion: t.hasSuggestion),
+                  ]),
+                ),
+              ),
+            );
+          },
         ),
         NotificationListener<DraggableScrollableNotification>(
-          // 패널을 펼치면 노트 목록을 가볍게 다시 읽는다 (10초 안에 읽었으면 건너뜀)
           onNotification: (n) {
+            _extent.value = n.extent;
+            afterFrame(() => _publishChrome(t));
+            // 패널을 펼치면 노트 목록을 가볍게 다시 읽는다 (10초 안에 읽었으면 건너뜀)
             if (n.extent > 0.6) t.loadGuideNotes(minGap: const Duration(seconds: 10));
             return false;
           },
           child: DraggableScrollableSheet(
-            initialChildSize: 0.49,
+            initialChildSize: _half,
             minChildSize: 0.19,
             maxChildSize: 0.86,
             snap: true,
-            snapSizes: const [0.19, 0.49, 0.86],
+            snapSizes: const [0.19, _half, 0.86],
             builder: (context, scroll) => Container(
               decoration: const BoxDecoration(
                 color: AppColors.surface,
@@ -377,7 +427,8 @@ class _TodayScreenState extends State<TodayScreen> {
             ),
           ),
         ),
-      ]),
+      ]);
+      }),
     );
   }
 
@@ -453,11 +504,16 @@ class _TodayScreenState extends State<TodayScreen> {
         // 사용자 위치는 장소 Pin 위에 (새 위치로 부드럽게 옮겨 간다)
         if (loc != null) UserLocationLayer(point: loc, accuracy: acc, duration: t.markerGlide, dotKey: const ValueKey('today-location')),
         if (popup != null)
-          _PopupLayer(
-            point: _pt(popup),
-            // 위 막대(Pill·안내 카드) 아래 · 오른쪽 AI·현재 위치 버튼 밖으로 (2026-10-11)
-            minTop: _topBarBottom(),
-            avoid: _fabRect,
+          // 버튼이 패널을 따라 움직이므로 패널 높이가 바뀌면 자리를 다시 고른다
+          ValueListenableBuilder<double>(
+            valueListenable: _extent,
+            builder: (context, _, child) => _PopupLayer(
+              point: _pt(popup),
+              // 위 막대(Pill·안내 카드) 아래 · 오른쪽 AI·현재 위치 버튼 밖으로 (2026-10-11)
+              minTop: _topBarBottom(),
+              avoid: _fabRect,
+              child: child!,
+            ),
             child: _PlacePopup(
               item: popup,
               number: items.indexOf(popup) + 1,
@@ -533,12 +589,14 @@ class _RoundButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Tooltip(
         message: tooltip,
-        child: Material(
-          color: AppColors.surface,
-          shape: const CircleBorder(),
-          elevation: 3,
-          shadowColor: const Color(0x33111827),
-          child: InkWell(customBorder: const CircleBorder(), onTap: onTap, child: SizedBox(width: 44, height: 44, child: Icon(icon, color: AppColors.text))),
+        // Map 의 버튼과 같은 모양 (그림자 · 아이콘 20)
+        child: Container(
+          decoration: const BoxDecoration(shape: BoxShape.circle, boxShadow: AppShadow.floating),
+          child: Material(
+            color: AppColors.surface,
+            shape: const CircleBorder(),
+            child: InkWell(customBorder: const CircleBorder(), onTap: onTap, child: SizedBox(width: 44, height: 44, child: Icon(icon, size: 20, color: AppColors.text))),
+          ),
         ),
       );
 }
