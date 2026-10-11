@@ -65,7 +65,6 @@ def test_extend_stay_overstay_and_shift_next_not_in_past():
 
 # ---------- 4. 이미 지난 지연 알림 (큐) ----------
 
-@pytest.mark.xfail(strict=True, reason="버그 B6: 큐에서 기다린 지연 알림이 지난 뒤에도 옛 내용(떠난 곳 체류 늘리기)으로 전송됨")
 def test_queued_delay_is_refreshed_after_moving_on(env):
     """가옥거리에서 35분 늦어 밀림 delay 가 생겼지만 Agent 가 응답 중이라 큐에 남음 -> 그 사이 가옥거리를 떠나 구룡포항 도착
     -> 나중에 보내지는 선제 턴은 떠난 곳(가옥거리)의 체류를 늘리자거나 이미 도착한 구룡포항을 '다음'으로 말하면 안 된다."""
@@ -84,7 +83,6 @@ def test_queued_delay_is_refreshed_after_moving_on(env):
     assert "구룡포항 도착이" not in sent[0]["message"]
 
 
-@pytest.mark.xfail(strict=True, reason="버그 B6: 지연이 풀린 뒤에도 큐의 옛 지연 알림이 전송됨")
 def test_queued_delay_dropped_when_no_longer_late(env):
     """35분 늦어 밀림 delay 가 큐에 있는 동안 일정이 미뤄짐(다른 경로로 승인) -> 더는 늦지 않으므로 보내지 않는다."""
     roomy(env)
