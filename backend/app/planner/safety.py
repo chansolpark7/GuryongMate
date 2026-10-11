@@ -99,6 +99,8 @@ def visits(plan: PlanDetail, start: date | None = None, end: date | None = None,
                 v |= {"label": it.place.title, "lat": it.place.lat, "lng": it.place.lng}
                 if it.place.content_type:
                     v["content_type"] = it.place.content_type
+                if it.place.category_names:
+                    v["categories"] = it.place.category_names[:10]  # 해안(항구·해수욕장 …) 판단
             out.append(v)
     return out
 

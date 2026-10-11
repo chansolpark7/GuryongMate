@@ -246,6 +246,25 @@ def test_visits_handles_midnight_and_window(client, sc):
     assert [v["date"] for v in safety.visits(detail, date(2026, 10, 6), date(2026, 10, 6))] == ["2026-10-06"]
 
 
+def test_harbor_category_goes_to_safety_as_coast(client, sc):
+    """장소 분류(category_names)를 safety 에 보내 항구를 해안으로 판단하게 한다 (docs/safety/README.md §3)."""
+    PLACES["s-harbor"] = PlaceInfo(id="s-harbor", title="구룡포항", lat=35.989305, lng=129.555642, content_type="관광지",
+                                   category_names=["자연관광", "자연경관(하천‧해양)", "항구/포구"])
+    try:
+        sc.src = MockSources("wind_tomorrow", clock=lambda: NOW)
+        p = new_plan(client, start_date="2026-10-05", day_start="13:00", day_end="20:00")
+        ok(client.post(f"/planner/plans/{p['id']}/items", json={"place_id": "s-harbor", "start_time": "14:00"},
+                       headers=H), 201)
+        vs = safety.visits(PlanDetail.model_validate(get_plan(client, p["id"])))
+        assert vs[0]["categories"][-1] == "항구/포구"
+        r = ok(client.get(f"/planner/plans/{p['id']}/safety", headers=H))
+        harbor = r["items"][0]
+        assert harbor["risk"] == "danger" and "해안" in harbor["sensitivity"]
+        assert any(h["reason"].startswith("해안(항구) — ") for h in harbor["hazards"])
+    finally:
+        PLACES.pop("s-harbor", None)
+
+
 def _item(i, risk, reason=None, start="14:00"):
     return SafetyItem(item_id=i, day=1, date=date(2026, 10, 5), place_id="p", title=f"장소{i}", start_at=start,
                       end_at="15:00", risk=risk, unassessed_reason=reason, horizon="short_range", hazards=[],
