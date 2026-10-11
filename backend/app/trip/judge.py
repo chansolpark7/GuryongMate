@@ -299,16 +299,27 @@ def behind_key(day: int, ref: str, delay: float, ref_delay: float, step_min: flo
     return f"delay:behind:{day}:{ref}:{int((delay - ref_delay) // step_min)}"
 
 
-def behind_suggestion(plan: dict | None, day: int, track: Track | None, nxt: dict, at: datetime) -> dict | None:
+def _day_items(plan: dict | None, day: int) -> dict[int, dict]:
+    return {i["id"]: i for d in (plan or {}).get("days") or [] if d.get("day") in (None, day) for i in d["items"]}
+
+
+def behind_suggestion(plan: dict | None, day: int, track: Track | None, nxt: dict, at: datetime,
+                      projected: dict | None = None) -> dict | None:
     """밀림 추천안 (Agent 가 그대로 도구로 만들 변경). 남은 일정을 미루되 완료 항목·지난 시각은 건드리지 않는다.
-    - 머무는 중: 지금 장소 체류를 (계획 시작부터 지금까지 + 여유 15분, 5분 올림)으로 늘린다 -> 뒤 일정이 자동으로 밀린다.
-      계획 시작 기준이라 도착이 늦었던 만큼도 함께 흡수한다.
-    - 이동 중·첫 장소 전 (늘릴 체류가 없음): 다음 장소 시작 시각을 예상 도착(5분 올림)으로 정한다 -> 그 뒤 일정이 밀린다."""
-    items = {i["id"]: i for d in (plan or {}).get("days") or [] if d.get("day") in (None, day) for i in d["items"]}
+    - 머무는 중: 지금 장소 체류를 계획 시작부터 (지금 + 여유 15분)과 재계산의 그 장소 종료 중 늦은 때까지로 늘린다 (5분 올림)
+      -> 뒤 일정이 자동으로 밀린다. 계획 시작 기준이라 도착이 늦었던 만큼도 함께 흡수한다 — 늦게 도착해 남은 체류가 길면
+      재계산 종료까지 (audit-2026-10-12 B5: 지금 + 15분만 보면 승인해도 30분 넘게 늦었다).
+    - 이동 중·첫 장소 전 (늘릴 체류가 없음): 다음 장소 시작 시각을 예상 도착(5분 올림)으로 정한다 -> 그 뒤 일정이 밀린다.
+    projected: 재계산 일정 PlanDetail (projection.plan)."""
+    items = _day_items(plan, day)
     now_min = at.hour * 60 + at.minute
     cur = items.get(track.item_id) if track is not None and track.state == "visiting" else None
     if cur and cur.get("status") != "done" and cur.get("start_at") and cur.get("stay_minutes") is not None:
-        stay = max(_ceil5(now_min + BEHIND_MARGIN_MIN - minutes_of(cur["start_at"])), cur["stay_minutes"] + 5)
+        until = now_min + BEHIND_MARGIN_MIN
+        here = _day_items(projected, day).get(cur["id"])
+        if here and here.get("end_at"):
+            until = max(until, minutes_of(here["end_at"]))
+        stay = max(_ceil5(until - minutes_of(cur["start_at"])), cur["stay_minutes"] + 5)
         return {"kind": "extend_stay", "item_id": cur["id"], "title": (cur.get("place") or {}).get("title"),
                 "stay_minutes": stay, "from_stay_minutes": cur["stay_minutes"]}
     if nxt.get("eta"):
@@ -348,7 +359,7 @@ def judge_delay(projection: dict, at: datetime, known: set[str] | frozenset = fr
         keys.append(behind_key(day, ref, delay, ref_delay, behind_min))
         payload["plan_version"] = (plan or {}).get("version")
         payload["end"] = {"planned": _day_end(plan, day), "expected": _day_end(projection.get("plan"), day)}
-        payload["suggest"] = behind_suggestion(plan, day, track, payload["next"], at)
+        payload["suggest"] = behind_suggestion(plan, day, track, payload["next"], at, projection.get("plan"))
         if not fresh:  # 새 위반이 없으면 밀림이 이 이벤트의 이유다 (밀림도 이미 알렸으면 policy.fresh 가 뺀다)
             payload["reason"] = "behind_schedule"
             item_ids = {nxt["item_id"]}

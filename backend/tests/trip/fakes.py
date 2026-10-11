@@ -2,6 +2,7 @@
 
 가짜 planner 는 실제 planner 의 시간 모델(docs/planner/README.md §2.1, §8.2)을 단순하게 흉내 낸다:
 도보 이동시간 = 직선거리 × 1.3 / 70m, 차량 = 직선거리 × 1.3 / 400m + 주차 5분 (분 올림), 운영시간 밖·하루 초과·고정 시각 놓침만 본다.
+재계산(actual)에서는 문을 열기 전에 도착하면 기다린다.
 도착지에 road(실제 길 / 직선 비율)가 있으면 1.3 대신 그 값 (항구를 돌아가는 방파제, 해안도로로 돌아가는 카페 — 실제 길찾기 거리로 맞춤).
 """
 import math
@@ -168,9 +169,10 @@ class FakePlanner:
                 continue
             if actual and it["order"] == pivot and anchor is not None:
                 arrive = actual["arrived"]
-                end = max(arrive + it["stay"], now)
-                rows.append({"id": it["id"], "arrive": arrive, "start": arrive, "end": end})
-                self._check_open(place, it, arrive, end, vs)
+                start = self._opened(place, arrive)
+                end = max(start + it["stay"], now)
+                rows.append({"id": it["id"], "arrive": arrive, "start": start, "end": end})
+                self._check_open(place, it, start, end, vs)
                 t, prev = end, place
                 continue
             if actual and it["order"] == pivot and moving is not None:
@@ -180,6 +182,8 @@ class FakePlanner:
                     t = max(t, now)
                 arrive = t + (leg_min(prev, place, it["mode"]) if prev else 0)
             start = max(arrive, hm(it["start_time"])) if it["start_time"] else arrive
+            if actual:  # 실제 진행 기준: 문을 열기 전에 도착하면 기다린다 (planner §8.2)
+                start = self._opened(place, start)
             if it["start_time"] and arrive > hm(it["start_time"]):
                 vs.append({"code": "fixed_time_missed", "severity": "error", "day": 1, "item_id": it["id"],
                            "constraint_id": None, "message": f"{place['title']} 고정 시각을 놓쳐요."})
@@ -191,6 +195,10 @@ class FakePlanner:
             vs.append({"code": "day_overflow", "severity": "error", "day": 1, "item_id": rows[-1]["id"],
                        "constraint_id": None, "message": f"일정이 {fmt(rows[-1]['end'])}에 끝나 종료 목표 {p['day_end']}를 넘어요."})
         return rows, vs
+
+    @staticmethod
+    def _opened(place: dict, start: int) -> int:
+        return max(start, hm(place["open"][0])) if "open" in place else start
 
     @staticmethod
     def _check_open(place: dict, it: dict, start: int, end: int, vs: list[dict]) -> None:

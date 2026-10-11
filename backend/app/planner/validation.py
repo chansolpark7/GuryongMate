@@ -190,12 +190,18 @@ def build_schedule(
                     start = max(arrive, fixed)
                 end = start + it.stay_minutes
 
+            hours = open_range(place.open_hours) if place is not None else None
+            if now_day is not None and hours and start < hours[0]:
+                # 실제 진행 기준: 문을 열기 전에 도착하면 열 때까지 기다린다 (고정 시각과 같은 방식).
+                # 일찍 온 것을 '운영시간 밖' 새 위반(-> 지연 선제 턴)으로 보지 않는다 (audit-2026-10-12 B3). 계획 기준은 그대로 위반
+                start = hours[0]
+                end = max(start + it.stay_minutes, now_day.now) if phase == "here" else start + it.stay_minutes
+
             if place is not None:
                 if date.weekday() in closed_weekdays(place.rest_date):
                     violations.append(Violation(
                         code="closed_day", severity="warning", day=d, item_id=it.id,
                         message=f"'{name}' 는 {WEEKDAYS[date.weekday()]}요일 휴무일 수 있습니다 (휴무: {place.rest_date.strip()})."))
-                hours = open_range(place.open_hours)
                 if hours and (start < hours[0] or end > hours[1]):
                     violations.append(Violation(
                         code="outside_open_hours", severity="warning", day=d, item_id=it.id,
@@ -207,7 +213,8 @@ def build_schedule(
 
         if last_end is not None and last_end > day_end:
             violations.append(Violation(
-                code="day_overflow", severity="error", day=d, item_id=views[-1].id if views else None,
+                code="day_overflow", severity="error", day=d,
+                item_id=next((v.id for v in reversed(views) if v.status != "skipped"), None),  # 마지막으로 다니는 항목
                 message=f"{d}일차 일정이 {fmt(last_end)} 에 끝나 목표 종료 시각 {fmt(day_end)} 을 {last_end - day_end}분 넘습니다."))
         days.append(DayView(day=d, date=date, weekday=WEEKDAYS[date.weekday()],
                             end_at=fmt(last_end) if last_end is not None else None, items=views))

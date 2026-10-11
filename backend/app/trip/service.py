@@ -129,8 +129,11 @@ def mark_seen(db: Session, user_id: str, plan_id: int, event_id: int, clock: Clo
 
 # ---------- 이벤트 기록 ----------
 
-def _known(db: Session, td: TripDay) -> set[str]:
-    return policy.known_causes(list(db.scalars(select(TripEvent.cause_key).where(TripEvent.trip_day_id == td.id))))
+def _known(db: Session, td: TripDay, not_queued: bool = False) -> set[str]:
+    q = select(TripEvent.cause_key).where(TripEvent.trip_day_id == td.id)
+    if not_queued:
+        q = q.where(TripEvent.status != "queued")
+    return policy.known_causes(list(db.scalars(q)))
 
 
 def _last_delay(db: Session, td: TripDay, not_queued: bool = False) -> tuple[int, float | None] | None:
@@ -417,6 +420,52 @@ def _project(clients: Clients, td: TripDay, track: judge.Track, now: datetime, a
         return None
 
 
+def _judge_delay(db: Session, td: TripDay, proj: dict, at: datetime, known: set[str], plan: dict,
+                 track: judge.Track) -> judge.Detection | None:
+    """지연 판정 (새 delay 감지). 새것이 없으면 큐에서 기다리는 delay 를 지금 상황으로 고친다 (_refresh_queued_delay)."""
+    d = judge.judge_delay(proj, at, known, behind_min=settings.behind_min, plan=plan, day=td.day, track=track,
+                          notice=_last_delay(db, td))
+    if d is None:
+        _refresh_queued_delay(db, td, proj, at, plan, track)
+    return d
+
+
+def _refresh_queued_delay(db: Session, td: TripDay, proj: dict, at: datetime, plan: dict,
+                          track: judge.Track) -> None:
+    """큐에서 기다리는(Agent 응답 중·쿨다운) delay 를 지금 상황으로 (audit-2026-10-12 B6).
+    만든 때의 내용으로 늦게 보내면 떠난 곳 체류를 늘리자거나 이미 도착한 곳을 '다음'으로 말한다.
+    - 지금 재판정(보낸 적 있는 원인·지연만 기준, 큐의 것은 뺌)에 새로 알릴 것이 남아 있으면 가장 새 delay 의 문구·payload·항목을 바꾼다
+      (이유·다음 일정·추천 대상이 달라졌을 때만).
+    - 없으면(지연이 풀림, 또는 이미 알린 것뿐) suppressed.
+    보내는 중(전송 잠금)이면 그대로 둔다. 앱 활동이 없어 보류 중이면 활동 복귀 때 재판정한다 (_revalidate)."""
+    lock = _sending.get(td.id)
+    if (lock is not None and lock.locked()) or not _is_active(td, at):
+        return
+    rows = list(db.scalars(select(TripEvent).where(TripEvent.trip_day_id == td.id, TripEvent.type == "delay",
+                                                   TripEvent.status == "queued").order_by(TripEvent.id)))
+    if not rows:
+        return
+    sent = _known(db, td, not_queued=True)
+    cur = judge.judge_delay(proj, at, sent, behind_min=settings.behind_min, plan=plan, day=td.day, track=track,
+                            notice=_last_delay(db, td, not_queued=True))
+    if cur is None or policy.cause_parts(cur.cause_key) <= sent:
+        for e in rows:
+            e.status = "suppressed"
+        log.info("trip: 큐의 지연 알림 %s 은 더는 유효하지 않아 suppressed (여행일 %s)", [e.id for e in rows], td.id)
+        return
+    e = rows[-1]
+    old = e.payload or {}
+
+    def gist(p: dict) -> tuple:
+        sg = p.get("suggest") or {}
+        return p.get("reason"), (p.get("next") or {}).get("item_id"), sg.get("kind"), sg.get("item_id")
+
+    if gist(old) == gist(cur.payload):  # 같은 다음 일정·같은 추천: 몇 분 차이는 그대로 둔다 (다시 묻는 기준도 그대로)
+        return
+    e.message, e.payload, e.item_ids, e.now = cur.message, cur.payload, cur.item_ids, cur.at
+    e.cause_key = "|".join(sorted(policy.cause_parts(e.cause_key) | policy.cause_parts(cur.cause_key)))
+
+
 def _apply_projection(td: TripDay, proj: dict) -> None:
     td.delay_minutes = proj.get("delay_minutes")
     titles = {i["id"]: (i.get("place") or {}).get("title") or i["place_id"]
@@ -511,8 +560,7 @@ def record_location(db: Session, user_id: str, plan_id: int, points: list[Locati
         proj = _project(clients, td, track, last.recorded_at, auth)
         if proj is not None:
             _apply_projection(td, proj)
-            d = judge.judge_delay(proj, last.recorded_at, known, behind_min=settings.behind_min, plan=plan,
-                                  day=td.day, track=track, notice=_last_delay(db, td))
+            d = _judge_delay(db, td, proj, last.recorded_at, known, plan, track)
             if d:
                 dets.append(d)
         by_id = {s.item_id: s for s in spots}
@@ -564,8 +612,7 @@ def tick_trip(db: Session, td: TripDay, clients: Clients, clock: Clock, now: dat
             delay_valid = judge.judge_delay(proj, now, frozenset(), behind_min=settings.behind_min, plan=plan,
                                             day=td.day, track=track,
                                             notice=_last_delay(db, td, not_queued=True)) is not None
-        d = judge.judge_delay(proj, now, known, behind_min=settings.behind_min, plan=plan, day=td.day,
-                              track=track, notice=_last_delay(db, td))
+        d = _judge_delay(db, td, proj, now, known, plan, track)
         if d:
             dets.append(d)
 

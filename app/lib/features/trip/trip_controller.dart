@@ -785,9 +785,15 @@ class TripController extends ChangeNotifier with WidgetsBindingObserver {
 
   PlanItem? item(int? id) => id == null ? null : plan.plan?.item(id);
 
-  /// 대기 중인 지연 선제 제안 (ETA 칩 Red 판단).
-  TripEvent? get pendingDelay =>
-      events.where((e) => e.type == 'delay' && e.agentReady && (suggestions.contains(e.id) || _chat?.proposalEntry(e.agent?.proposalId ?? -1)?.state == ProposalState.pending)).lastOrNull;
+  /// 대기 중인 지연 선제 제안 (ETA 칩 Red 판단). 알림이 가리킨 다음 일정이 지금 다음 일정일 때만 —
+  /// 그 일정을 지나면(도착·출발) 지난 알림이라 칩은 지금 지연으로 그린다 (제안·점은 대화에 그대로 남는다, audit-2026-10-12 B2).
+  TripEvent? get pendingDelay => events
+      .where((e) =>
+          e.type == 'delay' &&
+          e.agentReady &&
+          (e.payload['next'] as Map?)?['item_id'] == state?.nextItemId &&
+          (suggestions.contains(e.id) || _chat?.proposalEntry(e.agent?.proposalId ?? -1)?.state == ProposalState.pending))
+      .lastOrNull;
 
   TripEvent? event(int id) => _events[id];
 }

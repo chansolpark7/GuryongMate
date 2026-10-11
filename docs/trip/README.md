@@ -166,8 +166,9 @@
   - payload: `reason`, `delay_minutes`, `next` {item_id, title, planned_start, eta, start_at}, `end` {planned, expected}(오늘 종료: 기준 일정 / 재계산),
     `plan_version`, `suggest`(추천 변경, 아래), `new_violations`(함께 생긴 위반, 없으면 빈 목록).
   - 추천 변경(`suggest`, trip 이 계산하고 Agent 는 그대로 도구로 만든다. 완료 항목·지난 시각은 건드리지 않는다):
-    - 머무는 중 → `{"kind": "extend_stay", item_id, title, stay_minutes, from_stay_minutes}`: 지금 장소 체류를 (계획 시작부터 지금까지 + 여유 15분, 5분 올림)으로 늘린다.
-      planner 가 뒤 일정을 자동으로 미룬다. 계획 시작 기준이라 도착이 늦었던 만큼도 함께 흡수한다.
+    - 머무는 중 → `{"kind": "extend_stay", item_id, title, stay_minutes, from_stay_minutes}`: 지금 장소 체류를 계획 시작부터 (지금 + 여유 15분)과
+      재계산의 그 장소 종료 중 늦은 때까지로 늘린다 (5분 올림). planner 가 뒤 일정을 자동으로 미룬다. 계획 시작 기준이라 도착이 늦었던 만큼도 함께 흡수한다
+      (늦게 도착해 남은 체류가 길면 재계산 종료까지 — 지금 + 15분만 보면 승인해도 30분 넘게 늦었다, `audit-2026-10-12.md` B5).
     - 이동 중·첫 장소 전 (늘릴 체류가 없음) → `{"kind": "shift_next", item_id, title, start_time, from_start}`: **다음 장소 시작 시각을 예상 도착(5분 올림)으로 고정**한다 (최소한의 변경).
       그 뒤 일정이 밀리고 승인하면 `delay_minutes` 가 0 근처로 돌아온다. 고정 시각은 남으므로 그보다 더 늦게 도착할 것 같으면 `fixed_time_missed` 위반 delay 가 된다.
   - Agent 선제 턴 (docs/agent/README.md §11.2): 늦어진 정도·영향(다음 일정·오늘 종료) → 추천안 1개(위 변경, 미뤄서 새 문제가 생기면 함께 고침) → "다른 방법" 한 줄(체류 줄이기·한 곳 빼기로 원래 시간 맞추기).
@@ -239,6 +240,9 @@
 - **우선순위**: 안전(`near_hazard`, `safety_raised`) > 일정 영향(`delay`) > 안내(`arrived`, `departed`). 한 요청에서 여러 이벤트가 나오면 이 순서로 id 를 매긴다.
 - **단계 3은 한 번에 하나.** 진행 중인 선제 턴이 있거나 Agent 세션이 응답 중(409 `agent_busy`)이면 `queued` 로 두고 끝난 뒤 보낸다. 큐에서는 우선순위 높은 것부터, 같은 원인의 오래된 것은 `suppressed`.
   - 같은 원인 묶음: `delay` 는 하나 (새 이벤트가 그날 일정의 지금 위반 전체를 담는다), `safety_raised` 는 같은 항목 묶음끼리.
+  - **큐에서 기다리는 `delay` 는 지금 상황으로 (2026-10-12, `audit-2026-10-12.md` B6)**: 위치·틱에서 새 delay 가 없으면, 큐의 delay 를 보낸 적 있는 원인·지연만 기준으로 다시 판정해
+    새로 알릴 것이 없으면(지연이 풀림) `suppressed`, 이유·다음 일정·추천 대상이 바뀌었으면 가장 새 것의 문구·payload·`item_ids`·`now` 를 지금 것으로 바꾼다
+    (만든 때 그대로 늦게 보내면 떠난 곳 체류를 늘리자거나 이미 도착한 곳을 '다음'으로 말했다). 보내는 중이거나 앱 활동이 없어 보류 중이면 건드리지 않는다 (보류는 활동 복귀 때 재판정).
   - 보내는 때: 위치·틱 요청의 응답 뒤(백그라운드, LLM 응답을 기다리지 않게)와 백그라운드 틱마다. 한 여행일의 전송은 한 번에 하나만 돈다 (프로세스 안 잠금).
   - Agent 가 응답 중(409 `agent_busy`)이면 `queued` 로 두고 `last_error` 만 남긴 뒤 다음 틱에 다시 보낸다 (실패로 세지 않는다 — 대화가 길어져도 버리지 않게).
   - 그 밖의 실패(접근 불가, 5xx, 404, 세션을 정하지 못함)는 `attempts`·`last_error` 를 남기고 **간격을 늘려** 다시 보낸다:
