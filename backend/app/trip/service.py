@@ -231,17 +231,63 @@ def _resolve_session(clients: Clients, plan_id: int, auth: dict) -> str | None:
         return None
 
 
-def prepare_guide(clients: Clients, user_id: str, plan_id: int, place_ids: list[str] | None = None) -> None:
-    """가이드 자동 준비 요청 (여행 시작 때 일정 전체, 도착 때 그 장소. docs/docent/README.md §3.2). 응답 뒤 백그라운드로 부른다.
-    노트가 이미 있거나 준비 중·실패면 agent 가 건너뛴다. 실패해도(agent 접근 불가·호출 수 제한 429) 여행에는 영향 없음 — 로그만."""
+def prepare_guide(clients: Clients, user_id: str, plan_id: int, place_ids: list[str] | None = None) -> bool:
+    """가이드 자동 준비 요청 (여행 시작 때 일정 전체, 도착 때 그 장소, 틱에서 stale 노트. docs/docent/README.md §3.2).
+    응답 뒤 백그라운드로 부른다. 노트가 이미 있거나 준비 중·실패면 agent 가 건너뛴다.
+    실패해도(agent 접근 불가·호출 수 제한 429) 여행에는 영향 없음 — 로그만. 요청이 받아들여졌는지 돌려준다."""
     try:
         job = clients.agent.prepare_guide(plan_id, place_ids, background_auth(user_id))
         log.info("trip: 가이드 자동 준비 요청 (계획 %s, %s): 작업 %s %s곳, 이어서 %s곳", plan_id, place_ids or "전체",
                  job.get("status"), job.get("total"), len(job.get("queued") or []))
+        return True
     except UpstreamError as e:
         log.warning("trip: 가이드 자동 준비 요청 실패 (계획 %s, %s): %s", plan_id, place_ids or "전체", e)
     except Exception:
         log.exception("trip: 가이드 자동 준비 요청 중 오류 (계획 %s)", plan_id)
+    return False
+
+
+# 틱의 stale 노트 다시 준비가 실패하면(한도 초과·접근 불가) 이 시각(monotonic)까지 그 여행일은 다시 묻지 않는다 (틱마다 같은 실패 로그 방지)
+_refresh_wait: dict[int, float] = {}
+REFRESH_RETRY_SEC = 300
+
+
+def refresh_guides(trip_id: int, clients: Clients, clock: Clock, now: datetime | None = None) -> list[str]:
+    """관심사가 바뀐 뒤 오늘 남은 장소의 노트를 도착 전에 다시 준비 (틱, docs/trip/README.md §4.3, docs/docent/README.md §3.2).
+    앱 활동 중일 때만(§4.1, 앱이 꺼져 있으면 LLM 비용을 쓰지 않는다), 오늘 남은 항목(planned·visiting) 중 노트가 stale 인 장소로
+    agent 자동 준비를 부른다. agent 가 바로 pending 으로 표시하므로 다음 틱에는 다시 부르지 않는다. 요청한 place_id 들.
+    now: 활동을 볼 기준 시각의 하한 (틱 API 의 판정 시각, dispatch 와 같다)."""
+    if _time.monotonic() < _refresh_wait.get(trip_id, 0):
+        return []
+    with SessionLocal() as db:
+        td = db.get(TripDay, trip_id)
+        if td is None or td.ended_at is not None:
+            return []
+        ref = max(clock.now(), _kst(now)) if now is not None else clock.now()
+        if not _is_active(td, ref):
+            return []
+        user_id, plan_id, day = td.user_id, td.plan_id, td.day
+    auth = background_auth(user_id)
+    try:
+        spots = judge.spots_from_plan(clients.planner.get_plan(plan_id, auth), day)
+        remaining = {s.place_id for s in spots if s.item_id in judge.remaining_ids(spots)}
+        if not remaining:
+            return []
+        notes = clients.docent.list_notes(plan_id, auth)
+    except UpstreamError as e:
+        log.warning("trip 틱: 가이드 노트 상태를 보지 못함 (계획 %s): %s", plan_id, e)
+        return []
+    stale = [s.place_id for s in spots if s.place_id in remaining
+             and any(n["place_id"] == s.place_id and n["status"] == "stale" for n in notes)]
+    stale = list(dict.fromkeys(stale))  # 일정 순서, 같은 장소는 한 번
+    if not stale:
+        return []
+    log.info("trip 틱: 남은 장소의 노트가 stale -> 다시 준비 (계획 %s): %s", plan_id, stale)
+    if prepare_guide(clients, user_id, plan_id, stale):
+        _refresh_wait.pop(trip_id, None)
+    else:
+        _refresh_wait[trip_id] = _time.monotonic() + REFRESH_RETRY_SEC
+    return stale
 
 
 def start(db: Session, user_id: str, plan_id: int, session_id: str | None, auth: dict, clients: Clients,
@@ -629,6 +675,7 @@ def tick_all(clients: Clients, clock: Clock, users: list[str] | None = None) -> 
                 td = db.get(TripDay, trip_id, with_for_update=True, populate_existing=True)
                 if td is not None:
                     tick_trip(db, td, clients, clock)
+            refresh_guides(trip_id, clients, clock)  # 선제 턴(LLM 응답을 기다림)보다 먼저 — 바로 돌아온다
             dispatch(trip_id, clients, clock)
         except Exception:
             log.exception("trip 틱 실패 (여행일 %s)", trip_id)

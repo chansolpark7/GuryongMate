@@ -53,7 +53,8 @@ LLM은 일정을 직접 바꾸지 않는다. 결과는 두 종류의 **카드**�
 
 // SessionDetail = SessionView + messages (화면에 보일 것만, 오래된 순)
 {"messages": [
-  {"id": 101, "role": "user", "content": "비 오면 실내로 바꿔줘", "created_at": "...", "steps": [], "steps_summary": null, "cards": []},
+  {"id": 101, "role": "user", "content": "비 오면 실내로 바꿔줘", "created_at": "...", "place_id": null,  // 장소 맥락 질문이면 그 장소 (§3)
+   "steps": [], "steps_summary": null, "cards": []},
   {"id": 102, "role": "assistant", "content": "15시부터 비 예보가 있어 …", "created_at": "...",
    "steps": [Step, ...],                                   // 이 답변을 만들며 거친 단계 (§3.2)
    "steps_summary": "3단계 완료 : 장소 찾기, 일정 조정, 변경안 만들기",
@@ -69,10 +70,16 @@ LLM은 일정을 직접 바꾸지 않는다. 결과는 두 종류의 **카드**�
 
 | 메서드 | 경로 | 본문 | 성공 |
 |---|---|---|---|
-| POST | `/agent/sessions/{session_id}/chat` | `{"message": "1~4000자"}` | 200 `text/event-stream` (§3.1) |
+| POST | `/agent/sessions/{session_id}/chat` | `{"message": "1~4000자", "place_id"?: "장소"}` | 200 `text/event-stream` (§3.1) |
 | POST | `/agent/sessions/{session_id}/chat?stream=false` | 같음 | 200 `ChatResult` (끝난 뒤 한 번에) |
 | POST | `/agent/sessions/{session_id}/events` | `{"event": Event, "trip": TripState}` | 200 `ChatResult` — 선제 턴 (trip 이 부른다, §11.2) |
 
+- **장소 맥락이 있는 질문** `place_id` (선택, 1~64자. 앱 가이드 노트 화면에서 그 장소에 대해 묻는다, 2026-10-11):
+  - 그 턴의 맥락에 숨김 한 줄 "## 지금 보는 장소 — 사용자가 '{장소 이름}'(place_id …) 가이드 노트를 보며 묻는다. 먼저 `get_guide_note`·`search_passages`(그 장소)로
+    근거를 찾고 짧게 이 장소 중심으로" 가 들어간다 (대화 기록에 사용자 메시지로 남지 않는다). 장소 이름은 일정의 제목, 없으면 places 상세.
+  - 여행 중이 아니어도 현장 해설처럼 `get_guide_note` 도구와 "## 현장 해설" 규칙(§11.3.1, 웹 검색 턴당 상한 포함)을 준다. 일정 변경 요청이면 지금처럼 제안 카드.
+  - 그 턴의 사용자 메시지와 답(도구 기록 행까지) 모두에 `place_id` 를 저장하고 `MessageView.place_id` 로 돌려준다 → 앱이 장소별로 걸러 보여준다. 없으면 `null`.
+  - **세션은 그대로 하나**다 (장소마다 나누지 않는다 — 맥락·제안·선제 턴이 이어진다). `place_id` 가 없으면 지금과 같다.
 - 응답은 **SSE**다. 각 이벤트는 `event: <이름>` 줄과 `data: <JSON>` 줄, 빈 줄로 끝난다.
 - 같은 세션에서 응답이 진행 중이면 409 `agent_busy`이고, 스트림은 시작되지 않는다.
 - 턴이 `error`로 끝나거나 연결이 끊겨도, 그때까지의 대화(사용자 메시지, 완결된 도구 기록)와 이미 만든 카드는 기록에 남는다. 오류 문구는 assistant 메시지로 남는다. 연결이 끊기면 서버는 그 턴을 중단한다.
@@ -248,6 +255,12 @@ LLM은 일정을 직접 바꾸지 않는다. 결과는 두 종류의 **카드**�
 
 - 매 턴 시스템 프롬프트에 **현재 일정**(이어받은 제안이 있으면 그것을 적용한 상태)이 들어간다. 옛 일정 스냅샷은 기록에 쌓지 않는다.
 - 카드 동작(승인·거절·덮어쓰기·추가·빼기)은 숨김 메시지 `[알림] …`으로 기록되어 다음 턴의 LLM이 안다.
+- 장소 맥락 질문(`place_id`, §3)의 "## 지금 보는 장소" 줄은 그 턴의 맥락에만 있고 기록에는 남지 않는다 (다음 턴은 장소 질문과 답을 기록으로만 안다).
+- **답변 형식 (화면, 2026-10-11)**: 앱이 가벼운 마크다운(문단·`**굵게**`·글머리/번호 목록)을 그린다. 음성 읽기는 이번 범위가 아니라 화면 기준으로 쓴다.
+  - 계획 모드: 핵심 정보(장소·시각·이유)는 굵게, 여러 항목은 짧은 글머리 목록, 2~3문장마다 빈 줄로 문단. 제목(#)·표·이모지 금지.
+  - 동행 모드(§11.3): 1~3문장 취지 그대로 짧게, 2문단까지, 핵심 한두 단어만 굵게, 목록 금지.
+  - 선제 턴(§11.2): 근거 → 추천안 → '다른 방법' 세 문단 (문단마다 한 문장).
+  - 가이드 노트는 `docs/docent/README.md` §3.1.
 - 선제 턴은 숨김 메시지 `[이벤트] …`로 시작한다 (§11.2). 여행 중이면 현재 상황 블록이 함께 들어간다 (§11.3).
 - 최근 메시지 `AGENT_HISTORY_MESSAGES`개(기본 40)만 LLM에 넘긴다.
 - Claude(§7.1)는 현재 일정 등 맥락을 시스템 프롬프트가 아니라 이번 사용자 메시지 뒤 system 메시지로 받는다 (고정 규칙을 캐시하고 기록을 덧붙이기만 하려고).
@@ -421,6 +434,7 @@ Sonnet 5.5 의 thinking 블록도 읽지 못한다. Haiku 5.5 에는 서버측 f
   가이드 노트 JSON 은 화면에 흐르지 않으니 400자 조각으로 보낸다.
 - **상태가 없다**: 호출마다 메시지 목록에서 지금 상황을 읽는다 — 턴의 사용자 메시지(하네스 안내 `[시스템] …` 제외), 그 뒤 assistant 메시지 수(각본의 몇 번째 단계),
   선제 턴(`[이벤트] 일정 지연: …` → `delay`, `일정 밀림` → `delay` + reason `behind_schedule`), 가이드 준비(시스템 프롬프트·`## 장소 (place_id …)`), 동행 모드(`## 현재 상황 (여행 중)`), 대기 제안(`## 승인 대기 중인 제안`),
+  장소 맥락 질문(system 메시지의 `## 지금 보는 장소` → 장소 id·이름. `when.place` 각본을 일반 각본보다 먼저 본다),
   검토 관문이 되돌린 호출(마지막 메시지가 검토 안내).
 - **각본 파일** `backend/app/agent/scripts/*.json` (이름순으로 이어 붙이고, 위에서부터 처음 맞는 턴을 쓴다. 파일을 고치면 다음 호출부터 다시 읽는다):
 
@@ -428,7 +442,7 @@ Sonnet 5.5 의 thinking 블록도 읽지 못한다. Haiku 5.5 에는 서버측 f
   {"fallback": "맞는 각본이 없을 때 답 (기본: 데모 문장으로 말해 달라는 안내)",
    "turns": [{"id": "scene3_keep_museum",
               "when": {"user": "과메기\s*문화관.*유지", "pending": true},   // user(정규식) | event(delay·safety_raised) | reason(behind_schedule, 없으면 모든 이유) | guide_place(정규식)
-                                                                           // | mode(plan·guide) | pending | system(정규식). 모두 맞아야 함
+                                                                           // | place(정규식, 장소 맥락 질문) | mode(plan·guide) | pending | system(정규식). 모두 맞아야 함
               "steps": [{"thinking": "…", "tools": [{"name": "discard_changes"}]},
                         {"tools": [{"name": "add_rule", "args": {"type": "must_include", "place_id": "kto-2660046"}}]},
                         {"tools": [{"name": "update_item", "args": {"item_id": "$item:kto-2610501", "stay_minutes": 30}}]},
@@ -440,10 +454,12 @@ Sonnet 5.5 의 thinking 블록도 읽지 못한다. Haiku 5.5 에는 서버측 f
   `item:<place_id>` 지금 일정(가장 최근 도구 결과의 일정, 없으면 시스템 프롬프트의 현재 일정)의 항목 id — 이번 턴에 넣은 항목은 음수 임시 id /
   `order:<place_id>` 순서 / `start:<place_id>` 시작 시각 / `end:<n>` n일차 종료 시각 / `last:<도구>.<경로>` 이번 턴 그 도구의 최근 결과
   (예: `last:search_places.items[0].place_id`) / `memory:<분류>` view_memory·remember 결과의 항목 id /
-  `event:<경로>` 선제 턴 이벤트 payload 의 값 (숨김 메시지의 `근거:` JSON 과 `예상 지연`, 예: `event:suggest.stay_minutes`). 못 찾으면 인자는 빠지고 텍스트는 빈 문자열.
+  `event:<경로>` 선제 턴 이벤트 payload 의 값 (숨김 메시지의 `근거:` JSON 과 `예상 지연`, 예: `event:suggest.stay_minutes`) /
+  `place:id`·`place:title` 장소 맥락 질문의 장소. 못 찾으면 인자는 빠지고 텍스트는 빈 문자열. 텍스트의 `{{a||b}}` 는 a 가 비면 b.
 - 그 호출에 주지 않은 도구는 부르지 않는다 (예: 선제 턴의 `recommend_places`) — 실제 모델과 같게.
 
-**데모 각본** (`scripts/demo.json`, `scripts/guide_notes.json`, 데모 데이터 docs/app/README.md §6.1)
+**데모 각본** (`scripts/demo.json`, `scripts/guide_notes.json`, `scripts/place_chat.json`, 데모 데이터 docs/app/README.md §6.1).
+답과 노트는 실제 LLM 과 같은 화면 형식(§6 답변 형식: 굵게·목록·문단, 선제 턴 세 문단, 노트 long 3문단)으로 써서 비상 데모에서도 똑같이 보인다.
 
 | 각본 id | 언제 | 하는 일 |
 |---|---|---|
@@ -454,11 +470,12 @@ Sonnet 5.5 의 thinking 블록도 읽지 못한다. Haiku 5.5 에는 서버측 f
 | `scene2_house_built` · `scene2_name` | "언제 지어진 집들이에요?" · "왜 이름이 구룡포야?" | 가이드 노트 확인 → 자료 찾기 → 해설 |
 | `scene2_shorter` | "더 짧게" | `remember(style, "해설은 핵심만 짧게", user)` → `style_length: short` |
 | `behind_schedule` | 선제 턴 `delay` + reason `behind_schedule` (`scene3_delay` 보다 위) | 일정 확인 → `update_item`(trip 의 추천 변경 `event:suggest.*` 그대로) → 검토 → "○○ 도착이 … 늦어질 것 같아요. 남은 일정을 그만큼 뒤로 미루는 안 … 다른 방법으로 …" |
-| `scene3_delay` | 선제 턴 `delay` | 일정 확인 → 과메기문화관 빼기 → 검토 → 세 문장 답변 |
+| `scene3_delay` | 선제 턴 `delay` | 일정 확인 → 과메기문화관 빼기 → 검토 → 세 문단 답변 |
 | `scene3_keep_museum` | "과메기문화관은 유지해줘" (대기 제안 있을 때) | 초안 비우기 → `must_include` → 구룡포항 30분 → 새 제안이 이전 제안 대체 |
 | `scene4_safety` | 선제 턴 `safety_raised` | 안전 확인 → 실내 찾기 → 북방파제를 근대문화역사관으로 교체. 관문이 차량 구간(침수 감시 구역)을 되돌리면 이유를 덧붙인 답 |
 | `error_llm_unavailable` | "[테스트] LLM 오류" | `error` `llm_unavailable` (오류 화면 확인용) |
 | `guide_*` | 가이드 준비 (데모 6곳) | 근거 조각 출처(P1…)를 단 고정 노트 |
+| `place_question` | 장소 맥락 질문 (`place_id`, 일정 변경 문장이 아니면) | 가이드 노트 확인 + 자료 찾기 → "**{장소}** 이야기예요." + 노트 `short` (노트가 없으면 첫 근거 조각) |
 
 ```bash
 # backend/.env: AGENT_PROVIDER=scripted, SAFETY_SOURCE=mock, AUTH_REQUIRED=false
@@ -548,7 +565,7 @@ trip 이 단계 3 이벤트(`delay`, `safety_raised`)에서 부른다. 앱은 �
   | `safety_raised` | `check_safety`로 근거를 확인하고, 신호 없는 시간대로 이동·실내 대체·이동 수단 변경 **추천안 하나**를 만든다. + 답변 형식. 못 바꾸면 이유와 조심할 점만 |
   | 그 밖 | 짧게 알리고, 바꿔야 하면 변경안을 만든다 |
 
-  **답변 형식** (PROJECT.md §3 장면 ③·④): 현장에서 바로 듣기 좋은 짧은 세 문장 — ① 무엇이 왜 문제인지 근거·영향
+  **답변 형식** (PROJECT.md §3 장면 ③·④): 현장에서 휴대폰으로 바로 읽기 좋은 짧은 세 문단(문단마다 한 문장, 빈 줄로 구분, 목록 없이 핵심 한두 단어만 굵게) — ① 무엇이 왜 문제인지 근거·영향
   ② 추천안 (초안에 실제로 넣은 변경만, 제안 카드 하나로 전달) ③ "다른 방법으로 …도 있어요" 한 줄 (도구로 만들지 않은 선택지).
   대안을 카드로 여러 개 만들지 않는다: 선제 턴에는 `recommend_places` 도구를 주지 않고, 한 턴의 변경은 원래 제안 하나다.
   사용자가 이어서 대화로 조건을 붙이면("과메기문화관은 유지") 그 조건을 `add_rule`(예: `must_include`)로 등록하고 대기 중인 제안 위에서 고쳐
@@ -575,7 +592,7 @@ trip 이 단계 3 이벤트(`delay`, `safety_raised`)에서 부른다. 앱은 �
 - 오늘 남은 일정: 2곳 / 완료 1곳                 // 그날 항목의 진행 상태 (건너뜀 제외)
 - 바꿀 수 없는 것: 완료한 항목, 지난 시각
 ```
-- 동행 섹션: 답변은 **1~3문장**(현장, 나중에 음성), 목록·기호 없이. 모든 도구 사용 가능, 기본 대상은 오늘 남은 일정, 원하면 다른 날도.
+- 동행 섹션: 답변은 **1~3문장**(현장에서 힐끗 본다), 2문단까지, 핵심 한두 단어만 굵게, 목록·표·제목 없이 (선제 턴은 §11.2 의 세 문단). 모든 도구 사용 가능, 기본 대상은 오늘 남은 일정, 원하면 다른 날도.
   "지금 가도 돼?"는 `travel_time`(`check_hazards`), 늦어지면 체류 줄이기·순서·빼기로 조정. 변경안은 하나, 다른 선택지는 말로 한 줄.
   사용자가 대기 중인 제안에 조건을 붙이면 `add_rule`로 등록하고 그 제안 위에서 고쳐 다시 제안한다.
 - **현재 일정은 실제 진행 기준**이다: 초안이 있으면 planner `preview`, 없으면 planner `projection` 의 일정 (실제 도착·완료 기록 + planner 의 지금,
@@ -598,7 +615,7 @@ trip 이 단계 3 이벤트(`delay`, `safety_raised`)에서 부른다. 앱은 �
 - "더 짧게 말해줘" 같은 반응은 반드시 `remember(category=style, scope=user)`로 저장한다 (문구에 "짧게"/"자세히", 기존 항목은 `replace_id`)
   → docent `style_length` 가 바뀌어 다음 답변·다음 장소 도착 카드에 반영된다. 좋았던 이야기는 `feedback`, 이미 들은 이야기는 `known`(scope=plan).
 - **답변 길이**: 매 턴 메모리 요약과 함께 받은 `style_length`가 `short`면 맥락에 "## 해설 길이 … 장소·해설·정보 답변은 핵심만 1~2문장",
-  `long`이면 "4~6문장까지"를 넣는다 (없으면 동행 섹션의 1~3문장). 선제 턴에는 넣지 않는다 (세 문장 형식 그대로).
+  `long`이면 "4~6문장까지"를 넣는다 (없으면 동행 섹션의 1~3문장). 선제 턴에는 넣지 않는다 (세 문단 형식 그대로).
 - 선제 턴(`delay`·`safety_raised`)에는 가이드 노트·웹 검색을 주지 않는다 (메모리·근거 조각 도구는 계획 모드와 같이 있다).
 
 ### 11.3.2 실측 (2026-10-09, Claude Haiku 5.5, `SAFETY_SOURCE=mock`)

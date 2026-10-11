@@ -7,13 +7,16 @@
 - 턴의 시작 = 마지막 user 메시지 중 하네스 안내('[시스템] …')가 아닌 것. 그 뒤 assistant 메시지 수 = 각본의 몇 번째 단계인지
 - 선제 턴: '[이벤트] 일정 지연: …' (prompts.event_message) -> event type ('일정 밀림' 은 delay + reason behind_schedule)
 - 가이드 준비: 시스템 프롬프트가 guide.PREP_SYSTEM, 사용자 메시지의 '## 장소 (place_id …)' -> 장소
+- 장소 맥락 질문 (ChatRequest.place_id): 맥락의 '## 지금 보는 장소' (prompts.PLACE_CONTEXT) -> 그 장소.
+  when.place 가 있는 각본을 먼저 본다 (같은 문장이 일반 각본에도 맞을 수 있어서)
 - 검토 관문이 되돌렸으면 마지막 메시지가 하네스의 REVIEW_NOTE 다 -> 각본의 on_review 단계
 
 각본 파일 (backend/app/agent/scripts/*.json, AGENT_SCRIPTED_DIR):
 {"fallback": "맞는 각본이 없을 때의 답",
  "turns": [{"id": "scene1_plan",
             "when": {"user": "정규식", "event": "delay", "reason": "behind_schedule", "guide_place": "정규식",
-                     "mode": "plan|guide", "pending": true, "system": "정규식"},  // 모두 맞아야 한다. 위에서부터 처음 맞는 것
+                     "place": "정규식", "mode": "plan|guide", "pending": true, "system": "정규식"},
+                                                                  // 모두 맞아야 한다. 위에서부터 처음 맞는 것
                                                                   // (reason 이 없으면 그 event 의 모든 이유에 맞는다)
             "steps": [{"thinking": "…", "text": "…", "tools": [{"name": "search_places", "args": {…}}]},
                       …, {"text": "최종 답변"}],                  // 마지막 단계(도구 없음)가 답변. {"json": {…}} 은 JSON 텍스트로
@@ -26,7 +29,8 @@
 - last:<도구>.<경로>  이번 턴에서 그 도구의 가장 최근 결과 JSON 의 값 (예: last:search_places.items[0].place_id)
 - memory:<분류>      view_memory·remember 결과에서 그 분류의 첫 항목 id
 - event:<경로>       선제 턴 이벤트 payload 의 값 ('근거: {…}' 줄과 '예상 지연', 예: event:suggest.stay_minutes)
-찾지 못하면 인자는 빠지고(null), 텍스트에는 빈 문자열이 들어간다.
+- place:id / place:title  장소 맥락 질문의 장소 (place_id, 이름)
+찾지 못하면 인자는 빠지고(null), 텍스트에는 빈 문자열이 들어간다. 텍스트의 {{a||b}} 는 a 가 비면 b.
 """
 import asyncio
 import json
@@ -49,6 +53,7 @@ EVENT_RE = re.compile(r"^\[이벤트\] ([^:]+):")
 EVENT_PAYLOAD_RE = re.compile(r"^근거: (.*)$", re.M)
 EVENT_DELAY_RE = re.compile(r"^예상 지연: (-?\d+)분$", re.M)  # payload.delay_minutes 는 근거 JSON 밖에 따로 적힌다
 GUIDE_PLACE_RE = re.compile(r"## 장소 \(place_id ([^)]+)\)")
+PLACE_RE = re.compile(r"## 지금 보는 장소\n사용자가 '(.*?)'\(place_id ([^)]+)\)")  # prompts.PLACE_CONTEXT
 PLAN_HEADER = "## 현재 일정"
 REF_RE = re.compile(r"\{\{([^{}]+)\}\}")
 PATH_RE = re.compile(r"([^.\[\]]+)|\[(-?\d+)\]")
@@ -67,7 +72,7 @@ def load_scripts(directory: Path) -> dict:
         fallback = data.get("fallback", fallback)
         for t in data.get("turns", []):
             when = t.get("when") or {}
-            for key in ("user", "guide_place", "system"):
+            for key in ("user", "guide_place", "place", "system"):
                 if key in when:
                     try:
                         re.compile(when[key])
@@ -114,6 +119,9 @@ class Context:
         g = GUIDE_PLACE_RE.search(self.user)
         self.guide_place = g.group(1) if g and "현장 해설 작가" in self.system else None
         self.mode = "guide" if "## 현재 상황 (여행 중)" in self.system else "plan"
+        # 장소 맥락 질문: 맥락은 시스템 프롬프트에 (기록 편집 금지 공급자 방식이면 사용자 메시지 뒤 system 메시지에)
+        p = PLACE_RE.search("\n".join(m["content"] for m in messages if m["role"] == "system"))
+        self.place, self.place_title = (p.group(2), p.group(1)) if p else (None, None)
         self.pending = "## 승인 대기 중인 제안" in self.system
         # 이번 턴의 도구 결과 [(도구 이름, JSON)] (오래된 순)
         names = {c["id"]: c["function"]["name"] for m in after for c in m.get("tool_calls") or []}
@@ -171,6 +179,8 @@ class Context:
                 except (KeyError, IndexError, TypeError):
                     return None
             return value
+        if kind == "place":
+            return {"id": self.place, "title": self.place_title}.get(arg)
         if kind == "memory":
             for name, r in reversed(self.results):
                 if not isinstance(r, dict):
@@ -184,12 +194,19 @@ class Context:
             return None
         raise ScriptError(f"모르는 참조: {ref}")
 
+    def _first(self, refs: list[str]) -> str:
+        """{{a||b}}: 처음으로 비어 있지 않은 참조 값."""
+        for r in refs:
+            if (v := self.ref(r)) not in (None, ""):
+                return str(v)
+        return ""
+
     def fill(self, value):
         """인자 값의 "$…" 참조와 텍스트의 {{…}} 참조를 푼다."""
         if isinstance(value, str) and value.startswith("$"):
             return self.ref(value[1:])
         if isinstance(value, str):
-            return REF_RE.sub(lambda m: "" if (v := self.ref(m.group(1))) is None else str(v), value)
+            return REF_RE.sub(lambda m: self._first(m.group(1).split("||")), value)
         if isinstance(value, list):
             return [self.fill(v) for v in value]
         if isinstance(value, dict):
@@ -203,6 +220,8 @@ def _matches(when: dict, ctx: Context) -> bool:
     if "reason" in when and when["reason"] != ctx.reason:
         return False
     if "guide_place" in when and not (ctx.guide_place and re.fullmatch(when["guide_place"], ctx.guide_place)):
+        return False
+    if "place" in when and not (ctx.place and re.fullmatch(when["place"], ctx.place)):
         return False
     if "user" in when and (ctx.event or ctx.guide_place or not re.search(when["user"], ctx.user)):
         return False
@@ -244,7 +263,10 @@ class ScriptedProvider:
         if stamp != self._stamp:  # 각본 파일을 고치면 서버를 다시 띄우지 않아도 다음 호출부터 반영
             self.data, self._stamp = load_scripts(self.directory), stamp
             log.info("scripted: 각본 다시 읽음 (%d턴)", len(self.data["turns"]))
-        return next((t for t in self.data["turns"] if _matches(t.get("when") or {}, ctx)), None)
+        turns = self.data["turns"]
+        if ctx.place:  # 장소 맥락 질문: 장소 각본을 먼저 (일반 각본의 문장 조건에도 맞을 수 있다)
+            turns = sorted(turns, key=lambda t: "place" not in (t.get("when") or {}))
+        return next((t for t in turns if _matches(t.get("when") or {}, ctx)), None)
 
     def step_for(self, turn: dict, ctx: Context) -> dict:
         steps = turn["steps"]
@@ -271,7 +293,8 @@ class ScriptedProvider:
         turn = self.pick(ctx)
         await self._sleep(self.latency)
         if turn is None:
-            log.info("scripted: 맞는 각본 없음 (user=%r event=%s guide=%s)", ctx.user[:60], ctx.event, ctx.guide_place)
+            log.info("scripted: 맞는 각본 없음 (user=%r event=%s guide=%s place=%s)", ctx.user[:60], ctx.event,
+                     ctx.guide_place, ctx.place)
             async for ev in self._stream_text(self.data["fallback"], TextDelta):
                 yield ev
             yield Finish("stop", _usage())

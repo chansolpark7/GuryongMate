@@ -1,4 +1,4 @@
-"""trip 테스트용 가짜 planner·safety·agent (trip 은 HTTP 로만 부르므로 같은 메서드를 가진 객체로 바꾼다).
+"""trip 테스트용 가짜 planner·safety·agent·docent (trip 은 HTTP 로만 부르므로 같은 메서드를 가진 객체로 바꾼다).
 
 가짜 planner 는 실제 planner 의 시간 모델(docs/planner/README.md §2.1, §8.2)을 단순하게 흉내 낸다:
 도보 이동시간 = 직선거리 × 1.3 / 70m, 차량 = 직선거리 × 1.3 / 400m + 주차 5분 (분 올림), 운영시간 밖·하루 초과·고정 시각 놓침만 본다.
@@ -348,5 +348,20 @@ class FakeAgent:
                 "queued": []}
 
 
+class FakeDocent:
+    """가이드 노트 상태만 (plan_id -> {place_id: status})."""
+
+    def __init__(self):
+        self.notes: dict[int, dict[str, str]] = {}
+        self.calls = 0
+        self.down = False
+
+    def list_notes(self, plan_id, auth):
+        self.calls += 1
+        if self.down:
+            raise UpstreamError("docent", None, "down")
+        return [{"plan_id": plan_id, "place_id": p, "status": s} for p, s in self.notes.get(plan_id, {}).items()]
+
+
 def fakes() -> Clients:
-    return Clients(FakePlanner(), FakeSafety(), FakeAgent())
+    return Clients(FakePlanner(), FakeSafety(), FakeAgent(), FakeDocent())

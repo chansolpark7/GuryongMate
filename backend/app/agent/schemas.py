@@ -32,6 +32,9 @@ class SessionCreate(Strict):
 
 class ChatRequest(Strict):
     message: str = Field(min_length=1, max_length=4000, pattern=r"\S", description="공백만 있는 메시지는 거부")
+    place_id: str | None = Field(None, min_length=1, max_length=64,
+                                 description="앱 가이드 노트 화면에서 그 장소에 대해 묻는 질문. 그 장소의 노트·근거부터 찾아 짧게 답한다. "
+                                             "메시지(사용자·답)에 남아 MessageView.place_id 로 돌아온다")
 
 
 class TripEvent(BaseModel):
@@ -81,6 +84,7 @@ class MessageView(BaseModel):
     role: Literal["user", "assistant"]
     content: str
     created_at: datetime
+    place_id: str | None = Field(None, description="장소 맥락이 있는 턴(ChatRequest.place_id)의 메시지면 그 장소. 앱이 장소별로 걸러 보여준다")
     steps: list[Step] = []
     steps_summary: str | None = None
     cards: list[dict[str, Any]] = Field(

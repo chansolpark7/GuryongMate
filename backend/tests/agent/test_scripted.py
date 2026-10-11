@@ -156,8 +156,9 @@ def test_demo_behind_schedule_turn(client, trip_plan, up, review_on, kind):  # n
                                                                     "trip": trip_state(pid, items)}, headers=H))
     finally:
         app.dependency_overrides[get_llm] = lambda: th.llm
-    assert res["error"] is None and res["text"].startswith("카페 도착이 15:00 예정에서 15:35으로 35분쯤 늦어질 것 같아요.")
-    assert "다른 방법으로" in res["text"]
+    assert res["error"] is None and res["text"].startswith("**카페** 도착이 15:00 예정에서 **15:35**으로 35분쯤 늦어질 것 같아요.")
+    paragraphs = res["text"].split("\n\n")  # 근거 -> 추천안 -> 다른 방법, 세 문단 (화면 형식)
+    assert len(paragraphs) == 3 and paragraphs[2].startswith("다른 방법으로")
     [card] = res["cards"]
     change = {"stay_minutes": 90} if kind == "extend_stay" else {"start_time": "15:35"}
     assert card["proposal"]["ops"] == [{"op": "update_item", "item_id": suggest["item_id"], **change}]
@@ -247,7 +248,7 @@ def test_script_reload_and_validation(tmp_path):
 
 # ---------- 데모 각본 (backend/app/agent/scripts) ----------
 
-REF_KINDS = {"item", "order", "start", "end", "last", "memory", "event"}
+REF_KINDS = {"item", "order", "start", "end", "last", "memory", "event", "place"}
 
 
 def _walk(value):
@@ -271,7 +272,7 @@ def test_demo_scripts_are_valid():
                 assert call["name"] in ALL_TOOLS, f"{t['id']}: 모르는 도구 {call['name']}"
             for s in _walk(step):
                 refs = ([s[1:]] if s.startswith("$") else []) + re.findall(r"\{\{([^{}]+)\}\}", s)
-                for r in refs:
+                for r in (x for ref in refs for x in ref.split("||")):  # {{a||b}}: a 가 비면 b
                     assert r.split(":")[0] in REF_KINDS, f"{t['id']}: 모르는 참조 {r}"
         if t.get("steps"):
             assert not t["steps"][-1].get("tools"), f"{t['id']}: 마지막 단계는 답변이어야 한다"
@@ -311,3 +312,6 @@ def test_demo_guide_notes(place_id):
                  *[{"role": "tool", "tool_call_id": c.id, "content": "{}"} for c in calls]]
     raw = parse_json("".join(e.text for e in out if isinstance(e, TextDelta)))
     assert raw["short"] and raw["long"] and raw["sources"] and all(isinstance(q, dict) for q in raw["qa"])
+    # 화면 형식 (docs/docent/README.md §3.1): long 은 3~4문단, short 는 한 문단, 굵게는 짝이 맞게
+    assert 3 <= len(raw["long"].split("\n\n")) <= 4 and "\n" not in raw["short"]
+    assert "**" in raw["long"] and raw["long"].count("**") % 2 == 0 and raw["short"].count("**") % 2 == 0

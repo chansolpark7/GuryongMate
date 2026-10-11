@@ -4,7 +4,8 @@
              GET …/safety/alerts?status=new, POST …/safety/alerts/{id}/seen
     safety   GET /safety/situation (fingerprint), GET /safety/avoid
     agent    GET·POST /agent/sessions, POST /agent/sessions/{sid}/events (선제 턴),
-             POST /agent/plans/{id}/guide/prepare (가이드 자동 준비: 여행 시작·도착)
+             POST /agent/plans/{id}/guide/prepare (가이드 자동 준비: 여행 시작·도착·틱의 stale 노트)
+    docent   GET /docent/plans/{id}/notes (틱: 오늘 남은 장소의 노트가 stale 인지)
 
 모든 메서드는 auth(요청 헤더)를 받는다: 사용자 요청이면 받은 인증 그대로(ForwardAuth), 백그라운드면 그 사용자의 짧은 토큰.
 테스트는 같은 메서드를 가진 가짜 클래스로 바꾼다 (get_clients).
@@ -70,6 +71,10 @@ class AgentClient(Protocol):
     def prepare_guide(self, plan_id: int, place_ids: list[str] | None, auth: dict) -> dict: ...
 
 
+class DocentClient(Protocol):
+    def list_notes(self, plan_id: int, auth: dict) -> list[dict]: ...
+
+
 class HttpPlannerClient(_Http):
     def __init__(self, base_url: str = settings.planner_base_url, timeout: float = settings.timeout_sec, **kw):
         super().__init__("planner", base_url, timeout, **kw)
@@ -125,11 +130,21 @@ class HttpAgentClient(_Http):
         return self.call("POST", f"/agent/plans/{plan_id}/guide/prepare", auth, json=body)
 
 
+class HttpDocentClient(_Http):
+    def __init__(self, base_url: str = settings.docent_base_url, timeout: float = settings.timeout_sec, **kw):
+        super().__init__("docent", base_url, timeout, **kw)
+
+    def list_notes(self, plan_id, auth):
+        """가이드 노트 목록 [{place_id, status, …}] (본문 없이)."""
+        return self.call("GET", f"/docent/plans/{plan_id}/notes", auth)
+
+
 @dataclass
 class Clients:
     planner: PlannerClient
     safety: SafetyClient
     agent: AgentClient
+    docent: DocentClient
 
 
 _clients: Clients | None = None
@@ -139,5 +154,5 @@ def get_clients() -> Clients:
     """FastAPI 의존성이자 백그라운드 틱이 쓰는 클라이언트. 테스트에서는 dependency_overrides 와 이 모듈의 _clients 를 바꾼다."""
     global _clients
     if _clients is None:
-        _clients = Clients(HttpPlannerClient(), HttpSafetyClient(), HttpAgentClient())
+        _clients = Clients(HttpPlannerClient(), HttpSafetyClient(), HttpAgentClient(), HttpDocentClient())
     return _clients

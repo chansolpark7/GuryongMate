@@ -111,6 +111,9 @@ def tick(plan_id: int, db: DbSession, user_id: CurrentUser, clients: Deps, clock
     틱 주기를 기다리지 않고 확인할 때 쓴다 (CLI·재생기). 진행 중인 여행일이 없으면 409 trip_not_active."""
     events = service.tick_plan(db, user_id, plan_id, clients, clock, now)
     state = service.get_state(db, user_id, plan_id, {}, clients, clock)
+    td = service.latest_trip(db, user_id, plan_id)
+    if td is not None:  # 관심사가 바뀌어 stale 이 된 남은 장소 노트를 도착 전에 다시 준비 (앱 활동 중일 때만)
+        background.add_task(service.refresh_guides, td.id, clients, clock, now)
     background.add_task(_dispatch_plan, user_id, plan_id, clients, clock, now)
     return TickResult(state=state, events=events)
 

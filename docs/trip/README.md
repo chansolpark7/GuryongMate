@@ -298,7 +298,10 @@ POST /agent/sessions/{session_id}/events          (내부 호출, 앱은 부르�
    오늘 남은 항목의 변화가 없는 경고(다른 날·완료 항목)는 가져가지 않는다 — `new` 로 남아 계획 화면 배지로 보인다
 3. safety 상황(`GET /safety/situation`)으로 상황 해제 판정 (§3.2)
 4. 자동 종료 판정 (§1.2)
-5. 큐에 있는 단계 3 이벤트 전송 시도 (여행일마다 차례로). 앱 활동이 없으면 보류 (§4.1)
+5. 가이드 노트 미리 다시 준비 (2026-10-11): **앱 활동 중일 때만**(§4.1), 오늘 남은 항목(planned·visiting) 중 노트가 `stale`(관심사·스타일·동행 메모리가 바뀜)인 장소가 있으면
+   docent `GET /docent/plans/{id}/notes` 로 보고 agent `POST /agent/plans/{id}/guide/prepare {"auto": true, "place_ids": [...]}`. agent 가 바로 `pending` 으로 표시해 반복 호출되지 않는다.
+   실패(429·접근 불가)는 로그만, 그 여행일은 5분 동안 다시 묻지 않는다 (`service.refresh_guides`, `docs/docent/README.md` §3.2)
+6. 큐에 있는 단계 3 이벤트 전송 시도 (여행일마다 차례로). 앱 활동이 없으면 보류 (§4.1)
 
 틱은 위험 구역 캐시도 비운다. 사용자 요청 없이 다른 서비스를 부르므로 그 사용자의 5분짜리 토큰을 만들어 쓴다.
 
@@ -384,7 +387,8 @@ POST /planner/plans/{id}/projection        (저장 안 함, 본문·필드 모�
 | safety | `GET /safety/sim` | 시계 (§5) |
 | routing | (planner projection 이 부름) | 이동 중 예상 도착 |
 | agent | `POST /agent/sessions` (세션이 없을 때), `POST /agent/sessions/{sid}/events` | 선제 턴 |
-| agent | `POST /agent/plans/{id}/guide/prepare` `{"auto": true, "place_ids"?}` (응답 뒤, 실패는 로그만) | 가이드 자동 준비: 여행 시작(전체)·`arrived`(그 장소) |
+| agent | `POST /agent/plans/{id}/guide/prepare` `{"auto": true, "place_ids"?}` (응답 뒤, 실패는 로그만) | 가이드 자동 준비: 여행 시작(전체)·`arrived`(그 장소)·틱(남은 장소의 stale 노트, §4.3) |
+| docent | `GET /docent/plans/{id}/notes` | 틱: 오늘 남은 장소의 노트가 `stale` 인지 (§4.3) |
 
 | → trip | API | 용도 |
 |---|---|---|
@@ -545,7 +549,7 @@ docker compose run --rm trip pytest tests/trip
 | `TRIP_PROACTIVE_RETRY_SEC` | 30 | 실패 뒤 다시 보내기까지 기다림. 실패마다 두 배 |
 | `TRIP_AUTO_END_MIN` | 120 | 마지막 일정 후 자동 종료 (최근 위치가 있으면 미룸, §1.2) |
 | `TRIP_ACTIVE_MIN` | 15 | 앱 활동(위치 전송·이벤트 조회)이 이보다(분, trip 의 지금 기준) 오래면 단계 3 전송 보류 (§4.1). 자동 종료를 미루는 '최근 위치'의 기준. 0 이면 끔 |
-| `TRIP_PLANNER_BASE_URL`·`TRIP_SAFETY_BASE_URL`·`TRIP_AGENT_BASE_URL` | `http://127.0.0.1:8000` (compose `http://gateway`) | 다른 서비스 주소 |
+| `TRIP_PLANNER_BASE_URL`·`TRIP_SAFETY_BASE_URL`·`TRIP_AGENT_BASE_URL`·`TRIP_DOCENT_BASE_URL` | `http://127.0.0.1:8000` (compose `http://gateway`) | 다른 서비스 주소 |
 | `TRIP_TIMEOUT_SEC` / `TRIP_AGENT_TIMEOUT_SEC` | 15 / 300 | 다른 서비스 호출 제한 시간 (선제 턴은 LLM 응답을 기다린다) |
 
 ---

@@ -183,7 +183,8 @@ async def get_session(session_id: str, db: DbSession, user_id: UserId, auth: Aut
             prev.steps_summary = _summary([x.model_dump() for x in prev.steps])
         else:
             messages.append(MessageView(id=m.id, role=m.role, content=m.content, created_at=m.created_at,
-                                        steps=steps, steps_summary=_summary(m.steps), cards=cards))
+                                        place_id=m.place_id, steps=steps, steps_summary=_summary(m.steps),
+                                        cards=cards))
     return SessionDetail(**SessionView.model_validate(s).model_dump(), messages=messages)
 
 
@@ -204,7 +205,7 @@ def _sse(ev: dict) -> str:
 
 async def _turn_response(session_id: str, plan_id: int, text: str, auth: dict[str, str], http: httpx.AsyncClient,
                          llm: LLMProvider, stream: bool, repropose: dict | None = None, **turn):
-    """turn: run_turn 에 그대로 (trip, fetch_trip, hidden — 선제 턴)."""
+    """turn: run_turn 에 그대로 (trip, fetch_trip, hidden — 선제 턴, place_id — 장소 맥락 질문)."""
     token = _acquire(session_id)
 
     async def events() -> AsyncIterator[dict]:
@@ -257,7 +258,7 @@ async def chat(session_id: str, body: ChatRequest, db: DbSession, user_id: UserI
     s = _get_session(db, user_id, session_id)  # 존재 확인은 스트림 시작 전에 (404 를 바로 돌려주기 위해)
     _check_idle(session_id)
     limits.consume(db, user_id, "chat")  # 넘으면 429 rate_limited (공개 서버, AGENT_LIMIT_CHAT_*)
-    return await _turn_response(session_id, s.plan_id, body.message, auth, http, llm, stream)
+    return await _turn_response(session_id, s.plan_id, body.message, auth, http, llm, stream, place_id=body.place_id)
 
 
 @router.post("/sessions/{session_id}/events", response_model=ChatResult)

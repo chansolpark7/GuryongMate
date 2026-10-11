@@ -33,6 +33,7 @@ x-backend-env: &backend-env
   TRIP_PLANNER_BASE_URL: http://gateway
   TRIP_SAFETY_BASE_URL: http://gateway
   TRIP_AGENT_BASE_URL: http://gateway
+  TRIP_DOCENT_BASE_URL: http://gateway
   DOCENT_API_BASE_URL: http://gateway
 
 services:
