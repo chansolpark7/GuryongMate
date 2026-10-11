@@ -59,8 +59,15 @@ LLM은 일정을 직접 바꾸지 않는다. 결과는 두 종류의 **카드**�
    "steps": [Step, ...],                                   // 이 답변을 만들며 거친 단계 (§3.2)
    "steps_summary": "3단계 완료 : 장소 찾기, 일정 조정, 변경안 만들기",
    "cards": [{"type": "proposal", "proposal": ProposalDetail},              // planner 의 현재 상태 그대로
-             {"type": "recommendation", "recommendation": RecommendationView}]}]}
+             {"type": "recommendation", "recommendation": RecommendationView}],
+   "trigger": null},                                       // 선제 턴(§11.2)의 답이면 계기, 아니면 null
+  {"id": 108, "role": "assistant", "content": "과메기문화관 도착이 늦어질 것 같아요 …", "created_at": "...",
+   "trigger": {"kind": "event", "type": "delay", "event_id": 41,     // trip 이벤트 종류·id
+               "reason": "violations",                              // delay 의 payload.reason (violations | behind_schedule), 없으면 null
+               "at": "2026-10-10T13:53:00+09:00"}, ...}]}           // 이벤트 시각 (event.now, 없으면 created_at)
 ```
+- `trigger`: Agent 가 먼저 말을 건 메시지(선제 턴)의 표시. 선제 턴 답(assistant 행)에 저장한다(`agent_message.trigger`, 기존 메시지는 null).
+  앱은 이것으로 선제 메시지를 앞 답변과 떨어진 카드로 그린다 — 새로고침·앱이 꺼진 사이 온 메시지도. `ChatResult`·SSE `done` 에도 같은 값(일반 대화는 null).
 - 카드는 **조회할 때의 상태**로 돌려준다. 제안의 `status`·`base_changed`, 추천 후보의 `state`가 지금 일정 기준이다.
 - 도구 실행 기록과 승인·거절 알림 같은 내부 메시지는 `messages`에 나오지 않는다.
 

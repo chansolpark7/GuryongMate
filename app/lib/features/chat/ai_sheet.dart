@@ -425,47 +425,60 @@ class TurnView extends StatelessWidget {
     final (text, pendingNotice) = splitPendingNotice(turn.text.toString().trim());
     final quick = isLast && turn.done && turn.cards.isEmpty && turn.error == null && !chat.busy && text.isNotEmpty ? quickActions?.call(turn) : null;
     final lastPending = turn.proposals.where((e) => e.state == ProposalState.pending).lastOrNull;
-    // 선제 메시지: 이벤트의 agent.message_id 와 같은 id 의 메시지 (events.md §3.1)
-    final event = turn.messageId == null ? null : chat.proactive[turn.messageId];
+    // 선제 메시지: 서버 trigger → 이번 실행 중 받은 이벤트(agent.message_id) → 사용자 말 없이 시작한 턴 (events.md §3.1)
+    final pro = chat.proactiveOf(turn);
+    final event = pro?.event;
+    final body = <Widget>[
+      if (turn.hasProgress) ...[
+        const SizedBox(height: 12),
+        turn.collapsed ? ActivitySummary(turn: turn) : ActivityCard(turn: turn),
+      ] else if (!turn.done && text.isEmpty) ...[
+        const SizedBox(height: 12),
+        const ThinkingRow(label: '생각 중…'),
+      ],
+      if (text.isNotEmpty) ...[
+        SizedBox(height: pro != null && !turn.hasProgress ? 6 : 12),
+        RichAnswer(text), // 문단 · **굵게** · 목록 (2026-10-11)
+      ],
+      if (event?.type == 'safety_raised') HazardEvidenceBox(event: event!),
+      if (pendingNotice) PendingNoticeLine(onTap: onShowPending),
+      if (turn.remembered.isNotEmpty) ...[
+        const SizedBox(height: 8),
+        for (final s in turn.remembered) Padding(padding: const EdgeInsets.only(bottom: 6), child: _MemoryChip(text: s.detail, planId: chat.plan.planId)),
+      ],
+      if (turn.error != null) ...[
+        const SizedBox(height: 10),
+        _ErrorBox(turn: turn, onRetry: turn.retryable && turn.user.isNotEmpty ? () => chat.retry(turn) : null),
+      ],
+      if (turn.stopped) Padding(padding: const EdgeInsets.only(top: 8), child: Text('응답을 중단했어요', style: AppText.caption)),
+      if (onOpenCards != null && turn.cards.isNotEmpty)
+        _CardLink(label: turn.proposals.isNotEmpty ? '일정 변경 제안을 만들었어요' : '장소 추천을 만들었어요', onTap: onOpenCards!)
+      else
+        for (final c in turn.cards) ...[
+          const SizedBox(height: 12),
+          switch (c) {
+            ProposalEntry() => ProposalCard(entry: c),
+            RecommendationEntry() => RecommendationCard(entry: c),
+          },
+        ],
+      if (quick != null && quick.isNotEmpty) ChipRow(key: const ValueKey('quick-actions'), chips: quick, onPick: onFollowUp),
+      if (onOpenCards == null && isLast && lastPending != null && turn.done) _FollowUps(entry: lastPending, eventType: pro?.type, text: text, onPick: onFollowUp),
+    ];
+    if (pro != null) {
+      // 앞 턴의 답에 이어붙은 것처럼 보이지 않게: 위아래로 넉넉히 띄운 별도 카드 (앞 턴 아래 16 + 12 = 28)
+      return Padding(
+        padding: const EdgeInsets.only(top: 12, bottom: 24),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          if (turn.user.isNotEmpty) ...[_UserBubble(text: turn.user), const SizedBox(height: 12)],
+          ProactiveCard(info: pro, children: body),
+        ]),
+      );
+    }
     return Padding(
       padding: const EdgeInsets.only(bottom: 16),
       child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
         if (turn.user.isNotEmpty) _UserBubble(text: turn.user),
-        if (event != null) ProactiveHeader(event: event),
-        if (turn.hasProgress) ...[
-          const SizedBox(height: 12),
-          turn.collapsed ? ActivitySummary(turn: turn) : ActivityCard(turn: turn),
-        ] else if (!turn.done && text.isEmpty) ...[
-          const SizedBox(height: 12),
-          const ThinkingRow(label: '생각 중…'),
-        ],
-        if (text.isNotEmpty) ...[
-          SizedBox(height: event != null ? 4 : 12),
-          RichAnswer(text), // 문단 · **굵게** · 목록 (2026-10-11)
-        ],
-        if (event?.type == 'safety_raised') HazardEvidenceBox(event: event!),
-        if (pendingNotice) PendingNoticeLine(onTap: onShowPending),
-        if (turn.remembered.isNotEmpty) ...[
-          const SizedBox(height: 8),
-          for (final s in turn.remembered) Padding(padding: const EdgeInsets.only(bottom: 6), child: _MemoryChip(text: s.detail, planId: chat.plan.planId)),
-        ],
-        if (turn.error != null) ...[
-          const SizedBox(height: 10),
-          _ErrorBox(turn: turn, onRetry: turn.retryable && turn.user.isNotEmpty ? () => chat.retry(turn) : null),
-        ],
-        if (turn.stopped) Padding(padding: const EdgeInsets.only(top: 8), child: Text('응답을 중단했어요', style: AppText.caption)),
-        if (onOpenCards != null && turn.cards.isNotEmpty)
-          _CardLink(label: turn.proposals.isNotEmpty ? '일정 변경 제안을 만들었어요' : '장소 추천을 만들었어요', onTap: onOpenCards!)
-        else
-          for (final c in turn.cards) ...[
-            const SizedBox(height: 12),
-            switch (c) {
-              ProposalEntry() => ProposalCard(entry: c),
-              RecommendationEntry() => RecommendationCard(entry: c),
-            },
-          ],
-        if (quick != null && quick.isNotEmpty) ChipRow(key: const ValueKey('quick-actions'), chips: quick, onPick: onFollowUp),
-        if (onOpenCards == null && isLast && lastPending != null && turn.done) _FollowUps(entry: lastPending, eventType: event?.type, text: text, onPick: onFollowUp),
+        ...body,
       ]),
     );
   }

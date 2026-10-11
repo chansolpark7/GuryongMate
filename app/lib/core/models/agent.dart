@@ -1,5 +1,6 @@
 // agent 서비스 응답 모델 (docs/agent/README.md §2~4, planner §6 RecommendationView).
 import 'plan.dart';
+import 'trip.dart' show wallClock;
 
 class AgentSession {
   AgentSession({required this.id, required this.planId, required this.updatedAt});
@@ -118,14 +119,34 @@ class SessionCard {
       };
 }
 
+/// Agent 가 먼저 말을 건 메시지(선제 턴)의 계기 (agent MessageView.trigger). 일반 대화는 null.
+class AgentTrigger {
+  AgentTrigger({required this.type, this.eventId, this.reason, this.at});
+  final String type; // delay | safety_raised | …
+  final int? eventId;
+  final String? reason; // delay 의 violations | behind_schedule
+  final DateTime? at; // 이벤트 시각 (가상 시계면 가상 시각, 적힌 벽시계 그대로)
+
+  static AgentTrigger? fromJson(Object? j) {
+    if (j is! Map || j['type'] is! String) return null;
+    return AgentTrigger(type: j['type'] as String, eventId: j['event_id'] as int?, reason: j['reason'] as String?, at: wallClock(j['at']));
+  }
+}
+
 class AgentMessage {
-  AgentMessage({required this.id, required this.role, required this.content, this.steps = const [], this.stepsSummary, this.cards = const [], this.placeId});
+  AgentMessage({required this.id, required this.role, required this.content, this.steps = const [], this.stepsSummary, this.cards = const [], this.placeId, this.trigger, this.createdAt});
   final int? id;
   final String role; // user | assistant
   final String content;
 
   /// 현장 가이드(17)에서 나눈 말이면 그 장소 (agent 대화 요청의 place_id). 17 은 이것으로 그 장소 메시지만 보여준다.
   final String? placeId;
+
+  /// 선제 턴의 답이면 그 계기.
+  final AgentTrigger? trigger;
+
+  /// 서버 저장 시각 (기기 시간대로). trigger 가 없는 옛 선제 메시지의 시각으로만 쓴다.
+  final DateTime? createdAt;
   final List<AgentStep> steps;
   final String? stepsSummary;
   final List<SessionCard> cards;
@@ -138,6 +159,8 @@ class AgentMessage {
         stepsSummary: j['steps_summary'] as String?,
         cards: ((j['cards'] as List?) ?? const []).map((e) => SessionCard.fromJson(e as Map<String, dynamic>)).whereType<SessionCard>().toList(),
         placeId: j['place_id'] as String?,
+        trigger: AgentTrigger.fromJson(j['trigger']),
+        createdAt: j['created_at'] is String ? DateTime.tryParse(j['created_at'] as String)?.toLocal() : null,
       );
 }
 

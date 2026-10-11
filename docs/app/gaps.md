@@ -44,7 +44,7 @@
 |---|---|---|---|---|
 | b1 | ~~trip·docent 서비스, agent 선제 턴~~ (구현됨) / agent 가이드 준비·docent 도구 (§0) | 16·17·18·32 | 가짜 게이트웨이 | **필수** |
 | b2 | ~~`near_hazard` 의 `payload` 필드~~ **구현됨**: `payload.zones[]` = `{id, name, kind, risk, reason, distance_m}` | 23 패널의 구역명·근거 줄, 지도 강조 | — | 해결 |
-| b3 | 선제 메시지 구분 필드 | 19·22 "먼저 알려드려요" | 이벤트 `agent.message_id` 와 메시지 id 매칭 (events.md §3.1). 세션 메시지에 `origin:"event"` 같은 필드가 있으면 더 단순 | 권장 |
+| b3 | 선제 메시지 구분 필드 | 19·22 "먼저 알려드려요" | 해결 (2026-10-12): 메시지 `trigger` {kind: event, type, event_id, reason, at} (agent MessageView). 이벤트 매칭·추정은 보조 (events.md §3.1) | 권장 |
 | b4 | ~~메모리 갱신을 알리는 SSE 단계~~ **구현됨**: `remember` → Step `kind:"memory"` title "기억하기", `detail` = 저장한 문장 (항목마다 따로, 합치지 않음). `forget` → `forget` "기억 지우기" (agent §3.2) | 18 "기억했어요" 칩 | `memory` 단계가 `done` 이면 칩 "기억했어요 · {detail}" | 해결 |
 | b5 | ~~docent 도구들의 Step `kind`·title~~ **구현됨**: `get_guide_note` → `guide` "가이드 노트 확인", `search_passages`·`web_search`·`read_page`·내장 웹 검색 → `research` "자료 찾기", `view_memory` → `recall` "기억 확인" (agent §3.2) | 18 진행 단계 문구 | 서버 title 을 그대로 보여줌 (앱 변경 없음) | 해결 |
 | b6 | 답변 출처 (근거 조각·웹 출처) | 18 출처 칩 | 숨김 | 나중 |
