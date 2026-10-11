@@ -46,6 +46,17 @@ class Next(BaseModel):
     eta: str | None = Field(None, description="지금 기준 예상 도착 시각 (planner projection)")
 
 
+class ExpectedTimes(BaseModel):
+    start: str | None = Field(None, description="예상 시작 HH:MM")
+    end: str | None = Field(None, description="예상 종료 HH:MM")
+
+
+class Expected(BaseModel):
+    end: str | None = Field(None, description="그날 예상 종료 시각 (재계산한 마지막 일정 종료)")
+    items: dict[str, ExpectedTimes] = Field(default_factory=dict,
+                                            description="오늘 남은 항목(planned·visiting)의 예상 시작·종료. 키는 item_id")
+
+
 class TripState(BaseModel):
     plan_id: int
     active: bool = Field(description="진행 중인 여행일이 있으면 true (동행 모드)")
@@ -60,6 +71,8 @@ class TripState(BaseModel):
     current: Current | None
     next: Next | None
     delay_minutes: int | None = Field(description="다음 일정 기준 예상 지연 (음수 = 여유)")
+    expected: Expected | None = Field(None, description="마지막 재계산의 예상 시각 (오늘 남은 항목·그날 종료). "
+                                                        "재계산 전이거나 진행 중이 아니면 null")
     session_id: str | None
 
 

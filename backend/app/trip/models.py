@@ -43,6 +43,8 @@ class TripDay(Base):
     # 마지막 재계산 (planner projection)
     delay_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
     next: Mapped[dict | None] = mapped_column(JSONB, nullable=True)  # TripState.next
+    # 같은 재계산의 예상 시각 (TripState.expected): {"end": 그날 예상 종료, "items": {item_id: {"start", "end"}}}. 종료하면 null
+    expected: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
     # 앱 활동 (§4.1): 마지막 위치 전송·이벤트 조회 시각 / 마지막 위치 전송 시각 (trip 의 지금 기준, 위치는 recorded_at 과 큰 쪽)
     active_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -86,6 +88,7 @@ _UPGRADES = [
     "ALTER TABLE trip_day ADD COLUMN IF NOT EXISTS active_at TIMESTAMP WITH TIME ZONE",
     "ALTER TABLE trip_day ADD COLUMN IF NOT EXISTS located_at TIMESTAMP WITH TIME ZONE",
     "ALTER TABLE trip_day ADD COLUMN IF NOT EXISTS situation JSONB",
+    "ALTER TABLE trip_day ADD COLUMN IF NOT EXISTS expected JSONB",
 ]
 for _sql in _UPGRADES:
     event.listen(Base.metadata, "after_create", DDL(_sql).execute_if(dialect="postgresql"))

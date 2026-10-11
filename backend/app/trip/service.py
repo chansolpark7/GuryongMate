@@ -67,7 +67,8 @@ def state_view(td: TripDay | None, plan_id: int, clock: Clock, at_least: datetim
         plan_id=td.plan_id, active=td.ended_at is None, day=td.day, date=td.date, started_at=_kst(td.started_at),
         ended_at=_kst(td.ended_at), ended_reason=td.ended_reason, now=now, clock=clock.kind, location=loc,
         current=Current(item_id=td.current_item_id, state=td.current_state, since=judge.hhmm(since) if since else None),
-        next=Next(**td.next) if td.next else None, delay_minutes=td.delay_minutes, session_id=td.session_id)
+        next=Next(**td.next) if td.next else None, delay_minutes=td.delay_minutes,
+        expected=td.expected if td.ended_at is None else None, session_id=td.session_id)
 
 
 def event_view(e: TripEvent) -> EventView:
@@ -173,6 +174,7 @@ def _finish(db: Session, td: TripDay, reason: str, now: datetime, clients: Clien
     그날 머무는 중(visiting)인 planner 항목은 done 으로 정리한다 (_close_visiting).
     detail: 자동 종료의 세부 사유 (midnight | plan_end | new_day, day_ended payload.detail)."""
     td.ended_at, td.ended_reason = now, reason
+    td.expected = None  # 예상 시각은 여행 중에만 (다시 열면 다음 재계산에서 채운다)
     db.execute(update(TripEvent).where(TripEvent.trip_day_id == td.id, TripEvent.status == "queued")
                .values(status="suppressed"))
     _close_visiting(clients, td, now, auth)
@@ -473,6 +475,18 @@ def _apply_projection(td: TripDay, proj: dict) -> None:
     nxt = proj.get("next")
     td.next = None if not nxt else {"item_id": nxt["item_id"], "title": titles.get(nxt["item_id"]),
                                     "planned_start": nxt.get("planned_start"), "eta": nxt.get("eta")}
+    td.expected = _expected(proj, td.day)
+
+
+def _expected(proj: dict, day: int) -> dict | None:
+    """재계산한 그날의 예상 시각 (TripState.expected, audit-2026-10-12 D2): 남은 항목(planned·visiting)의 시작·종료와 그날 종료.
+    앱 Today 의 남은 일정이 늦을 때 '기준 → 예상'을 보이는 데 쓴다. GET state 는 planner 를 부르지 않고 이것을 돌려준다."""
+    d = next((x for x in proj["plan"]["days"] if x.get("day") == day), None)
+    if d is None:
+        return None
+    items = {str(i["id"]): {"start": i.get("start_at"), "end": i.get("end_at")}
+             for i in d["items"] if i.get("status") in ("planned", "visiting")}
+    return {"end": d.get("end_at"), "items": items}
 
 
 class HazardCache:
