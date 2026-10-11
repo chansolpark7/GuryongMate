@@ -744,7 +744,7 @@ class _GuideCard extends StatelessWidget {
 
 int _nowMin(DateTime now) => now.hour * 60 + now.minute;
 
-/// ETA 칩 (Components_Companion): 제시간 / n분 여유 (Green) · n분 늦음 (Amber) · HH:MM 종료 · 규칙 넘음 (Red, 새 위반 + 대기 제안).
+/// ETA 칩 (Components_Companion): 제시간 / n분 여유 (Green) · n분 늦음 (Amber) · HH:MM 종료 · 규칙 넘음 / n분 늦음 (Red, 대기 중인 지연 제안).
 class EtaChip extends StatelessWidget {
   const EtaChip({super.key, required this.delay, this.violation});
   final int? delay;
@@ -758,16 +758,27 @@ class EtaChip extends StatelessWidget {
     return InfoChip.success(d < 0 ? '${-d}분 여유' : '제시간', icon: Icons.schedule);
   }
 
-  /// 대기 중인 지연 제안이 있으면 Red "18:07 종료 · 규칙 넘음" (시각은 이벤트 문구·위반에서).
+  /// 대기 중인 지연 제안이 있으면 Red. 위반이면 "18:07 종료 · 규칙 넘음" (하루 초과·종료 규칙의 끝나는 시각) 또는 위반 종류,
+  /// 일정 밀림(behind_schedule)은 규칙 위반이 아니라 "n분 늦음" (지금 지연). 이벤트 문구의 시각은 읽지 않는다 —
+  /// 밀림 문구 "구룡포항 도착이 13:34 예정에서 …" 의 첫 시각은 다음 장소 계획 시작이다 (audit-2026-10-12 B1).
   static String? violationLabel(TripController t) {
     final e = t.pendingDelay;
     if (e == null) return null;
-    final texts = [e.message, for (final v in (e.payload['new_violations'] as List?) ?? const []) if (v is Map) '${v['message'] ?? ''}'];
-    for (final s in texts) {
-      final m = RegExp(r'(\d{1,2}:\d{2})').allMatches(s).map((m) => m.group(1)!).where((x) => x != '18:00' || texts.length == 1).toList();
-      if (m.isNotEmpty) return '${m.first} 종료 · 규칙 넘음';
+    if (e.payload['reason'] == 'behind_schedule') {
+      final d = t.state?.delayMinutes;
+      return d != null && d >= 1 ? '$d분 늦음' : null;
     }
-    return '규칙 넘음';
+    final vs = [for (final v in (e.payload['new_violations'] as List?) ?? const []) if (v is Map) v];
+    for (final v in vs.where((v) => v['code'] == 'day_overflow' || v['code'] == 'end_before')) {
+      final m = RegExp(r'(\d{1,2}:\d{2}) ?에 끝나').firstMatch('${v['message'] ?? ''}');
+      if (m != null) return '${m.group(1)} 종료 · 규칙 넘음';
+    }
+    return switch (vs.firstOrNull?['code']) {
+      'fixed_time_missed' => '고정 시각 놓침',
+      'outside_open_hours' => '운영시간 밖',
+      'closed_day' => '휴무일',
+      _ => '규칙 넘음',
+    };
   }
 }
 

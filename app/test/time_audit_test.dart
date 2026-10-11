@@ -29,11 +29,21 @@ Future<(TripController, TripReplay)> controller(WidgetTester tester) async {
   final plan = PlanController(session.api, r.planId);
   await plan.load();
   final t = TripController(api: session.api, plan: plan, session: session, source: FakeLocationSource());
-  addTearDown(() {
+  _live.add(() {
     t.dispose();
     plan.dispose();
   });
   return (t, r);
+}
+
+final _live = <void Function()>[];
+
+/// 타이머가 남지 않게 테스트 본문 끝에서 정리 (위젯 테스트는 본문이 끝나면 남은 타이머를 검사한다).
+void finish() {
+  for (final f in _live) {
+    f();
+  }
+  _live.clear();
 }
 
 /// 일정 밀림(behind_schedule) 이벤트: 문구의 첫 시각은 '다음 장소 계획 시작'이다 (judge.judge_delay).
@@ -65,7 +75,9 @@ void main() {
     final label = EtaChip.violationLabel(t);
     expect(label, isNot(contains('13:34')), reason: '13:34 는 구룡포항 계획 시작이지 종료 시각이 아니다');
     expect(label, isNot(contains('규칙 넘음')), reason: '밀림은 규칙 위반이 아니다 (새 위반 없음)');
-  }, skip: true); // 버그 B1 (재현: skip 을 지우면 실패)
+    expect(label, '69분 늦음', reason: '지금 지연 (Red: 대기 중인 제안)');
+    finish();
+  });
 
   testWidgets('B2 이미 지난 다음 일정에 대한 지연 알림으로 지금 다음 일정 칩을 Red 로 그리지 않는다', (tester) async {
     final (t, r) = await controller(tester);
@@ -81,6 +93,10 @@ void main() {
     t.ingest([TripEvent.fromJson({...v, 'id': 952, 'seen_at': null, 'payload': {...v['payload'] as Map, 'next': {'item_id': port}}})]);
     await tester.pump();
     expect(EtaChip.violationLabel(t), isNull);
+    // 알림의 다음 일정이 아직 다음이면 그대로 Red
+    t.state = visitingState(current: items[0]['id'] as int, next: port, delay: 31);
+    expect(EtaChip.violationLabel(t), '18:01 종료 · 규칙 넘음');
+    finish();
   }, skip: true); // 버그 B2
 
   testWidgets('B4 고정 시작 시각 항목에 일찍 도착: 남은 시간은 고정 시각 + 체류까지 (서버 재계산과 같게)', (tester) async {
