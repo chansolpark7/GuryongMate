@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:guryong_mate/core/models/agent.dart';
 import 'package:guryong_mate/core/models/safety.dart';
+import 'package:guryong_mate/core/widgets/common.dart';
 import 'package:guryong_mate/features/chat/chat_controller.dart';
 import 'package:guryong_mate/features/planner/plan_controller.dart';
 import 'package:guryong_mate/features/planner/planner_shell.dart';
@@ -127,7 +128,9 @@ void main() {
     plan.lastApplied = AppliedProposal(proposal: applied.proposal, before: plan.plan!, at: applied.at);
     plan.setTab(1);
     await settle(tester, 4);
-    await tester.tap(find.text('변경 내역'));
+    // 승인 직후 [실행 취소] 스낵바(4초)가 아래 버튼 위에 떠 있어 좌표 탭은 스낵바가 받는다 (Planner FAB 가 애니메이션 없이 바로 사라져
+    // 스낵바가 맨 아래로 내려옴, 2026-10-12). 아래 '실행 취소' 확인에 스낵바가 필요하므로 버튼 동작을 직접 부른다.
+    tester.widget<AppButton>(find.widgetWithText(AppButton, '변경 내역')).onPressed!();
     await settle(tester, 8);
     expect(tester.takeException(), isNull);
     expect(find.text('6건 적용됨'), findsOneWidget, reason: '읽기 전용 카드');
