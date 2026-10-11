@@ -45,6 +45,10 @@ services:
       - ./infra/gateway/Caddyfile:/etc/caddy/Caddyfile:ro
       - ./infra/gateway/routes.caddy:/etc/caddy/routes.caddy:ro
       - ./infra/gateway/console:/srv/console:ro   # 데모 관제 대시보드 /console/ (고치고 새로고침)
+      # 웹 앱 / (deploy/build_web.sh → app/build/web, 다시 빌드하고 새로고침). 빌드 폴더가 없어도 뜨게 app/ 째로 마운트한다
+      - ./app:/srv/app-src:ro
+    environment:
+      APP_ROOT: /srv/app-src/build/web
     depends_on:
       - places
       - planner

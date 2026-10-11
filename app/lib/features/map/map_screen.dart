@@ -428,7 +428,7 @@ class _MapScreenState extends State<MapScreen> {
     final removed = plan == null || applied == null ? const <PlanItem>[] : applied.removedItems(plan).where((i) => i.day == c.day && i.place != null).toList();
     final showChange = applied != null && c.aiUpdates.isNotEmpty && oldRoute.isNotEmpty;
     final selected = c.selectedItemId == null ? null : plan?.item(c.selectedItemId!);
-    WidgetsBinding.instance.addPostFrameCallback((_) {
+    afterFrame(() {
       if (mounted) _syncCamera(c);
     });
 
@@ -458,7 +458,7 @@ class _MapScreenState extends State<MapScreen> {
             initialZoom: 14,
             onMapReady: () {
               _ready = true;
-              _syncCamera(c);
+              deferOnWeb(() => mounted ? _syncCamera(c) : null);
             },
             onTap: (_, _) {
               if (_layersOpen) {

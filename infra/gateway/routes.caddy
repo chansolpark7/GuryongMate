@@ -1,5 +1,6 @@
 # 게이트웨이 경로 (개발 Caddyfile·운영 Caddyfile.prod 가 같이 쓴다). 새 서비스는 여기에 한 줄 추가한다.
 # 서비스 문서: /places/docs, /planner/docs, /agent/docs, /safety/docs, /routing/docs, /trip/docs
+# API·대시보드 경로가 먼저, 나머지(/ 등)는 웹 앱 (맨 끝 handle). 새 API 경로를 추가하면 웹 앱보다 위에 둔다
 
 handle /health {
 	header Content-Type application/json
@@ -58,7 +59,23 @@ handle_path /console/* {
 	file_server
 }
 
+# 웹 앱 (Flutter web, deploy/build_web.sh → app/build/web). 위 API·대시보드 경로에 걸리지 않은 나머지 전부.
+# 운영은 이미지 안 /srv/app, 개발은 compose 가 저장소의 app/ 를 마운트해 APP_ROOT 로 알려 준다.
+# Flutter 웹 빌드는 파일 이름에 해시가 없어(main.dart.js·canvaskit/…) 모두 no-cache — 브라우저가 ETag 로 확인하고 바뀌지 않았으면 304.
 handle {
-	header Content-Type application/json
-	respond `{"detail":"Not Found"}` 404
+	root * {$APP_ROOT:/srv/app}
+	@no_app not file /index.html
+	handle @no_app {
+		header Content-Type application/json
+		respond `{"detail":"웹 앱이 빌드되지 않았습니다 (deploy/build_web.sh)"}` 404
+	}
+	header Cache-Control no-cache
+	encode zstd gzip
+	# 없는 경로는 index.html (SPA 새로고침·직접 주소). 단 앱 파일 종류(.js·.wasm 등)는 없으면 404 그대로
+	@spa {
+		not file
+		not path *.js *.mjs *.wasm *.json *.png *.otf *.ttf *.symbols *.map
+	}
+	rewrite @spa /index.html
+	file_server
 }

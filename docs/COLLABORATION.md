@@ -113,6 +113,7 @@ docker compose run --rm planner pytest tests/planner   # 테스트 (어느 백�
 - **게이트웨이 설정(`infra/gateway/Caddyfile`, 경로는 `routes.caddy`)은 자동으로 다시 읽히지 않는다.** 바뀌면 `docker compose restart gateway`.
   `up -d --build`만으로는 게이트웨이 컨테이너가 재시작되지 않아, 새 경로(예: `/safety`)가 `{"detail":"Not Found"}`로 나온다.
 
+- 게이트웨이는 `/` 에서 **웹 앱**(Flutter 웹 빌드 `app/build/web`)도 내려준다. `deploy/build_web.sh` 로 빌드하고 새로고침 (app/README.md 「웹 앱」). 빌드 전에는 `/` 가 404 안내.
 - **공개 서버(GCP VM)** 는 `main` 만 운영 compose(`docker-compose.prod.yml`)로 배포한다. 노트북에서 `deploy/update.sh` — [docs/deploy/README.md](deploy/README.md)
 
 ### 메모리 (Docker Desktop 한도 약 3.8GB)

@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <!-- 게이트웨이가 / 에서 서빙한다 (infra/gateway/routes.caddy). 다른 경로에서 서빙하면 flutter build web --base-href 로 바꾼다 -->
+  <base href="$FLUTTER_BASE_HREF">
+
+  <meta charset="UTF-8">
+  <meta content="IE=Edge" http-equiv="X-UA-Compatible">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="구룡메이트 — 여행을 함께 걷는 AI. 구룡포 여행 계획부터 현장 안내까지">
+  <meta name="theme-color" content="#7B61FF">
+
+  <!-- iOS meta tags & icons -->
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="구룡메이트">
+  <link rel="apple-touch-icon" href="icons/Icon-192.png">
+
+  <link rel="icon" type="image/png" href="favicon.png"/>
+
+  <title>구룡메이트</title>
+  <link rel="manifest" href="manifest.json">
+  <style>
+    html, body { margin: 0; height: 100%; background: #F5F6F8; }
+    #loading { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px;
+               font-family: system-ui, -apple-system, "Segoe UI", "Malgun Gothic", sans-serif; color: #4B5563; font-size: 15px; }
+    #loading img { width: 72px; height: 72px; }
+  </style>
+</head>
+<body>
+  <div id="loading"><img src="icons/Icon-192.png" alt=""><div>구룡메이트를 여는 중…</div></div>
+  <script src="flutter_bootstrap.js" async></script>
+  <script>
+    // 첫 프레임이 그려지면 로딩 안내를 지운다
+    window.addEventListener('flutter-first-frame', function () { var l = document.getElementById('loading'); if (l) l.remove(); });
+  </script>
+</body>
+</html>

@@ -2,6 +2,8 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:guryong_mate/features/auth/login_screen.dart';
+import 'package:http/http.dart' as http;
 import 'package:guryong_mate/core/app_session.dart';
 import 'package:guryong_mate/core/token_store.dart';
 import 'package:guryong_mate/features/guide/guide_prep_screen.dart';
@@ -95,6 +97,76 @@ void main() {
     expect(find.textContaining(RegExp(r'로그인 \(\d\d:\d\d 남음\)')), findsOneWidget);
     expect(find.ancestor(of: find.textContaining('남음'), matching: find.byType(TextButton)), findsNothing, reason: '누를 수 없는 회색 버튼');
     expect(find.textContaining('에 다시 시도할 수 있어요'), findsOneWidget);
+  });
+
+  testWidgets('35 가입 오류 문구: 403 admin_only → 화면 안 안내 · 409 → 아이디 · 네트워크 → 연결(주소) · 그 밖 → 서버 메시지', (tester) async {
+    await phone(tester);
+    final gw = FixtureGateway([]);
+    var mode = 'admin_only';
+    gw.on('POST /auth/signup', (_) => switch (mode) {
+          'admin_only' => Res.error(403, 'admin_only', '가입은 운영팀에 요청해 주세요 (관리 토큰이 필요한 API 입니다).'),
+          'taken' => Res.error(409, 'login_id_taken', '이미 사용 중인 아이디입니다.'),
+          'network' => throw http.ClientException('connection refused'),
+          _ => Res.error(429, 'rate_limited', '잠시 후 다시 시도하세요.'),
+        });
+    final s = await signedOutSession(gw, MemoryTokenStore());
+    await tester.pumpWidget(ChangeNotifierProvider.value(value: s, child: const GuryongApp()));
+    await settle(tester);
+    await tapText(tester, '아이디로 계속하기', frames: 15);
+    await tapText(tester, '가입하기', frames: 15);
+    await type(tester, '아이디', 'mentor9');
+    await type(tester, '비밀번호', 'guryong2026');
+
+    await tapText(tester, '가입하고 시작하기');
+    expect(find.text(signupClosedMessage), findsOneWidget, reason: '토스트가 아니라 화면 안 안내');
+    expect(find.byType(SnackBar), findsNothing);
+    expect(find.textContaining('서버에 연결하지 못했어요'), findsNothing);
+
+    mode = 'taken';
+    await type(tester, '아이디', 'mentor10');
+    await tapText(tester, '가입하고 시작하기');
+    expect(find.text('이미 쓰는 아이디예요'), findsOneWidget);
+
+    mode = 'network';
+    await type(tester, '아이디', 'mentor11');
+    await tapText(tester, '가입하고 시작하기');
+    expect(find.text('서버에 연결하지 못했어요 (http://gateway.test)'), findsOneWidget);
+
+    mode = 'other';
+    await tester.pump(const Duration(seconds: 5));
+    await type(tester, '아이디', 'mentor12');
+    await tapText(tester, '가입하고 시작하기');
+    expect(find.text('잠시 후 다시 시도하세요.'), findsOneWidget, reason: '처리하지 않은 오류는 서버 메시지');
+  });
+
+  testWidgets('34 로그인 오류 문구: 401 비밀번호 · 네트워크 → 연결(주소) · 그 밖 → 서버 메시지', (tester) async {
+    await phone(tester);
+    final gw = FixtureGateway([]);
+    var mode = 'wrong';
+    gw.on('POST /auth/login', (_) => switch (mode) {
+          'wrong' => Res.error(401, 'invalid_credentials', '아이디 또는 비밀번호가 올바르지 않습니다.'),
+          'network' => throw http.ClientException('connection refused'),
+          _ => Res.error(500, 'internal', '서버 오류가 났어요.'),
+        });
+    final s = await signedOutSession(gw, MemoryTokenStore());
+    await tester.pumpWidget(ChangeNotifierProvider.value(value: s, child: const GuryongApp()));
+    await settle(tester);
+    await tapText(tester, '아이디로 계속하기', frames: 15);
+    await type(tester, '아이디', 'seoyun');
+    await type(tester, '비밀번호', 'guryong2026');
+    await tapText(tester, '로그인');
+    expect(find.text('아이디 또는 비밀번호가 맞지 않아요'), findsOneWidget);
+    expect(find.byType(SnackBar), findsNothing);
+
+    mode = 'network';
+    await type(tester, '비밀번호', 'guryong2026');
+    await tapText(tester, '로그인');
+    expect(find.text('서버에 연결하지 못했어요 (http://gateway.test)'), findsOneWidget);
+
+    mode = 'other';
+    await tester.pump(const Duration(seconds: 5));
+    await tapText(tester, '로그인');
+    expect(find.text('서버 오류가 났어요.'), findsOneWidget);
   });
 
   testWidgets('시작: 저장된 refresh 로 01 건너뜀 / refresh_token_reused → 01 + 안내', (tester) async {

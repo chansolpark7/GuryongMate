@@ -215,11 +215,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
             if (!widget.serverOnly) ...[
               SwitchListTile(
                 value: s.demoLocationMode,
-                onChanged: s.setDemoLocationMode,
+                onChanged: AppSession.demoLocationForced ? null : s.setDemoLocationMode,
                 activeTrackColor: AppColors.primary,
                 activeThumbColor: Colors.white,
                 title: Text('데모 위치 모드', style: AppText.label.copyWith(fontWeight: FontWeight.w700)),
-                subtitle: Text('GPS 대신 서버에 들어온 위치(CLI·재생기)를 지도에 그려요', style: AppText.caption),
+                subtitle: Text(
+                  AppSession.demoLocationForced ? '웹에서는 항상 켜져 있어요. 관제 대시보드(/console/)로 위치를 옮겨요' : 'GPS 대신 서버에 들어온 위치(CLI·재생기)를 지도에 그려요',
+                  style: AppText.caption,
+                ),
               ),
               const Divider(height: 1, indent: 16, endIndent: 16, color: AppColors.line),
             ],
@@ -233,7 +236,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   keyboardType: TextInputType.url,
                   onSubmitted: (_) => _check(),
                   decoration: InputDecoration(
-                    hintText: 'http://127.0.0.1:8000',
+                    hintText: AppSession.defaultBaseUrl,
                     suffixIcon: _checking
                         ? const Padding(padding: EdgeInsets.all(14), child: SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)))
                         : _connected == null
