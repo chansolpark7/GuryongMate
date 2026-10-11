@@ -5,8 +5,6 @@
 """
 from datetime import date, time
 
-import pytest
-
 from app.planner.models import PlannerItem, PlannerPlan
 from app.planner.schemas import PlaceInfo
 from app.planner.validation import Actual, build_schedule, delay_minutes, new_violations, next_item_id
@@ -106,7 +104,6 @@ def test_arrive_after_closing_is_violation():
     assert ("outside_open_hours", 3) in new
 
 
-@pytest.mark.xfail(strict=True, reason="버그 B9: 마지막 항목이 건너뜀이면 day_overflow 의 item_id 가 건너뛴 항목")
 def test_day_overflow_points_to_last_visited_item():
     plan = make_plan(("done", "10:00", "11:00"), ("visiting", "11:06", None), ("skipped", None, None))
     plan.day_end = time(12, 30)

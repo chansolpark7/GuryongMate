@@ -213,7 +213,8 @@ def build_schedule(
 
         if last_end is not None and last_end > day_end:
             violations.append(Violation(
-                code="day_overflow", severity="error", day=d, item_id=views[-1].id if views else None,
+                code="day_overflow", severity="error", day=d,
+                item_id=next((v.id for v in reversed(views) if v.status != "skipped"), None),  # 마지막으로 다니는 항목
                 message=f"{d}일차 일정이 {fmt(last_end)} 에 끝나 목표 종료 시각 {fmt(day_end)} 을 {last_end - day_end}분 넘습니다."))
         days.append(DayView(day=d, date=date, weekday=WEEKDAYS[date.weekday()],
                             end_at=fmt(last_end) if last_end is not None else None, items=views))
