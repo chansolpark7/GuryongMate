@@ -696,8 +696,8 @@ class TripController extends ChangeNotifier with WidgetsBindingObserver {
     _notify();
   }
 
-  /// 16 [짧게]/[자세히] → 17.
-  void openArrivalGuide(TripEvent e, String length) {
+  /// 16 도착 알림 누르기 → 17 (length 가 없으면 17 기본값 = 고른 길이 · 짧게).
+  void openArrivalGuide(TripEvent e, String? length) {
     final placeId = e.card?.placeId ?? e.payload['place_id'] as String?;
     arrival = null;
     _chat?.showArrivalInChat(null);

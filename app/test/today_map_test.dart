@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:guryong_mate/core/widgets/common.dart';
 import 'package:guryong_mate/features/planner/plan_controller.dart';
+import 'package:guryong_mate/features/trip/today_screen.dart' show TripPill;
 import 'package:guryong_mate/features/trip/trip_controller.dart';
 import 'package:provider/provider.dart';
 
@@ -79,6 +80,8 @@ void main() {
     expect(find.text('Today'), findsOneWidget);
     expect(find.textContaining('첫 일정까지'), findsOneWidget);
     expect(find.textContaining('오늘 일정 5곳'), findsOneWidget, reason: '한 줄 요약은 목록 머리에 그대로');
+    expect(find.text('전체 지도'), findsNothing, reason: '머리 링크 없음 — 하단 탭 Map 과 같다 (2026-10-11)');
+    expect(find.text('전체 일정 ›'), findsNothing, reason: '하단 탭 Planner 와 같다');
     for (final id in [502, 503, 504, 505, 506]) {
       expect(find.byKey(ValueKey('remaining-$id'), skipOffstage: false), findsOneWidget, reason: '14-S2 에서도 일정 행 (redesign §2.3)');
     }
@@ -131,6 +134,9 @@ void main() {
     await settle(tester);
     expect(find.text('이야기 듣기'), findsOneWidget);
     expect(find.text('길 안내'), findsNothing, reason: '지금 패널의 큰 [길 안내] 제거');
+    expect(find.textContaining('남은 일정 3곳', skipOffstage: false), findsOneWidget, reason: '머리는 "남은 일정 n곳 · HH:MM 종료 예정" 만');
+    expect(find.text('전체 지도', skipOffstage: false), findsNothing);
+    expect(find.text('전체 일정 ›', skipOffstage: false), findsNothing);
 
     await tester.tap(find.byKey(const ValueKey('today-pin-502')));
     await settle(tester);
@@ -203,6 +209,8 @@ void main() {
     expect(planOf(tester).selectedItemId, 503);
     expect(find.text('2 / 5'), findsOneWidget);
     expect(find.text('일정에서 보기'), findsOneWidget);
+    expect(find.text('삭제').hitTestable(), findsOneWidget, reason: '접힘 높이 = 잰 카드 높이 → 버튼까지 보인다');
+    expect(tester.getBottomLeft(find.text('삭제')).dy, lessThan(tester.getBottomLeft(sheet).dy - 16));
     expect(find.text('경상북도 포항시 남구 구룡포읍 구룡포리'), findsNothing, reason: '접힘에는 상세 없음 (요청도 안 함)');
     expect(r.gw.sent('GET', '/places/{id}'), isEmpty);
     await tester.drag(find.byType(Grabber).last, const Offset(0, -600));
@@ -210,6 +218,9 @@ void main() {
     expect(find.text('경상북도 포항시 남구 구룡포읍 구룡포리'), findsOneWidget, reason: '펼침 = 장소 상세');
     expect(find.text('운영'), findsOneWidget);
     expect(r.gw.sent('GET', '/places/{id}').single.path, endsWith('/kto-2610501'));
+    expect(find.descendant(of: sheet, matching: find.text('구룡포항')), findsOneWidget, reason: '펼쳐도 장소 이름은 카드 한 번 (상세 제목 줄 숨김, 2026-10-11)');
+    expect(find.byKey(const ValueKey('map-card-category')), findsOneWidget);
+    expect(find.descendant(of: sheet, matching: find.text('항구 · 구룡포읍')), findsOneWidget, reason: '분류는 카드 쪽 한 줄');
 
     // [일정에서 보기] 는 그대로 Planner 강조
     await tester.drag(find.byType(Grabber).last, const Offset(0, 800));
@@ -219,6 +230,42 @@ void main() {
     expect(planOf(tester).tab, 0);
     expect(planOf(tester).selectedItemId, 503);
     expect(r.gw.unmatched, isEmpty);
+  });
+
+  testWidgets('14 작은 창: 핀이 오른쪽 끝(AI·현재 위치 버튼 옆)이어도 창은 화면 안 · 버튼 밖', (tester) async {
+    final r = scene('scene2_arrival', flows: ['f4_arrival_docent.json']);
+    r.advanceTo('12:30:30');
+    await openShell(tester, r.gw, r.planId);
+    r.advanceTo('12:33:00');
+    await poll(tester);
+    tripOf(tester).dismissArrival();
+    await settle(tester);
+    final pin = find.byKey(const ValueKey('today-pin-503'));
+    await tester.tap(pin);
+    await settle(tester);
+    final popup = find.byKey(const ValueKey('today-place-popup'));
+    expect(popup, findsOneWidget);
+    final buttons = tester.getRect(find.ancestor(of: find.byTooltip('현재 위치'), matching: find.byType(Column)).first);
+    final screen = tester.getRect(find.byType(IndexedStack).first);
+
+    // 지도를 끌어 핀을 버튼 바로 아래·오른쪽 끝으로 (창이 핀 위 가운데면 버튼과 겹치는 자리)
+    final from = tester.getCenter(pin);
+    final to = Offset(buttons.center.dx, buttons.bottom + 60);
+    final gesture = await tester.startGesture(const Offset(30, 200));
+    for (var i = 1; i <= 10; i++) {
+      await gesture.moveTo(const Offset(30, 200) + (to - from) * (i / 10));
+      await tester.pump(const Duration(milliseconds: 16));
+    }
+    await tester.pump(const Duration(milliseconds: 500)); // 멈춘 뒤 떼서 미끄러지지 않게
+    await gesture.up();
+    await settle(tester);
+    expect((tester.getCenter(pin) - to).distance, lessThan(30), reason: '핀이 버튼 옆으로 옮겨졌다');
+    final rect = tester.getRect(popup);
+    expect(rect.overlaps(buttons), isFalse, reason: '작은 창이 AI·현재 위치 버튼과 겹치지 않는다');
+    expect(rect.left, greaterThanOrEqualTo(screen.left));
+    expect(rect.right, lessThanOrEqualTo(screen.right));
+    expect(rect.top, greaterThan(tester.getRect(find.byType(TripPill)).bottom), reason: 'Pill 아래');
+    expect(find.descendant(of: popup, matching: find.text('길 안내')).hitTestable(), findsOneWidget, reason: '창 버튼이 눌린다');
   });
 
   testWidgets('28 우회 카드 [이 길로 안내] (동행 중) → Today 로 돌아가 그 장소로 길 안내', (tester) async {

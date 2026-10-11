@@ -168,4 +168,38 @@ void main() {
     await dragSheet(tester, -600);
     await snap(tester, 'd4_map_selected_expanded');
   });
+
+  // 2026-10-11 겹치는 버튼 정리 (docs/app/review/tidy): 도착 직후 카드 · 남은 일정 머리 · 오른쪽 끝 핀 작은 창 · Map 시트 펼침
+  captureTest('e 정리 (도착 카드 · 머리 링크 · 작은 창 자리 · 시트 제목)', (tester) async {
+    final r = scene('scene2_arrival', flows: ['f4_arrival_docent.json']);
+    r.advanceTo('12:30:30');
+    await open(tester, r);
+    r.advanceTo('12:33:00');
+    await poll(tester);
+    await flush(tester, 10);
+    await snap(tester, 'e1_arrived');
+    tripOf(tester).dismissArrival();
+    await flush(tester);
+    final pin2 = find.byKey(const ValueKey('today-pin-503'));
+    await tester.tap(pin2.evaluate().isNotEmpty ? pin2 : pin('2').first);
+    await flush(tester, 10);
+    // 지도를 끌어 핀을 오른쪽 AI·현재 위치 버튼 바로 아래로
+    final from = tester.getCenter(pin2.evaluate().isNotEmpty ? pin2 : pin('2').first);
+    final to = Offset(346, 394);
+    final g = await tester.startGesture(const Offset(30, 200));
+    for (var i = 1; i <= 10; i++) {
+      await g.moveTo(const Offset(30, 200) + (to - from) * (i / 10));
+      await tester.pump(const Duration(milliseconds: 16));
+    }
+    await tester.pump(const Duration(milliseconds: 500));
+    await g.up();
+    await flush(tester, 10);
+    await snap(tester, 'e2_pin_right_edge');
+    planOf(tester).setTab(1);
+    planOf(tester).select(503);
+    await flush(tester, 10);
+    await snap(tester, 'e3_map_selected');
+    await dragSheet(tester, -600);
+    await snap(tester, 'e4_map_selected_expanded');
+  });
 }

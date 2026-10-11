@@ -78,6 +78,11 @@ class _TodayScreenState extends State<TodayScreen> {
   /// 지도 작은 창을 띄운 항목 (핀 · 남은 일정 행).
   int? _popup;
 
+  /// 위 막대(Pill·데모 칩·안내 카드) — 작은 창이 그 아래로만 뜨게 높이를 잰다.
+  final _topBar = GlobalKey();
+
+  static const _fabTop = 222.0;
+
   /// 14-S2: 지금 위치 → 첫 장소 도보 시간.
   int? _firstWalk;
   int? _firstWalkFor;
@@ -163,6 +168,16 @@ class _TodayScreenState extends State<TodayScreen> {
     _map.fitCamera(CameraFit.coordinates(coordinates: [loc, _pt(target)], padding: EdgeInsets.fromLTRB(48, 200, 80, h * 0.52), maxZoom: 17));
   }
 
+  /// 위 막대 아래 y (지난 프레임 크기, 아직 없으면 Pill 높이만).
+  double _topBarBottom() {
+    final top = MediaQuery.paddingOf(context).top;
+    final box = _topBar.currentContext?.findRenderObject() as RenderBox?;
+    return top + 11 + (box != null && box.hasSize ? box.size.height : 48) + 8;
+  }
+
+  /// 오른쪽 AI FAB(56) + 현재 위치(44) 버튼 칸 (지도 크기 기준).
+  List<Rect> _fabRect(Size map) => [Rect.fromLTWH(map.width - 16 - 56, MediaQuery.paddingOf(context).top + _fabTop, 56, 56 + 12 + 44)];
+
   /// 핀·남은 일정 행 → 지도에서 그 핀 + 작은 창 (탭 이동 없음, redesign §2.2).
   void _focus(PlanItem i) {
     setState(() => _popup = i.id);
@@ -243,7 +258,7 @@ class _TodayScreenState extends State<TodayScreen> {
           left: 16,
           right: 16,
           top: top + 11,
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          child: Column(key: _topBar, crossAxisAlignment: CrossAxisAlignment.start, children: [
             Row(children: [
               Expanded(child: TripPill(title: plan.title, time: s?.now == null ? null : clockText(t.serverNow()))),
               const SizedBox(width: 12),
@@ -267,7 +282,7 @@ class _TodayScreenState extends State<TodayScreen> {
         ),
         Positioned(
           right: 16,
-          top: top + 222,
+          top: top + _fabTop,
           child: Column(children: [
             AiFab(onTap: t.openAiFromFab, hasSuggestion: t.hasSuggestion),
             const SizedBox(height: 12),
@@ -335,8 +350,6 @@ class _TodayScreenState extends State<TodayScreen> {
                     end: (t.today?.endAt ?? items.lastOrNull?.endAt),
                     safety: c.safety,
                     selected: popup?.id,
-                    onAll: () => c.setTab(0),
-                    onMap: () => c.setTab(1),
                     onTap: _focus,
                   ),
                 ],
@@ -420,28 +433,26 @@ class _TodayScreenState extends State<TodayScreen> {
         // 사용자 위치는 장소 Pin 위에 (새 위치로 부드럽게 옮겨 간다)
         if (loc != null) UserLocationLayer(point: loc, accuracy: acc, duration: t.markerGlide, dotKey: const ValueKey('today-location')),
         if (popup != null)
-          MarkerLayer(markers: [
-            Marker(
-              point: _pt(popup),
-              width: 248,
-              height: 196,
-              alignment: Alignment.topCenter,
-              child: _PlacePopup(
-                item: popup,
-                number: items.indexOf(popup) + 1,
-                onListen: () {
-                  setState(() => _popup = null);
-                  t.onOpenGuide?.call(popup.placeId);
-                },
-                onGuide: popup.status == 'done' ? null : () => _startGuide(t, popup),
-                onDetail: () {
-                  setState(() => _popup = null);
-                  c.showDetailOnMap(popup.id);
-                },
-                onClose: () => setState(() => _popup = null),
-              ),
+          _PopupLayer(
+            point: _pt(popup),
+            // 위 막대(Pill·안내 카드) 아래 · 오른쪽 AI·현재 위치 버튼 밖으로 (2026-10-11)
+            minTop: _topBarBottom(),
+            avoid: _fabRect,
+            child: _PlacePopup(
+              item: popup,
+              number: items.indexOf(popup) + 1,
+              onListen: () {
+                setState(() => _popup = null);
+                t.onOpenGuide?.call(popup.placeId);
+              },
+              onGuide: popup.status == 'done' ? null : () => _startGuide(t, popup),
+              onDetail: () {
+                setState(() => _popup = null);
+                c.showDetailOnMap(popup.id);
+              },
+              onClose: () => setState(() => _popup = null),
             ),
-          ]),
+          ),
       ],
     );
   }
@@ -780,7 +791,7 @@ class _MovingSection extends StatelessWidget {
         Expanded(child: Text('${next.title}으로 가는 중', style: AppText.headline.copyWith(fontSize: 18))),
         EtaChip(key: const ValueKey('eta-chip'), delay: s.delayMinutes, violation: EtaChip.violationLabel(trip)),
       ]),
-      // [경로 전체] → 남은 일정 머리의 작은 [전체 지도] (redesign §2.3)
+      // [경로 전체] 없음 — Map 은 하단 탭 · 지도 작은 창 [자세히 ›] 로 (redesign §2.3, 2026-10-11)
       Text('${s.nextPlannedStart ?? next.startAt ?? '--:--'} 예정${s.nextEta == null ? '' : ' → ${s.nextEta} 도착 예상'}', style: AppText.meta),
     ]);
   }
@@ -793,8 +804,6 @@ class _RemainingSection extends StatelessWidget {
     required this.end,
     required this.safety,
     required this.selected,
-    required this.onAll,
-    required this.onMap,
     required this.onTap,
   });
   final List<PlanItem> items;
@@ -804,31 +813,17 @@ class _RemainingSection extends StatelessWidget {
   final String? end;
   final SafetyCheck? safety;
   final int? selected;
-  final VoidCallback onAll;
-
-  /// [전체 지도] → Map 탭 (지금 날짜·선택 유지).
-  final VoidCallback onMap;
 
   /// 행 → 지도에서 그 핀 + 작은 창 (탭 이동 없음).
   final ValueChanged<PlanItem> onTap;
 
   @override
   Widget build(BuildContext context) => Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-        Row(children: [
-          Expanded(
-            child: Text(
-              !total && items.isEmpty ? '다음이 마지막 일정이에요${end == null ? '' : ' · $end 종료 예정'}' : '${total ? '오늘 일정' : '남은 일정'} ${items.length}곳${end == null ? '' : ' · $end 종료 예정'}',
-              style: AppText.caption.copyWith(fontWeight: FontWeight.w700),
-            ),
-          ),
-          InkWell(
-            key: const ValueKey('today-full-map'),
-            onTap: onMap,
-            child: Text('전체 지도', style: AppText.caption.copyWith(color: AppColors.text2, fontWeight: FontWeight.w700, decoration: TextDecoration.underline)),
-          ),
-          const SizedBox(width: 12),
-          InkWell(onTap: onAll, child: Text('전체 일정 ›', style: AppText.caption.copyWith(color: AppColors.primary, fontWeight: FontWeight.w700))),
-        ]),
+        // 머리는 요약 한 줄만 — [전체 지도]·[전체 일정 ›] 는 바로 아래 하단 탭(Map·Planner)과 같아 없앴다 (2026-10-11)
+        Text(
+          !total && items.isEmpty ? '다음이 마지막 일정이에요${end == null ? '' : ' · $end 종료 예정'}' : '${total ? '오늘 일정' : '남은 일정'} ${items.length}곳${end == null ? '' : ' · $end 종료 예정'}',
+          style: AppText.caption.copyWith(fontWeight: FontWeight.w700),
+        ),
         const SizedBox(height: 4),
         for (final i in items)
           Material(
@@ -891,11 +886,7 @@ class _PlacePopup extends StatelessWidget {
       'done' => ('완료', AppColors.text3),
       _ => ('예정', AppColors.primary),
     };
-    return Align(
-      alignment: Alignment.bottomCenter,
-      child: Padding(
-        padding: const EdgeInsets.only(bottom: 24), // 핀이 보이게
-        child: Container(
+    return Container(
           key: const ValueKey('today-place-popup'),
           padding: const EdgeInsets.fromLTRB(12, 10, 4, 6),
           decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(16), boxShadow: AppShadow.floating),
@@ -938,9 +929,60 @@ class _PlacePopup extends StatelessWidget {
               ),
             ),
           ]),
-        ),
+        );
+  }
+}
+
+/// 작은 창을 핀 위에 — 화면 안, 위 막대 아래, [avoid](오른쪽 버튼) 밖으로 자리를 고른다. 지도를 움직이면 따라간다.
+/// 위가 좁으면 핀 아래로, 버튼과 겹치면 왼쪽(안 되면 버튼 아래)으로. 핀이 화면 밖이면 숨긴다.
+class _PopupLayer extends StatelessWidget {
+  const _PopupLayer({required this.point, required this.minTop, required this.avoid, required this.child});
+  final LatLng point;
+  final double minTop;
+
+  /// 지도 크기 → 피할 칸들.
+  final List<Rect> Function(Size map) avoid;
+  final Widget child;
+
+  static const width = 248.0, height = 172.0, gap = 22.0, margin = 12.0;
+
+  /// 핀 화면 위치 → 창 자리.
+  static Rect place(Offset pin, Size size, double minTop, List<Rect> avoid) {
+    var left = (pin.dx - width / 2).clamp(margin, size.width - margin - width).toDouble();
+    var top = pin.dy - gap - height;
+    if (top < minTop) top = pin.dy + gap; // 위가 좁으면 핀 아래
+    var r = Rect.fromLTWH(left, top, width, height);
+    for (final a in avoid) {
+      final ob = a.inflate(8);
+      if (!r.overlaps(ob)) continue;
+      if (ob.left - width >= margin) {
+        left = ob.left - width; // 버튼 왼쪽으로
+      } else {
+        top = ob.bottom; // 화면이 좁으면 버튼 아래로
+      }
+      r = Rect.fromLTWH(left, top, width, height);
+    }
+    return r;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final camera = MapCamera.of(context);
+    final pin = camera.latLngToScreenOffset(point);
+    final size = camera.size;
+    if (pin.dx < 0 || pin.dy < 0 || pin.dx > size.width || pin.dy > size.height) return const SizedBox.shrink();
+    final r = place(pin, size, minTop, avoid(size));
+    final above = r.bottom <= pin.dy;
+    return Stack(children: [
+      // 위면 창 아래 끝을 핀에 붙이고(내용 높이가 달라도), 아래면 위 끝을
+      Positioned(
+        left: r.left,
+        width: width,
+        top: above ? null : r.top,
+        bottom: above ? size.height - r.bottom : null,
+        child: child,
       ),
-    );
+    ]);
   }
 }
 

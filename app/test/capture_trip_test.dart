@@ -151,7 +151,7 @@ void main() {
     r.advanceTo('12:33:00');
     await poll(tester);
     await snap(tester, '16_arrival');
-    await tester.tap(find.text('짧게'));
+    await tester.tap(find.byKey(const ValueKey('arrival-card'))); // 한두 줄 알림 (2026-10-11)
     await flush(tester, 10);
     await snap(tester, '17_guide_note');
     await tester.scrollUntilVisible(find.text('출처'), 200, scrollable: find.byType(Scrollable).first);
