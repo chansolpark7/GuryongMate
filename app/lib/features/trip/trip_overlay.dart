@@ -58,7 +58,7 @@ class _HostBody extends StatelessWidget {
         builder: (context, _) {
           final c = tripHub.controller;
           if (c == null) return const SizedBox.shrink();
-          return ListenableBuilder(listenable: c, builder: (context, _) => _Overlays(c: c));
+          return ListenableBuilder(listenable: Listenable.merge([c, c.todayChrome]), builder: (context, _) => _Overlays(c: c));
         },
       );
 }
@@ -73,37 +73,35 @@ class _Overlays extends StatelessWidget {
     final onShell = c.pushDepth == 0;
     final todayTab = c.plan.tab == 2;
     final navBottom = 60 + mq.padding.bottom + 12;
-    // Today 는 지도 위 (Figma 16: y 270, 패널 바로 위), 다른 탭은 하단 탭 위
-    final cardTop = todayTab && onShell ? mq.padding.top + 226 : null;
     final hazard = c.hazard, arrival = c.arrival, preview = c.preview, toast = c.toast;
     final showArrival = arrival != null && !c.sheetOpen && onShell;
     // 펼친 도착 카드와 미리보기가 같은 자리에 겹치지 않게, 카드를 펼친 동안은 미리보기를 쉰다 (FAB 점은 그대로, 카드를 닫거나 접으면 다시)
     final showPreview = preview != null && !c.previewCollapsed && !c.sheetOpen && !(showArrival && !c.arrivalCollapsed);
+    // Today: 패널 위에 붙은 AI·현재 위치 버튼 바로 위에 (버튼과 함께 패널을 따라 움직인다, 2026-10-12)
+    return LayoutBuilder(builder: (context, box) {
+    final today = todayTab && onShell ? _TodaySpots(c.todayChrome.value, mq.padding.top, box.maxHeight, toast: toast != null) : null;
     return Material(
       type: MaterialType.transparency,
       child: Stack(children: [
-        // 토스트: Today 는 패널 바로 위 (Figma 15: y 372), 다른 탭은 하단 탭 위
         if (toast != null)
-          todayTab && onShell
-              ? Positioned(left: 16, right: 16, top: mq.padding.top + 328, child: EventToast(event: toast, c: c))
+          today != null
+              ? today.fullWidth(0, EventToast(event: toast, c: c))
               : Positioned(left: 16, right: 16, bottom: navBottom + (showArrival && !c.arrivalCollapsed ? 84 : 0), child: EventToast(event: toast, c: c)),
         if (showArrival)
-          Positioned(
-            left: 16,
-            // Today 는 오른쪽 AI·현재 위치 버튼(56 + 여백) 칸을 비운다 (2026-10-11, 카드가 FAB 를 가리지 않게)
-            right: c.arrivalCollapsed ? null : (cardTop != null ? 16 + 56 + 12 : 16),
-            top: cardTop,
-            bottom: cardTop == null ? navBottom : null,
-            child: c.arrivalCollapsed ? _ArrivalChip(onTap: c.expandArrival) : ArrivalCard(key: ValueKey('arrival-${arrival.id}'), event: arrival, c: c),
-          ),
+          today != null
+              ? today.arrival(c.arrivalCollapsed ? _ArrivalChip(onTap: c.expandArrival) : ArrivalCard(key: ValueKey('arrival-${arrival.id}'), event: arrival, c: c),
+                  height: c.arrivalCollapsed ? _TodaySpots.chipH : _TodaySpots.cardH, chip: c.arrivalCollapsed)
+              : Positioned(
+                  left: 16,
+                  right: c.arrivalCollapsed ? null : 16,
+                  bottom: navBottom,
+                  child: c.arrivalCollapsed ? _ArrivalChip(onTap: c.expandArrival) : ArrivalCard(key: ValueKey('arrival-${arrival.id}'), event: arrival, c: c),
+                ),
         if (showPreview)
-          onShell
-              ? Positioned(
-                  right: 84,
-                  top: todayTab ? mq.padding.top + 196 : null,
-                  bottom: todayTab ? null : navBottom + 4,
-                  child: ProactivePeek(event: preview, c: c),
-                )
+          today != null
+              ? today.peek(ProactivePeek(event: preview, c: c))
+              : onShell
+              ? Positioned(right: 84, bottom: navBottom + 4, child: ProactivePeek(event: preview, c: c))
               : Positioned(left: 16, right: 16, top: mq.padding.top + 8, child: ProactivePeek(event: preview, c: c, banner: true)),
         // 접힌 띠는 셸에서만 (push 화면은 자기 내용이 우선, 알림 목록에도 남아 있다). 펼친 경고는 어디서든 최상단.
         if (hazard != null && (!c.hazardCollapsed || onShell))
@@ -115,6 +113,44 @@ class _Overlays extends StatelessWidget {
           ),
       ]),
     );
+    });
+  }
+}
+
+/// Today 위 오버레이 자리 (Today 와 오버레이는 같은 좌표 — 둘 다 Navigator 크기, 원점 같음).
+/// 버튼이 보이면 그 바로 위 전체 폭 (토스트가 맨 아래, 도착 카드는 그 위). 위 막대까지 자리가 모자라면 도착 카드는 버튼 왼쪽 칸에,
+/// 버튼이 숨으면(패널 크게 펼침) 위 막대 바로 아래. 미리보기는 AI 버튼(아래쪽) 왼쪽 — FAB 에서 나온 말풍선.
+class _TodaySpots {
+  _TodaySpots(TodayChrome? chrome, double padTop, this.h, {required bool toast})
+      : bar = chrome?.barBottom ?? padTop + 67,
+        fab = chrome?.fab,
+        toastH = toast ? toastBox + gap : 0;
+
+  final double bar, h, toastH;
+  final Rect? fab;
+
+  static const gap = 8.0, toastBox = 52.0, cardH = 64.0, chipH = 34.0;
+
+  /// 쌓기 시작점 (위로 [below] 만큼 비우고).
+  double _base(double below) => fab != null ? fab!.top - gap - below : bar;
+
+  Widget fullWidth(double below, Widget child) =>
+      fab != null ? Positioned(left: 16, right: 16, bottom: h - _base(below), child: child) : Positioned(left: 16, right: 16, top: bar + below, child: child);
+
+  Widget arrival(Widget child, {required double height, required bool chip}) {
+    final f = fab;
+    if (f == null || _base(toastH) - height >= bar) {
+      return f == null
+          ? Positioned(left: 16, right: chip ? null : 16, top: bar + toastH, child: child)
+          : Positioned(left: 16, right: chip ? null : 16, bottom: h - _base(toastH), child: child);
+    }
+    // 버튼 위가 좁다 → 버튼 왼쪽 칸 (아래 끝을 버튼 아래 끝에)
+    return Positioned(left: 16, right: chip ? null : 16 + f.width + 12, bottom: h - f.bottom, child: child);
+  }
+
+  Widget peek(Widget child) {
+    final f = fab;
+    return f == null ? Positioned(right: 16, top: bar + toastH, child: child) : Positioned(right: 16 + f.width + 12, bottom: h - f.bottom, child: child);
   }
 }
 
