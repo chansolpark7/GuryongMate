@@ -14,8 +14,8 @@ account · places · planner · agent · safety · routing · docent · trip 을
 docker compose up -d --build          # 저장소 루트에서 백엔드 (docs/COLLABORATION.md). 포트는 .env 의 API_PORT
 cd app
 flutter pub get
-flutter run -d windows --dart-define=DEMO=true      # Windows 데스크톱 (개발자 모드 필요: 플러그인 심볼릭 링크)
-flutter run -d emulator-5554                        # Android 에뮬레이터
+flutter run -d windows --dart-define=DEMO=true --dart-define=API_BASE=http://127.0.0.1:8000   # Windows 데스크톱 (개발자 모드 필요: 플러그인 심볼릭 링크)
+flutter run -d emulator-5554 --dart-define=API_BASE=http://10.0.2.2:8000                       # Android 에뮬레이터 (호스트 PC = 10.0.2.2)
 flutter test                                        # 단위 + 위젯 + SSE 재생 테스트 (녹화 fixture, 서버·LLM 없이)
 
 # 실제 백엔드
@@ -31,13 +31,16 @@ flutter test integration_test/trip_flow_test.dart -d windows   --dart-define=LIV
 flutter test integration_test/trip_claude_check_test.dart -d windows --dart-define=LIVE_API=http://127.0.0.1:8020   --dart-define=DEMO=true --dart-define=REPO=C:/path/to/GuryongMate    # AGENT_PROVIDER=claude: 장면 ③ 선제 턴 + 조건 1번, 장면 ② 질문 1번 (비용, 손으로만)
 ```
 
-- **로그인은 필수**다 (account §2). 토큰(access·refresh)은 `flutter_secure_storage`, 모든 요청에 `Authorization: Bearer`. 401 이면 `POST /auth/refresh` 를 **한 번만**
+- **로그인은 필수**다 (account §2). 토큰(access·refresh)은 `flutter_secure_storage`(웹은 localStorage), 모든 요청에 `Authorization: Bearer`. 401 이면 `POST /auth/refresh` 를 **한 번만**
   보내고(동시에 여러 요청이 401 이어도 한 번) 원래 요청을 다시 보낸다. refresh 도 실패하면 01 로 (refresh_token_reused 면 안내 문구).
 - **Google 로그인**: `google_sign_in` → `POST /auth/google`. 빌드에 `--dart-define=GOOGLE_SERVER_CLIENT_ID=<Web 클라이언트 ID>` 와 서버 `ACCOUNT_GOOGLE_CLIENT_IDS` 가 필요하다.
   Windows 데스크톱은 Google Sign-In 을 지원하지 않아 안내만 띄운다.
-- 서버 주소는 로그인 전 01 하단 "서버 설정", 로그인 뒤 33 설정에서 바꾼다. 기본값은 Android 에뮬레이터 `http://10.0.2.2:8000`, 그 외 `http://127.0.0.1:8000`.
+- **서버 주소** 기본값: ① 빌드 때 `--dart-define=API_BASE=<url>` ② 없으면 웹은 페이지를 연 주소(게이트웨이, `Uri.base.origin`),
+  그 밖(Android·데스크톱)은 공개 테스트 서버 `http://34.64.209.209:8000`. 로컬 백엔드로 개발할 때는 위처럼 `API_BASE` 를 준다
+  (Windows 는 `localhost` 가 IPv6 를 먼저 시도해 느리므로 `127.0.0.1`). 로그인 전 01 하단 "서버 설정", 로그인 뒤 33 설정에서 바꾼 값이 있으면 그것이 우선한다.
+  테스트(`LIVE_API` 등)는 서버 주소를 직접 넣으므로 영향이 없다.
 - **데모·개발 그룹**(33: 데모 위치 모드 스위치, 가상 상황·시각, 안전 점검 지금 실행)은 `--dart-define=DEMO=true` 빌드에서만 보인다.
-- 웹 빌드는 백엔드에 CORS 설정이 없어 API 호출이 막힌다. 모바일·데스크톱으로 실행한다.
+- **웹**: 게이트웨이가 `/` 에서 웹 앱을 내려준다 (같은 출처라 CORS 불필요). 팀원·멘토 시험은 웹 앱 + 관제 대시보드(`/console/`) — 아래 「웹 앱」.
 - 지도는 `flutter_map` + OpenStreetMap 타일(데모용). 경로선은 `POST /routing/route` 의 geometry (구간마다 `leg_mode`, 차량 구간은 점선, 실패·estimate 면 직선).
 - **동행 모드**는 계획 화면에 들어올 때 `GET /trip/plans/{id}/state` 가 active 면 켜진다 (스위치가 아님). 하단 탭이 Today · Planner · Map 이 되고 Today 가 기본.
   여행일이고 첫 일정 1시간 전 이후면 그날 한 번 11 "오늘 여행 시작할까요?" (자동 시작 안 함). Planner ⋯ 에 여행 시작/종료, 29 카드에 [오늘 여행 시작].
@@ -47,6 +50,32 @@ flutter test integration_test/trip_claude_check_test.dart -d windows --dart-defi
 - **데모 위치 모드**(33): GPS 를 보내지 않고 서버에 들어온 위치(재생기·CLI)를 그린다. 발표는 `python scripts/planner/cli.py trip replay new scene3_delay --speed 20` 처럼
   서버 쪽에서 위치를 넣는다 (같은 계정으로 `cli.py login`). 이 모드에서는 state 를 5초마다 읽어 재생기 위치를 따라간다.
 - WSL 의 Docker 로 백엔드를 띄웠다면 WSL 이 유휴 상태로 꺼지지 않게 Ubuntu 터미널을 하나 열어 둔다.
+
+## 웹 앱
+
+게이트웨이(:8000)가 `/` 에서 Flutter 웹 빌드를 서빙한다 (`infra/gateway/routes.caddy` — API·`/console/` 경로가 먼저, 나머지는 웹 앱, 없는 경로는 `index.html`).
+운영은 `deploy/build.sh` 가 웹을 빌드해 gateway 이미지에 넣는다 (docs/deploy/README.md §4). 저장소에는 빌드 결과를 커밋하지 않는다(`app/build/`).
+
+```bash
+deploy/build_web.sh                     # 저장소 루트에서. app/build/web (약 19MB) — 운영과 같은 빌드
+docker compose up -d gateway            # 개발 compose 는 app/ 를 마운트해 app/build/web 을 서빙한다. 다시 빌드하면 새로고침만
+# → http://127.0.0.1:8000/  (포트는 .env 의 API_PORT)
+flutter run -d chrome --dart-define=DEMO=true --dart-define=API_BASE=http://127.0.0.1:8000   # 핫 리로드로 개발 (localhost:임의 포트 → 게이트웨이는 다른 출처라
+                                                                                            #  CORS 가 없어 막힌다. 화면만 볼 때. API 까지는 위의 빌드로)
+```
+
+`deploy/build_web.sh` = `flutter build web --release --pwa-strategy=none --no-web-resources-cdn --dart-define=DEMO=true` + 쓰지 않는 CanvasKit 변형 삭제.
+- `--pwa-strategy=none`: 서비스 워커 캐시를 끈다 — 업데이트 뒤 옛 앱이 남지 않는다. 게이트웨이는 모든 웹 파일에 `Cache-Control: no-cache`(ETag 로 304).
+  Flutter 웹 빌드는 파일 이름에 해시가 없어(`main.dart.js`, `canvaskit/…`) 길게 캐시하지 않는다.
+- `--no-web-resources-cdn`: CanvasKit(약 7MB wasm)을 gstatic CDN 이 아니라 게이트웨이에서 받는다. 게이트웨이가 gzip·zstd 로 압축해 보낸다.
+- `DEMO=true`: 데모·개발 그룹이 보인다 (팀·멘토 시험용). 서버 주소 기본값 = 페이지를 연 주소.
+
+웹에서 다른 점:
+- **위치**: http 주소에서는 브라우저가 위치를 주지 않는다. 그래서 웹은 **데모 위치 모드가 항상 켜져** 있고(GPS 요청·13 권한 화면 없음, 설정 스위치는 잠김)
+  위치는 관제 대시보드(`/console/`)에서 사용자 점을 끌어 옮긴다. 앱은 서버 위치를 그린다.
+- **토큰 저장**: `flutter_secure_storage` 웹판은 WebCrypto 가 필요해 https·localhost 에서만 된다. 웹은 브라우저 localStorage(`shared_preferences`)에 둔다 (`PrefsTokenStore`).
+- **Google 로그인 버튼 없음** (서버에서도 꺼져 있다). 아이디로 로그인.
+- 글꼴(Noto Sans KR, google_fonts)·지도 타일(OSM)은 앱과 같이 인터넷에서 받는다. 글꼴을 못 받으면 브라우저 기본 글꼴로 보인다.
 
 ## 구조
 

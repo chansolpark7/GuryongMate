@@ -82,8 +82,11 @@ class _LoginScreenState extends State<LoginScreen> {
             const SizedBox(height: 4),
             Text('구룡포 여행 계획부터 현장 안내까지', style: AppText.meta.copyWith(fontSize: 14, color: AppColors.text3), textAlign: TextAlign.center),
             const Spacer(flex: 6),
-            AppButton(label: 'Google로 계속하기', kind: ButtonKind.secondary, leading: const _GoogleMark(), loading: _google, onPressed: _googleSignIn),
-            const SizedBox(height: 12),
+            // 웹은 Google 로그인을 쓰지 않는다 (공개 서버에서도 꺼져 있다, docs/deploy/README.md §3.1)
+            if (!kIsWeb) ...[
+              AppButton(label: 'Google로 계속하기', kind: ButtonKind.secondary, leading: const _GoogleMark(), loading: _google, onPressed: _googleSignIn),
+              const SizedBox(height: 12),
+            ],
             AppButton(
               label: '아이디로 계속하기',
               icon: Icons.mail_outline,

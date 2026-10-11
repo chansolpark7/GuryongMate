@@ -17,7 +17,7 @@ class LocationFix {
 
 enum LocationAccess { granted, denied, deniedForever, serviceOff }
 
-/// 위치를 주는 쪽. 실제 앱은 [GeolocatorSource] (Android·iOS·Windows), 테스트는 가짜.
+/// 위치를 주는 쪽. 실제 앱은 [GeolocatorSource] (Android·iOS·Windows), 웹은 [NoDeviceLocation], 테스트는 가짜.
 abstract class LocationSource {
   Future<LocationAccess> check();
   Future<LocationAccess> request();
@@ -66,6 +66,24 @@ class GeolocatorSource implements LocationSource {
       access == LocationAccess.serviceOff ? await Geolocator.openLocationSettings() : await Geolocator.openAppSettings();
     } catch (_) {}
   }
+}
+
+/// 웹: 기기 위치를 쓰지 않는다 (http 주소에서는 브라우저가 위치를 주지 않는다). 항상 데모 위치 모드라
+/// 위치는 관제 대시보드(/console/)가 서버로 옮기고 앱은 서버 위치를 그린다. 권한 요청·위치 꺼짐 안내도 없다.
+class NoDeviceLocation implements LocationSource {
+  const NoDeviceLocation();
+
+  @override
+  Future<LocationAccess> check() async => LocationAccess.granted;
+
+  @override
+  Future<LocationAccess> request() async => LocationAccess.granted;
+
+  @override
+  Stream<LocationFix> positions() => const Stream.empty();
+
+  @override
+  Future<void> openSettings(LocationAccess access) async {}
 }
 
 /// 두 점 사이 거리 (m, 하버사인).
