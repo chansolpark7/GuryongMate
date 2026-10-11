@@ -4,8 +4,6 @@
 """
 from datetime import datetime
 
-import pytest
-
 from app.trip import judge
 from app.trip.clock import KST
 
@@ -29,7 +27,6 @@ BASE = {"version": 1, "days": [{"day": 1, "end_at": "15:42", "items": [
 
 # ---------- 7. 밀림 추천안 ----------
 
-@pytest.mark.xfail(strict=True, reason="버그 B5: 늦게 도착한 곳의 남은 체류를 추천안이 흡수하지 못함 (승인해도 30분 넘게 늦음)")
 def test_extend_stay_absorbs_late_arrival():
     """구룡포항(계획 13:36 시작)에 14:30 에 늦게 도착, 14:40 지금. 재계산: 구룡포항 14:30~15:30 -> 과메기문화관 15:36 (54분 늦음).
     추천안(체류 늘리기)을 승인하면 과메기문화관이 예상 시작(15:36) 근처로 미뤄져야 한다 — 계획 시작 + 체류 >= 재계산 종료."""

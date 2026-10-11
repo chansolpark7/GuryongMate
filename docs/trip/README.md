@@ -166,8 +166,9 @@
   - payload: `reason`, `delay_minutes`, `next` {item_id, title, planned_start, eta, start_at}, `end` {planned, expected}(오늘 종료: 기준 일정 / 재계산),
     `plan_version`, `suggest`(추천 변경, 아래), `new_violations`(함께 생긴 위반, 없으면 빈 목록).
   - 추천 변경(`suggest`, trip 이 계산하고 Agent 는 그대로 도구로 만든다. 완료 항목·지난 시각은 건드리지 않는다):
-    - 머무는 중 → `{"kind": "extend_stay", item_id, title, stay_minutes, from_stay_minutes}`: 지금 장소 체류를 (계획 시작부터 지금까지 + 여유 15분, 5분 올림)으로 늘린다.
-      planner 가 뒤 일정을 자동으로 미룬다. 계획 시작 기준이라 도착이 늦었던 만큼도 함께 흡수한다.
+    - 머무는 중 → `{"kind": "extend_stay", item_id, title, stay_minutes, from_stay_minutes}`: 지금 장소 체류를 계획 시작부터 (지금 + 여유 15분)과
+      재계산의 그 장소 종료 중 늦은 때까지로 늘린다 (5분 올림). planner 가 뒤 일정을 자동으로 미룬다. 계획 시작 기준이라 도착이 늦었던 만큼도 함께 흡수한다
+      (늦게 도착해 남은 체류가 길면 재계산 종료까지 — 지금 + 15분만 보면 승인해도 30분 넘게 늦었다, `audit-2026-10-12.md` B5).
     - 이동 중·첫 장소 전 (늘릴 체류가 없음) → `{"kind": "shift_next", item_id, title, start_time, from_start}`: **다음 장소 시작 시각을 예상 도착(5분 올림)으로 고정**한다 (최소한의 변경).
       그 뒤 일정이 밀리고 승인하면 `delay_minutes` 가 0 근처로 돌아온다. 고정 시각은 남으므로 그보다 더 늦게 도착할 것 같으면 `fixed_time_missed` 위반 delay 가 된다.
   - Agent 선제 턴 (docs/agent/README.md §11.2): 늦어진 정도·영향(다음 일정·오늘 종료) → 추천안 1개(위 변경, 미뤄서 새 문제가 생기면 함께 고침) → "다른 방법" 한 줄(체류 줄이기·한 곳 빼기로 원래 시간 맞추기).
