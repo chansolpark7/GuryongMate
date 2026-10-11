@@ -41,6 +41,7 @@ class TripSettings(BaseSettings):
     planner_base_url: str = "http://127.0.0.1:8000"
     safety_base_url: str = "http://127.0.0.1:8000"
     agent_base_url: str = "http://127.0.0.1:8000"
+    docent_base_url: str = "http://127.0.0.1:8000"
     timeout_sec: float = 15
     agent_timeout_sec: float = 300  # 선제 턴은 LLM 응답이 끝날 때까지 기다린다
 

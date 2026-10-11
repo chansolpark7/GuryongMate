@@ -16,7 +16,7 @@ from app.trip.clients import Clients, get_clients
 from app.trip.clock import KST, FixedClock, get_clock
 from app.trip.models import TripDay
 
-from .fakes import PLACES, FakeAgent, FakePlanner, FakeSafety, fakes
+from .fakes import PLACES, FakeAgent, FakeDocent, FakePlanner, FakeSafety, fakes
 
 USER = "test-trip-user"
 H = {"X-User-Id": USER}
@@ -79,6 +79,10 @@ class Env:
     @property
     def agent(self) -> FakeAgent:
         return self.deps.agent
+
+    @property
+    def docent(self) -> FakeDocent:
+        return self.deps.docent
 
     def url(self, path: str = "") -> str:
         return f"/trip/plans/{self.plan_id}{path}"
@@ -150,6 +154,7 @@ def env(client):
     app.dependency_overrides[get_clock] = lambda: clk
     service.hazards.ttl = 0
     service.hazards.reset()
+    service._refresh_wait.clear()
     yield Env(client, deps, clk, deps.planner.create(USER, PLAN))
     app.dependency_overrides.pop(get_clients, None)
     app.dependency_overrides.pop(get_clock, None)
