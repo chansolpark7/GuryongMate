@@ -1,15 +1,35 @@
 // 여러 날을 바꾸는 제안 (2026-10-11): 카드 변경 목록은 날짜별 머리, 요약 상자는 날마다 한 줄(위반 있는 날 Red),
 // 비교 화면은 바뀐 날만 날짜 탭 — 처음엔 위반 있는 날. 하루짜리는 지금과 같다 (ai_sheet_test·safety_screens_test).
 import 'dart:convert';
+import 'dart:io';
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:guryong_mate/core/models/plan.dart';
 import 'package:guryong_mate/core/theme/app_theme.dart';
 import 'package:guryong_mate/features/planner/planner_shell.dart';
 
+import 'capture_test.dart' show loadFonts;
 import 'support/fixture_gateway.dart';
 import 'support/harness.dart';
+
+// 캡처: flutter test test/multi_day_proposal_test.dart --dart-define=CAPTURE=true → docs/app/review/chat-progress/*.png
+const _capture = bool.fromEnvironment('CAPTURE');
+final _root = GlobalKey();
+
+Future<void> _snap(WidgetTester tester, String name) async {
+  await tester.pump(const Duration(milliseconds: 100));
+  final boundary = _root.currentContext!.findRenderObject()! as RenderRepaintBoundary;
+  await tester.runAsync(() async {
+    final image = await boundary.toImage(pixelRatio: 1);
+    final png = await image.toByteData(format: ui.ImageByteFormat.png);
+    final file = File('../docs/app/review/chat-progress/$name.png');
+    await file.parent.create(recursive: true);
+    await file.writeAsBytes(png!.buffer.asUint8List());
+  });
+}
 
 Map<String, dynamic> _copy(Object? m) => jsonDecode(jsonEncode(m)) as Map<String, dynamic>;
 
@@ -91,7 +111,7 @@ Future<void> _open(WidgetTester tester, FixtureGateway gw, Map<String, dynamic> 
   gw.on('GET /agent/sessions/{sid}', (_) => Res.json(200, detail));
   await phone(tester);
   final session = await signedInSession(gw);
-  await tester.pumpWidget(app(session, const PlannerShell(planId: 240)));
+  await tester.pumpWidget(RepaintBoundary(key: _root, child: app(session, const PlannerShell(planId: 240))));
   await settle(tester);
   await tester.tap(find.byTooltip('구룡메이트 열기').first);
   await settle(tester, 20);
@@ -99,6 +119,22 @@ Future<void> _open(WidgetTester tester, FixtureGateway gw, Map<String, dynamic> 
 
 void main() {
   setUpHarness();
+  setUpAll(() async {
+    if (_capture) await loadFonts();
+  });
+
+  testWidgets('캡처: 2일 제안 카드 · 비교 화면 Day2 · Day1', (tester) async {
+    final gw = FixtureGateway(['f1_plan_with_ai.json']);
+    final two = _twoDays(gw);
+    await _open(tester, gw, two.plan, two.proposal);
+    await reveal(tester, find.text('비교 보기 ›'));
+    await _snap(tester, '04-multi-day-card');
+    await tapIn(tester, find.text('비교 보기 ›'), frames: 30);
+    await _snap(tester, '05-compare-day2-first');
+    await tester.tap(find.byKey(const ValueKey('compare-day-1')));
+    await settle(tester, 20);
+    await _snap(tester, '06-compare-day1');
+  }, skip: !_capture);
 
   test('changedDays: changes 의 day + 다른 날로 옮긴 항목의 전·후 날', () {
     final gw = FixtureGateway(['f1_plan_with_ai.json']);
