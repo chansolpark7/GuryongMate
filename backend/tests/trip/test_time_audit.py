@@ -105,3 +105,14 @@ def test_departed_message_uses_fresh_next():
     assert judge.departed_message("가옥거리", {"eta": "14:10"}, "구룡포항", "walk", t("14:12")) == \
         "가옥거리을(를) 떠났어요. 다음은 구룡포항 (14:10 도착 예정)."
 
+
+
+# ---------- 1. 일찍 도착 (오픈 전) ----------
+
+def test_arrive_before_opening_is_not_delay(env):
+    """첫 장소 짬홍(10:00 개장, 계획 12:30)에 09:30 도착해 기다림 -> 지연 선제 턴이 나오면 안 된다 (audit B3)."""
+    env.start("09:20")
+    assert [e["type"] for e in env.stay("kto-2834330", "09:30", 3)] == ["arrived"]
+    assert env.tick("09:40")["events"] == []
+    assert "delay" not in env.types()
+    assert env.state()["delay_minutes"] < 0  # 계획보다 일찍 (여유)

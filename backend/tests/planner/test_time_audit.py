@@ -62,7 +62,6 @@ def test_start_two_hours_early_without_position():
     assert items[0].start_at == "10:00" and new == [] and delay == 0 and nxt == 1
 
 
-@pytest.mark.xfail(strict=True, reason="버그 B3: 운영 시작 전 도착이 새 outside_open_hours 위반 -> delay 선제 턴")
 def test_arrive_before_opening_waits_not_violation():
     """가옥거리(10:00 개장)에 09:30 도착해 기다림 -> '운영시간 밖' 위반이 새로 생기면 안 된다 (지연이 아니다)."""
     plan = make_plan(("visiting", "09:30", None), PLANNED, PLANNED)
@@ -72,7 +71,6 @@ def test_arrive_before_opening_waits_not_violation():
     assert delay <= 0
 
 
-@pytest.mark.xfail(strict=True, reason="버그 B3: 일찍 떠나 다음 장소에 개장 전 도착 예정 -> 새 outside_open_hours")
 def test_next_place_before_opening_after_leaving_early():
     """가옥거리를 일찍 떠나 물회집(11:00 개장)에 10:06 도착 예정 -> 기다리면 되므로 새 위반이 아니다."""
     plan = make_plan(("done", "09:30", "10:00"), PLANNED, PLANNED)
