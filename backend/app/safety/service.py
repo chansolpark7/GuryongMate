@@ -16,6 +16,8 @@ from app.safety.sources import KST, ActiveWarning, Fetched, Forecast, MockSource
 SOURCE_LABEL = {"sensors": "침수 센서", "breakwater": "방파제 CCTV", "uv": "자외선", "forecast": "기상 예보",
                 "warnings": "기상특보", "tide": "조위", "places": "장소 좌표"}
 MAX_BETTER_TIMES = 3
+PATH_ESTIMATED_NOTE = ("길찾기 경로를 받지 못해 두 장소를 잇는 직선으로 봤다. 실제 길은 침수 감시 구역을 지날 수 있어 "
+                       "안전으로 판단하지 않았다.")
 
 
 MOCK_NOTE = "mock 데이터 (실제 관측·예보 아님)"
@@ -74,9 +76,11 @@ class SafetyService:
         now = now or self.src.now()
         return now.replace(tzinfo=KST) if now.tzinfo is None else now.astimezone(KST)
 
-    def _forecast(self, now: datetime) -> tuple[Fetched[Forecast], datetime | None]:
+    def _forecast(self, now: datetime) -> tuple[Fetched[Forecast], datetime | None, datetime | None]:
+        """(예보, 마지막 시각, 첫 시각)."""
         fc = self.src.forecast(now)
-        return fc, (fc.value.last_hour if fc.ok and fc.value else None)
+        ok = fc.ok and fc.value
+        return fc, (fc.value.last_hour if ok else None), (fc.value.first_hour if ok else None)
 
     @staticmethod
     def _hours(fc: Fetched[Forecast], start: datetime, end: datetime) -> list:
@@ -121,16 +125,18 @@ class SafetyService:
     def status(self, now: datetime | None = None) -> Status:
         now = self._now(now)
         sensors, bw, uv, warns = self.src.sensors(), self.src.breakwater(), self.src.uv(), self.src.warnings()
-        fc, _ = self._forecast(now)
+        fc, _, first = self._forecast(now)
         active = warns.value.active if warns.ok and warns.value else []
         soon = self._hours(fc, now, now + timedelta(hours=3))
+        # 지금 시각 예보가 비었으면(발표 직후 직전 발표도 못 받음) 예보로는 판단하지 못한 것으로 본다
+        fc_now = fc.ok and first is not None and first <= risk.floor_hour(now)
 
         zones: list[ZoneStatus] = []
         for side, zone in geo.BREAKWATER_SIDE.items():
             hz = (risk.warning_hazards(active, {"breakwater"}, warns.fetched_at)
                   + risk.forecast_hazards(soon, {"breakwater"})
                   + (risk.breakwater_hazards(bw.value, side, now) if bw.ok and bw.value else []))
-            gaps = not (warns.ok and fc.ok and bw.ok)
+            gaps = not (warns.ok and fc_now and bw.ok)
             lv = risk.public(risk.worst(h.level for h in hz))
             zones.append(ZoneStatus(id=zone.id, name=zone.name, kind="breakwater",
                                     risk=None if gaps and lv == "safe" else lv,
@@ -151,7 +157,7 @@ class SafetyService:
                     z = geo.flood_zone(r.id, r.name, r.lat, r.lng)
                     zlv = risk.public(risk.worst([lv, *(h.level for h in flood_common)]))
                     zones.append(ZoneStatus(id=z.id, name=z.name, kind="flood", reasons=reasons,
-                                            risk=None if lv == "unknown" and zlv == "safe" else zlv))
+                                            risk=None if (lv == "unknown" or not fc_now) and zlv == "safe" else zlv))
         else:
             for z in geo.STATIC_FLOOD_ZONES:
                 reasons = [h.reason for h in flood_common] or ["침수 센서 데이터를 받지 못함"]
@@ -232,8 +238,8 @@ class SafetyService:
         now = self._now(now)
         start = datetime.combine(day, day_start, KST)
         end = datetime.combine(day, day_end, KST)
-        fc, last = self._forecast(now)
-        t = risk.classify(start, end, now, last, fc.ok)
+        fc, last, first = self._forecast(now)
+        t = risk.classify(start, end, now, last, fc.ok, first)
         data: dict[str, Fetched] = {"forecast": fc}
 
         hours = self._hours(fc, max(start, now), end) if t.forecast_available else []
@@ -307,7 +313,7 @@ class SafetyService:
     # ---------- 일정 항목 평가 ----------
     def assess(self, req: AssessRequest) -> AssessResult:
         now = self._now(req.now)
-        fc, last = self._forecast(now)
+        fc, last, first = self._forecast(now)
         data: dict[str, Fetched | SourceStatus] = {"forecast": fc}
         place_error: str | None = None
 
@@ -339,7 +345,7 @@ class SafetyService:
             start = datetime.combine(v.date, v.start, KST)
             end = datetime.combine(v.date, v.end, KST) if v.end else start + timedelta(minutes=60)
             prepared.append((v, lat, lng, label, notes, indoor, cats, start, end,
-                             risk.classify(start, end, now, last, fc.ok)))
+                             risk.classify(start, end, now, last, fc.ok, first)))
         if any(v.place_id and v.path is None for v, *_ in prepared):
             data["places"] = SourceStatus(ok=place_error is None, error=place_error)
 
@@ -358,6 +364,8 @@ class SafetyService:
         for v, lat, lng, label, notes, indoor, cats, start, end, t in prepared:
             pts = geo.densify(v.path) if v.path is not None else None
             if pts is not None:
+                if v.path_estimated:
+                    notes.append(PATH_ESTIMATED_NOTE)
                 sens = risk.path_sensitivity(pts)
                 coast = risk.coast_label("바닷가 길")
                 if v.mode == "car":
@@ -373,6 +381,8 @@ class SafetyService:
             # 장소 조회 장애로 좌표를 모르면 방파제·침수 구역 여부를 판단할 수 없다 -> 낮게 판단하지 않고 판단 보류
             missing = lat is None and v.place_id is not None and place_error is not None
             if t.horizon in ("now", "short_range"):
+                if v.path_estimated:
+                    missing = True  # 직선은 실제 길이 아니다. 주의·위험 근거는 그대로 쓰되 안전으로는 판단하지 않는다
                 if t.forecast_available:
                     hazards += risk.forecast_hazards(self._hours(fc, max(start, now), end), sens, bool(indoor), coast)
                 else:
@@ -459,7 +469,7 @@ class SafetyService:
         시각별 단계는 예보 + 그 시각에 적용되는 특보로 계산한다 (실측 센서·CCTV 는 zones 에 반영된다)."""
         now = self._now(now)
         st = self.status(now)
-        fc, last = self._forecast(now)
+        fc, last, _ = self._forecast(now)
         warns = self.src.warnings()
         active = warns.value.active if warns.ok and warns.value else []
         kinds = {"breakwater": ({"breakwater"}, False), "flood": ({"flood"}, False), "coast": ({"coast"}, False),
@@ -475,11 +485,15 @@ class SafetyService:
                                            info=[k for k, v in raw.items() if v == "info"]))
         zones = {z.id: z.risk for z in st.zones}
         data_ok = {k: v.ok for k, v in st.data_status.items()}
+        # 길찾기에서 피할 침수 센서와 그 등급 (/avoid 와 같은 기준). 구역 단계(zones)는 센서·특보·예보 중 최고라,
+        # 예보로 이미 주의인 구역에서 센서가 주의·위험으로 오르내려도 zones 가 같아 이용자(trip)가 /avoid 를 다시 받지 않는다
+        avoid = {str(s.id): s.risk for s in st.sensors
+                 if s.type in geo.FLOOD_SENSOR_TYPES and s.risk in ("caution", "danger")}
         # 해시에는 신호가 있는 시각만 넣는다. 아무 일 없는 시각이 지나가는 것만으로는 fingerprint 가 바뀌지 않게
         notable = [[h.time.isoformat(), h.levels, h.info] for h in hours
                    if h.info or any(v != "safe" for v in h.levels.values())]
         basis = {"until": last.isoformat() if last else None, "zones": zones, "warnings": st.warnings,
-                 "hours": notable, "ok": data_ok}
+                 "hours": notable, "ok": data_ok, "avoid": avoid}
         if self.mock:  # 가상 상황: 지금 구간이 바뀌면(시작·끝) 다시 점검하게
             basis["sim"] = [st.scenario, st.segment and st.segment.model_dump(mode="json")]
         digest = hashlib.sha256(json.dumps(basis, sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:16]

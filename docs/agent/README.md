@@ -45,6 +45,7 @@ LLM은 일정을 직접 바꾸지 않는다. 결과는 두 종류의 **카드**�
 | GET | `/agent/limits` | | 200 내 LLM 호출 수와 한도: `{"chat"|"event"|"guide": {"hour"|"day": {"used", "limit"}}}` (`limit` null = 제한 없음, 이때는 세지 않아 `used` 0) |
 | POST | `/agent/plans/{plan_id}/guide/prepare` | `GuidePrepareRequest` (생략 가능) | 202 `GuideJobView` — 가이드 준비 작업 (§12) |
 | GET | `/agent/plans/{plan_id}/guide/jobs/{job_id}` | | 200 `GuideJobView` (§12) |
+| DELETE | `/agent/plans/{plan_id}` | | 204 — 이 사용자의 그 계획 세션·메시지 삭제, 진행 중인 가이드 준비 작업 멈춤. planner 가 계획을 지운 뒤 부른다 (planner 에 묻지 않음) |
 | DELETE | `/agent/me` | | 204 — 이 사용자의 세션·메시지를 모두 삭제 (account 탈퇴가 부른다) |
 
 ```jsonc
@@ -187,6 +188,8 @@ LLM은 일정을 직접 바꾸지 않는다. 결과는 두 종류의 **카드**�
 ### 4.2 다시 제안 (`repropose`)
 - 그 제안을 만든 요청(`request`)을 **지금 일정 기준으로** LLM에 다시 보낸다. 대화에는 사용자 메시지 `이전 제안을 현재 일정에 맞춰 다시 만들어줘.`가 남는다.
 - 새 제안이 만들어지면 원래 제안은 `superseded`가 된다. 원래 제안이 이미 대기 상태가 아니면 409 `proposal_not_pending`이다.
+- 새 변경 없이 끝나면(원래 문제가 지금은 없는 등) 그대로는 승인할 수 없는 원래 제안(`base_changed`·`progress_changed`)을 `rejected`로 정리한다
+  (승인 불가인 채 '승인 대기'로 남지 않게). 승인할 수 있는 원래 제안은 그대로 둔다.
 - 동행 모드에서는 원래 요청(이벤트 메시지 등)의 시각·문제는 그때 기준이라고 알리고, 지금 일정(실제 진행 기준)의 문제로만 판단하게 한다.
   원래 문제가 지금은 없으면 변경 없이 그렇다고 답한다. 원래 제안이 `progress_changed` 였으면 다녀온 곳은 바꾸지 않는다고 함께 알린다.
 
@@ -205,17 +208,17 @@ LLM은 일정을 직접 바꾸지 않는다. 결과는 두 종류의 **카드**�
 
 | 도구 | 동작 | 단계 kind |
 |---|---|---|
-| `search_places` | places `GET /places?mode=hybrid` (키워드 + 의미). `near_place_id`로 주변 검색(결과에 직선거리). 이름이 일치하는 결과에 `name_match`, 지역·종류·반경 조건 때문에 같은 이름 장소가 빠지면 조건 없이 다시 찾아 `name_matches_outside_filter`로 함께 준다 | `search` |
+| `search_places` | places `GET /places?mode=hybrid` (키워드 + 의미). `near_place_id`로 주변 검색(결과에 직선거리): 검색어가 있으면 hybrid 대신 `mode=keyword`(글자가 맞는 곳만)를 **가까운 순**으로 준다 — hybrid 는 반경 안 모든 장소에 의미 점수가 붙어 무관한 곳으로 채워진다. 글자가 맞는 곳이 없을 때만 뜻이 가까운 3곳을 가까운 순으로 주고 관련 없을 수 있다고 `hint`로 알린다. 이름이 일치하는 결과에 `name_match`, 지역·종류·반경 조건 때문에 같은 이름 장소가 빠지면 조건 없이 다시 찾아 `name_matches_outside_filter`로 함께 준다 | `search` |
 | `get_place` | 장소 상세 | `place` |
 | `view_plan` | 현재 일정 (초안 적용 상태) | `plan` |
-| `add_item` / `update_item` / `remove_item` / `update_plan` | 일정 변경 → **초안** | `edit` |
+| `add_item` / `update_item` / `remove_item` / `update_plan` | 일정 변경 → **초안**. `item_id`·`day`·`order`는 정수로 맞춘다(`"88"`도 88, 채움값 `"none"`은 생략). `add_item`의 `day`를 생략하면 여행 중에는 오늘, 아니면 1일차. `update_item`은 지금 값과 같은 인자(이미 없는 `start_time`의 `"none"` 등 채움값)를 빼고 검사·적용하고, 고정 시각을 실제로 풀면 결과에 알린다 | `edit` |
 | `add_rule` / `remove_rule` | 조건(규칙) → 초안 | `rule` |
 | `discard_changes` | 초안 비우기 | `edit` |
 | `review_plan` | 초안 일정을 검토해 문제 목록을 돌려준다 (일정 규칙 + 안전). `AGENT_REVIEW_ROUNDS` > 0 일 때만 | `review` |
 | `travel_time` | 장소 사이 실제 길 기준 도보·차량 시간 (일정 밖 장소끼리도). routing `POST /routing/matrix`. 차량은 주차·승하차 5분 포함, 직선거리 추정이면 `approx`. `check_hazards`면 도착 3곳까지 '지금 출발' 기준 안전: 경로선(`POST /routing/route`)과 도착지를 safety `POST /safety/assess`로 평가한 `safety_now`(경로·도착지 위험 단계, 예보·특보·센서) + 길찾기가 지금 막는 구역·우회 시간 `route_zones` | `route` |
 | `check_safety` | 초안 일정(방문 + 이동 구간)의 안전 단계. planner `POST /plans/{id}/safety/preview` (초안 없으면 `GET /safety`) | `safety` |
 | `safety_outlook` | 날짜별 날씨·바다 전망 (`date`). safety `GET /safety/outlook` | `safety` |
-| `recommend_places` | 추천 카드를 **바로** 만든다 (planner `POST /recommendations`) | `recommend` |
+| `recommend_places` | 추천 카드를 **바로** 만든다 (planner `POST /recommendations`). 후보의 `day`를 생략하면 여행 중에는 오늘, 아니면 1일차 | `recommend` |
 | `remember` | 메모리 저장 `{category, text, scope?, replace_id?}`. docent `POST /docent/memory` (근거 `source` = `chat:{session_id}`), `replace_id` 면 `PATCH`. 저장 뒤 같은 분류의 기존 항목을 `same_category` 로 돌려줘 충돌(짧게 vs 자세히)을 정리하게 한다 | `memory` |
 | `forget` | 메모리 항목 삭제 (docent `DELETE /docent/memory/{id}`) | `forget` |
 | `view_memory` | 메모리 전체 (id 포함, docent `GET /docent/memory?plan_id=`) | `recall` |
@@ -250,6 +253,9 @@ LLM은 일정을 직접 바꾸지 않는다. 결과는 두 종류의 **카드**�
     **안전 위험(danger) 방문·이동** (시간대 이동·실내 대체·수단 변경, 못 바꾸면 이유 설명)
   - `info`: 하루가 2시간 이상 일찍 끝남, **안전 주의(caution)** (사용자에게 알림), 안전 정보를 확인하지 못함
   - 넣지 않는 것: 직선거리 근사 경고(`travel_estimated`), 장소 정보 없음, 판단하지 않은 안전 항목(먼 날짜·데이터 장애 — 안전을 이유로 바꾸지 않는다)
+  - 동행 모드(§11)에서는 고칠 수 없는 지난 일을 검토하지 않는다: 지난 날 전체, 오늘 다녀온(`done`)·머무는(`visiting`) 곳까지의 차량 구간,
+    다녀온·머무는 곳끼리의 중복(앞으로의 항목과 겹치면 그 항목을 가리킨다), 이미 지났거나 남은 일정으로 닿지 않는 식사 시간대.
+    planner 위반(`violations`)은 그대로 옮긴다
   - 안전은 planner 안전 점검(`docs/planner/README.md` §7)을 그대로 쓴다. safety 에 접근할 수 없으면 검토는 계속하고 `info` 로 알린다.
 - 프롬프트는 "조사 → 초안 → `review_plan` → 수정 → 재검토 → 답변" 순서를 지키게 한다.
 - **검토 관문**: 일정을 고치는 턴에서 LLM이 답을 끝내려 하면 하네스가 직접 검토한다(`review` 단계).
@@ -598,19 +604,28 @@ trip 이 단계 3 이벤트(`delay`, `safety_raised`)에서 부른다. 앱은 �
 - 1일차 2026-10-10 14:20 (시뮬레이션 시각)
 - 위치: 물회집 (도착 13:40, 머무는 중)          // moving: "이동 중 (…에서 13:40 출발)", 위치 없음: "아직 받지 못함"
 - 다음: 카페 15:00 예정, 예상 도착 15:12 (12분 늦음)   // delay_minutes 음수면 "N분 여유", 없으면 "오늘 남은 일정 없음"
-- 오늘 남은 일정: 2곳 / 완료 1곳                 // 그날 항목의 진행 상태 (건너뜀 제외)
+- 오늘 남은 일정: 1곳 / 머무는 중 1곳 / 완료 1곳   // 그날 항목의 진행 상태 (건너뜀 제외, 머무는 곳은 따로)
 - 바꿀 수 없는 것: 완료한 항목, 지난 시각
 ```
+- '다음'의 예정 시각·늦음은 trip 이 **승인된 계획**으로 계산한 값이다. 승인 대기 제안이 있으면(현재 일정은 제안 적용 상태)
+  `— 승인된 계획 기준`을 붙이고, 현재 일정에서 그 장소 시작 시각이 다르면 `승인 대기 제안을 적용한 현재 일정에서는 15:40 시작`
+  (빠지면 `… 이 장소가 빠진다`)을 덧붙인다. 두 시각이 서로 다른 말을 하지 않게.
 - 동행 섹션: 답변은 **1~3문장**(현장에서 힐끗 본다), 2문단까지, 핵심 한두 단어만 굵게, 목록·표·제목 없이 (선제 턴은 §11.2 의 세 문단). 모든 도구 사용 가능, 기본 대상은 오늘 남은 일정, 원하면 다른 날도.
   "지금 가도 돼?"는 `travel_time`(`check_hazards`), 늦어지면 체류 줄이기·순서·빼기로 조정. 변경안은 하나, 다른 선택지는 말로 한 줄.
   사용자가 대기 중인 제안에 조건을 붙이면 `add_rule`로 등록하고 그 제안 위에서 고쳐 다시 제안한다.
 - **현재 일정은 실제 진행 기준**이다: 초안이 있으면 planner `preview`, 없으면 planner `projection` 의 일정 (실제 도착·완료 기록 + planner 의 지금,
   planner §8.4). 그래서 LLM 이 보는 시각·위반과 제안 카드의 전후 비교(`day_end` 등)가 현실과 맞는다. projection 이 실패하면(오늘이 기간 밖 등) 계획 기준.
+  동행 모드의 planner 호출(미리보기 `preview`·안전 점검 `safety/preview`·`GET …/safety?live=true`·제안 생성)에는 `live: true`를 보낸다 —
+  진행 기록이 아직 없어도(첫 도착 전) projection 과 같은 지금 기준이라, 초안이 생기는 순간 기준이 바뀌지 않는다. 계획 모드는 보내지 않는다.
 - 하네스가 변경 도구에서 **직접 거부**한다 (도구 오류 `not_allowed_during_trip`, LLM 이 이유를 받고 다른 방법을 찾는다):
   - 완료(`done`) 항목의 수정·삭제
+  - 지난 날 항목의 수정, 지난 날로 넣거나 옮기기 (`add_item`·`update_item`의 `day` < 오늘)
+  - 오늘 다녀온·머무는 곳보다 앞 순서로 넣거나 옮기기 (`order` ≤ 마지막 `done`·`visiting`의 자리. 생략하면 맨 뒤라 괜찮다)
   - 오늘 항목을 지금보다 이른 `start_time`으로 고정
   - 지금 머무는(`visiting`) 항목의 체류 시간·메모 외 변경
   - 진행 상태를 `visiting`·`done`으로 바꾸기 (진행 상태는 trip 이 위치로 기록한다. `skipped`는 일정 변경이라 허용)
+  - `item_id`·`day`·`order`는 정수로 맞춘 뒤 검사한다 (문자열 `"88"`로 우회되지 않게). `update_item`은 지금 값과 같은 인자를 뺀 뒤 검사한다
+    (채움값 `start_time: "none"` 때문에 머무는 곳의 체류 변경이 거부되지 않게)
 - 계획 모드에서는 위 제한이 없다.
 
 ### 11.3.1 현장 해설 (동행 모드 대화, 선제 턴 제외)
@@ -662,8 +677,9 @@ trip 이 단계 3 이벤트(`delay`, `safety_raised`)에서 부른다. 앱은 �
 - 대상: 일정의 장소(날짜·순서대로, 같은 장소는 한 번, 건너뛴 항목 제외). `place_ids` 면 그중 그 장소만. `force` 가 아니면 이미 `ready` 인 노트는 건너뛴다
   (`pending`·`preparing`·`failed`·`stale`·없음은 다시 만든다 — 앱의 [다시 시도]·[다시 준비]도 같은 호출).
   지금 돌고 있는 작업이 아직 끝내지 않은 장소와 이어서 할 장소(`queued`)는 대상에서 뺀다 (`force` 여도).
-- `auto: true` (trip 의 여행 시작·도착): 노트가 `ready`·`pending`·`preparing`·`failed` 면 건너뛰고(없음·`stale` 만), 일정에 없는 `place_ids` 는 422 대신 무시한다.
-  `AGENT_GUIDE_AUTO=false` 면 아무것도 하지 않는다 (`total: 0`).
+- `auto: true` (trip 의 여행 시작·도착, 승인·추가 뒤): 노트가 `ready`·`failed` 면 건너뛰고(없음·`stale`, 그리고 지금 준비하는 작업이 없는 `pending`·`preparing` 만),
+  일정에 없는 `place_ids` 는 422 대신 무시한다. **다녀온(`done`) 항목**과, 오늘(agent 의 '지금', 가상 시각)이 계획 기간 안이면 **지난 날의 장소**도 뺀다 (2026-10-12).
+  `pending`·`preparing` 은 예전에는 늘 건너뛰어, agent 가 다시 시작되면(작업 상태는 메모리에만) 영구히 남았다. `AGENT_GUIDE_AUTO=false` 면 아무것도 하지 않는다 (`total: 0`).
 - **계획당 작업 하나**: 진행 중인 작업이 있으면 새로 만들지 않고 그 작업을 돌려준다(202). 그 작업에 없는 대상은 `pending` 으로 표시하고 `queued` 에 두었다가
   **작업이 끝나면 그 장소들로 새 작업을 이어서** 돌린다 (작업 id 가 바뀐다. 노트 상태는 docent 에서 계속 볼 수 있다). 준비할 곳이 없으면 바로 `status: "done"`, `total: 0`.
 - **자동 시작** (`docs/docent/README.md` §3.2): 제안 승인·추천 후보 [추가]가 성공하면 응답 뒤(기다리지 않음) 같은 함수(`router._prepare`, `auto`)로 일정 전체를 준비한다.
@@ -687,7 +703,9 @@ trip 이 단계 3 이벤트(`delay`, `safety_raised`)에서 부른다. 앱은 �
 ```
 
 장소마다 (코드: `backend/app/agent/guide.py`):
-1. 작업 시작 때 docent 메모리 요약·`memory_version` 을 한 번 받는다. 장소마다 노트를 `preparing` 으로 저장하고, 장소 상세(places)와
+1. **장소마다** docent 메모리 요약·`memory_version` 을 다시 받는다 (2026-10-12. 예전에는 작업 시작 때 한 번 — 준비 도중 «더 짧게» 가 와도 남은 장소가 옛 메모리로 `ready` 가 됐다.
+   받지 못하면 앞 장소에서 받은 것). 그 장소를 쓰는 사이에 관심사·스타일·동행 메모리가 바뀌면 docent 가 `ready` 대신 `stale` 로 저장한다 (`docs/docent/README.md` §3.2).
+   노트를 `preparing` 으로 저장하고, 장소 상세(places)와
    `search_passages`(`"{장소명} 역사 이야기 볼거리"`, 그 장소, `AGENT_GUIDE_PASSAGES`개)를 **미리** 찾아 프롬프트에 넣는다 (LLM 호출을 줄인다).
 2. LLM 은 `search_passages` 와 웹 검색(장소당 `AGENT_WEB_SEARCH_PER_PLACE`, 내장 검색이 없으면 docent `web_search`·`read_page` 함수 도구)을 쓸 수 있다.
    `AGENT_GUIDE_MAX_STEPS` 번째 호출은 도구 없이 노트 JSON 을 강제한다. JSON 이 아니면 한 번만 다시 요청한다.
@@ -698,5 +716,6 @@ trip 이 단계 3 이벤트(`delay`, `safety_raised`)에서 부른다. 앱은 �
    `한국관광공사 오디오 가이드 · {이야기}` 에 주소 `https://api.visitkorea.or.kr/`(TourAPI, places 가 받은 원천). 등급(tier)은 docent 가 URL 로 정한다.
 5. 출처가 하나도 없거나, `short`·`long` 이 비었거나, JSON 을 받지 못하면 `failed`(`error` 에 이유, LLM 오류는 원문 대신 고정 문구와 코드 `(llm_unavailable)`). **LLM 오류·서비스 오류도 그 장소만 `failed`**
    로 두고 다음 장소로 넘어간다 (같은 장소를 다시 시도하지 않는다).
-- 작업 기록은 agent 프로세스 메모리에만 있다 (서버가 다시 시작되면 사라진다. 노트 status 는 docent 에 남고, `preparing` 으로 남은 노트는 다음 준비 때 다시 만든다).
+- 작업 기록은 agent 프로세스 메모리에만 있다 (서버가 다시 시작되면 사라진다. 노트 status 는 docent 에 남고, `pending`·`preparing` 으로 남은 노트는 다음 준비 때 — 자동 준비 포함 — 다시 만든다).
+- 계획을 지우면 planner 가 `DELETE /agent/plans/{plan_id}` 를 불러 진행 중인 작업을 멈추고 이어서 할 장소를 버린다 (그 계획의 대화도 지운다, §2).
 - 로그: 장소마다 `guide plan=… place=… status=… sec=… web=… sources=… usage=…`, 작업 끝에 합계.

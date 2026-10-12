@@ -34,6 +34,7 @@ from app.planner.schemas import (
     UpdatePlanOp,
 )
 from app.planner import validation
+from app.planner.clock import KST
 from app.planner.travel import get_travel_lookup
 from app.planner.validation import Actual, build_schedule, leg_mode, to_min, travel_pairs
 
@@ -288,43 +289,66 @@ def detail(plan: PlannerPlan, places: PlaceLookup, actual: Actual | None = None)
 
 
 def simulate(plan: PlannerPlan, ops: list[PlanOp], places: PlaceLookup, with_index: bool = False,
-             now: datetime | None = None) -> PlanDetail:
+             now: datetime | None = None, started: bool = False) -> PlanDetail:
     """ops 를 사본에 적용한 결과 (DB 변경 없음). 적용할 수 없으면 PlannerError.
-    now 를 주면 그날 진행 기록이 있을 때 실제 진행 기준으로 계산한다 (live_actual)."""
+    now 를 주면 그날 진행 기록이 있을 때(started 면 기록이 없어도) 실제 진행 기준으로 계산한다 (live_actual)."""
     copy = clone(plan)
     Applier(copy, places, persist=False).apply_all(ops, with_index=with_index)
-    return detail(copy, places, live_actual(copy, places, now))
+    return detail(copy, places, live_actual(copy, places, now, started))
 
 
-def preview(plan: PlannerPlan, ops: list[PlanOp], places: PlaceLookup,
-            with_index: bool = True, now: datetime | None = None) -> tuple[PlanDetail, PlanDetail, list[Change]]:
+def preview(plan: PlannerPlan, ops: list[PlanOp], places: PlaceLookup, with_index: bool = True,
+            now: datetime | None = None, started: bool = False) -> tuple[PlanDetail, PlanDetail, list[Change]]:
     """(현재, 적용 후, 변경 요약). 적용할 수 없으면 PlannerError (op_index 포함).
-    now 를 주면 여행 중인 날은 둘 다 실제 진행 + now 기준이다 (변경 요약의 종료 시각도 현실 기준)."""
-    after = simulate(plan, ops, places, with_index, now)
-    before = detail(plan, places, live_actual(plan, places, now))
+    now 를 주면 여행 중인 날은 둘 다 실제 진행 + now 기준이다 (변경 요약의 종료 시각도 현실 기준). started 는 live_actual."""
+    after = simulate(plan, ops, places, with_index, now, started)
+    before = detail(plan, places, live_actual(plan, places, now, started))
     return before, after, diff(before, after)
 
 
-def live_actual(plan: PlannerPlan, places: PlaceLookup, now: datetime | None) -> Actual | None:
+def live_actual(plan: PlannerPlan, places: PlaceLookup, now: datetime | None, started: bool = False) -> Actual | None:
     """now 가 계획 기간 안이고 그날 진행 기록(visiting·done)이 있으면 그날을 실제 진행 기준으로 다시 계산할 기준점
-    (projection 과 같은 기준, 위치는 저장된 진행 상태). 아니면 None (계획 기준 그대로)."""
+    (projection 과 같은 기준, 위치는 저장된 진행 상태). 아니면 None (계획 기준 그대로).
+    started: 호출 쪽이 '오늘 여행을 시작했다'고 알 때 (Agent 동행 모드, 요청의 live). 그러면 진행 기록이 없어도
+    projection 과 같이 지금 기준이다 (남은 첫 항목 지금 출발). planner 는 trip 을 모르므로 기본은 기록이 있을 때만 (§8.4)."""
     if now is None:
         return None
+    if now.tzinfo is not None:
+        now = now.astimezone(KST)
     day = (now.date() - plan.start_date).days + 1
-    if not 1 <= day <= plan.num_days or not any(i.day == day and i.status in ("visiting", "done") for i in plan.items):
+    if not 1 <= day <= plan.num_days:
+        return None
+    if not started and not any(i.day == day and i.status in ("visiting", "done") for i in plan.items):
         return None
     return _anchor(plan, places, day, now.hour * 60 + now.minute, None)
 
 
+def shown(plan: PlannerPlan, places: PlaceLookup, now: datetime | None) -> PlanDetail:
+    """응답용 계획 (GET·편집·진행 기록 응답). 시각은 계획 기준 그대로, 위반(violations)은 여행 중인 날(live_actual)이면
+    지금 기준(projection·preview·Agent 검토와 같은 기준)이다. 다녀온 항목의 계획 기준 시각 위반은 사라지고,
+    지금 기준으로 생기는 위반(늦어서 하루 초과 등)이 보인다. 다른 날은 계획 기준과 같다 (§8.5)."""
+    out = detail(plan, places)
+    actual = live_actual(plan, places, now)
+    if actual is not None:
+        out.violations = detail(plan, places, actual).violations
+    return out
+
+
 def progress_changed(before: PlanDetail, after: PlanDetail, current: PlannerPlan) -> list[dict]:
-    """제안 이후 다녀온(done) 항목 중 제안이 바꾸거나 지우는 것. 승인하면 지난 일을 바꾸게 된다 (409 progress_changed)."""
-    was_done = {i.id for d in before.days for i in d.items if i.status == "done"}
-    done_now = {i.id: i for i in current.items if i.status == "done" and i.id not in was_done}
-    touched = {c.item_id for c in diff(before, after) if c.kind in ("updated", "moved", "removed")}
+    """제안 이후 다녀온(done) 항목 중 제안이 바꾸거나 지우는 것, 제안 이후 도착한(visiting) 항목 중 제안이 지우거나
+    옮기는 것. 승인하면 지난 일·지금 머무는 곳을 바꾸게 된다 (409 progress_changed).
+    머무는 곳의 체류·메모 변경은 막지 않는다 (머무는 동안에도 바꿀 수 있는 것)."""
+    was = {i.id: i.status for d in before.days for i in d.items}
+    done_now = {i.id: i for i in current.items if i.status == "done" and was.get(i.id) != "done"}
+    here_now = {i.id: i for i in current.items if i.status == "visiting" and was.get(i.id) not in ("visiting", "done")}
+    changes = diff(before, after)
+    touched = {c.item_id for c in changes if c.kind in ("updated", "moved", "removed")}
+    displaced = {c.item_id for c in changes if c.kind in ("moved", "removed")}
+    hit = {**{i: here_now[i] for i in displaced & here_now.keys()}, **{i: done_now[i] for i in touched & done_now.keys()}}
     titles = {i.id: _title(i) for d in before.days for i in d.items}
-    return [{"item_id": i, "title": titles.get(i, done_now[i].place_id),
-             "done_at": done_now[i].done_at.strftime("%H:%M") if done_now[i].done_at else None}
-            for i in sorted(touched & done_now.keys())]
+    return [{"item_id": i, "title": titles.get(i, hit[i].place_id),
+             "done_at": hit[i].done_at.strftime("%H:%M") if hit[i].done_at else None}
+            for i in sorted(hit)]
 
 
 # ---------- 변경 요약 ----------

@@ -112,7 +112,10 @@ class PlanController extends ChangeNotifier {
       _notify();
     }
     try {
-      _set(await api.plan(planId));
+      final p = await api.plan(planId);
+      // 늦게 도착한 옛 GET 이 그사이 받은 새 일정(승인·편집 응답)을 덮지 않게 (audit-2026-10-12 F8).
+      // version·progress_version 은 올라가기만 하므로 어느 하나라도 지금보다 작으면 옛 응답이다.
+      if (!isStale(p, plan)) _set(p);
       loadError = null;
     } catch (e) {
       loadError = e;
@@ -122,6 +125,10 @@ class PlanController extends ChangeNotifier {
       _notify();
     }
   }
+
+  /// [got] 이 [cur] 보다 옛 응답인지 (같은 계획에서 version 또는 progress_version 이 작다).
+  static bool isStale(PlanDetail got, PlanDetail? cur) =>
+      cur != null && got.id == cur.id && (got.version < cur.version || got.progressVersion < cur.progressVersion);
 
   /// 일정이 바뀌었는지(version) 또는 진행 상태만 바뀌었는지(progress_version) 보고, 바뀌었으면 안전 점검도 다시 (c12).
   void _set(PlanDetail p) {

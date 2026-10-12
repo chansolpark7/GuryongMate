@@ -8,7 +8,8 @@ Figma: 화면 `73:5458` · Spec `73:5579` · 확인 다이얼로그 States_Feedb
   - 실제 동선·다녀온 곳: PlanDetail 그날 항목 `arrived_at`·`done_at` (`status` done/visiting)
   - 이동: done 항목들의 `travel_minutes` 합 (`leg_mode` 별)
   - 들은 해설: 앱 로컬 기록 (17 을 연 장소 수)
-  - 함께 바꾼 일정: `GET /planner/plans/{id}/proposals?status=accepted` 중 `decided_at` 이 오늘
-  - 도운 순간: `GET /trip/plans/{id}/events` 중 delay·safety_raised·near_hazard (+ 제안 결과)
+  - 함께 바꾼 일정: `GET /planner/plans/{id}/proposals?status=accepted` 중 `decided_at` 이 이번 여행일을 시작한 뒤 (계획을 만든 제안은 빼고, audit-2026-10-12 F3).
+    `decided_at` 은 실제 시각이고 `started_at` 은 서버 시계(가상 시각일 수 있음)라, 시작 시각은 그날 `day_started` 이벤트의 `created_at`(실제 시각) → 실제 시계(`clock: system`)면 `now − started_at` → 모르면 18시간 전 순으로 정한다.
+  - 도운 순간: `GET /trip/plans/{id}/events` (끝까지 넘겨 읽음) 중 이번 여행일(`day`) 의 delay·safety_raised·near_hazard (+ 제안 결과)
   - 기억한 것: `GET /docent/memory?plan_id=` 중 `created_at` 오늘
 - **실수로 시작**(다녀온 곳 0): 지표 없이 "기록된 방문이 없어요. 일정은 그대로예요." + [계획 목록으로].

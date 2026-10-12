@@ -57,14 +57,16 @@ class AsgiSafety:
 
 
 class FakeRoutes(StraightRoutes):
-    """경로선·우회를 정해 둔다. paths[(출발 id, 도착 id)] = [(lat, lng), ...]"""
+    """경로선·우회를 정해 둔다. paths[(출발 id, 도착 id)] = [(lat, lng), ...]
+    정하지 않은 구간은 두 장소를 잇는 선을 길찾기 경로로 돌려준다 (road=False 면 길찾기 실패: None -> planner 가 직선 추정)."""
 
     def __init__(self):
         self.paths: dict = {}
         self.detours: list = []
+        self.road = True
 
     def path(self, a, b, mode):
-        return self.paths.get((a.id, b.id))
+        return self.paths.get((a.id, b.id)) or ([(a.lat, a.lng), (b.lat, b.lng)] if self.road else None)
 
     def detour(self, a, b, mode):
         self.detours.append((a.id, b.id, mode))
@@ -527,3 +529,74 @@ def test_far_legs_do_not_fetch_route_lines(client, sc):
     far = trip(client, start="2027-01-15")
     check(client, far["id"])
     assert asked == []
+
+
+def test_estimated_leg_is_not_judged_safe(client, sc):
+    """길찾기를 못 해 직선으로 본 이동은 안전으로 판단하지 않는다 (S2). 직선이 침수 감시 구역을 비켜 가도
+    실제 길은 지날 수 있다. 주의·위험 근거가 직선에 걸리면 그 단계는 그대로."""
+    sc.src.scenario = "flood"
+    sc.routes.road = False
+    p = new_plan(client, start_date="2026-10-04", day_start="10:30", day_end="18:00")
+    for pid in ("s-street", "s-museum"):
+        ok(client.post(f"/planner/plans/{p['id']}/items", json={"place_id": pid, "stay_minutes": 30}, headers=H), 201)
+    leg = legs_of(check(client, p["id"]))[0]
+    assert leg["risk"] is None and leg["unassessed_reason"] == "data_missing" and leg["data_missing"]
+    assert any("직선" in n for n in leg["notes"])
+    # 직선이 센서 옆을 지나면 주의 근거는 그대로 쓴다
+    ok(client.post(f"/planner/plans/{p['id']}/items", json={"place_id": "s-police", "stay_minutes": 30}, headers=H), 201)
+    legs = legs_of(check(client, p["id"]))
+    assert legs[-1]["risk"] == "caution" and legs[-1]["data_missing"]
+
+
+def test_estimated_leg_does_not_clear_alert(client, sc, watcher):
+    """도로 경로로 위험이던 이동이 길찾기 실패로 직선이 되어도 '해제'(cleared)되지 않는다 (S2)."""
+    sc.src.scenario = "flood"
+    p = new_plan(client, start_date="2026-10-04", day_start="10:30", day_end="18:00")
+    for pid in ("s-street", "s-museum"):
+        ok(client.post(f"/planner/plans/{p['id']}/items", json={"place_id": pid, "stay_minutes": 30}, headers=H), 201)
+    sc.routes.paths[("s-street", "s-museum")] = [(35.9820, 129.5420), (35.9887, 129.5531), (35.9821, 129.5421)]
+    a = [x for x in watcher.tick().alerts if x.plan_id == p["id"]]
+    assert [(c.item.kind, c.to_risk) for c in a[0].changes] == [("travel", "caution")]
+    sc.routes.paths.clear()
+    sc.routes.road = False
+    assert not [x for x in watcher.tick(force=True).alerts if x.plan_id == p["id"]]
+
+
+# ---------- 로직 버그 점검 2026-10-12 A2·S5: 여행 중 점검은 실제 진행 + 지금 기준 ----------
+
+@pytest.fixture
+def planner_now():
+    from app.planner import clock
+    from app.planner.clock import FixedClock
+    saved, clock._clock = clock._clock, FixedClock(NOW)
+    yield
+    clock._clock = saved
+
+
+def today_trip(client) -> tuple[int, int, int]:
+    """오늘 08:00 시작: 가옥거리(60분) -> 방파제(20분). 계획 기준이면 방파제가 10:00(지금) 전에 끝난다."""
+    p = new_plan(client, start_date=NOW.date().isoformat(), day_start="08:00", day_end="20:00")
+    for pid, stay in (("s-street", 60), ("s-breakwater", 20)):
+        ok(client.post(f"/planner/plans/{p['id']}/items", json={"place_id": pid, "stay_minutes": stay}, headers=H), 201)
+    plan = get_plan(client, p["id"])
+    return p["id"], item_id(plan, "s-street"), item_id(plan, "s-breakwater")
+
+
+def test_safety_follows_live_progress(client, sc, watcher, planner_now):
+    """A2·S5: 가옥거리에 늦게 도착해 아직 머무는 중이면 방파제 방문은 지금 이후다. GET /safety·주기 점검이 계획 시각으로
+    보고 '지난 일정'(past)으로 빼면 안 된다 (safety/preview 와 같은 기준)."""
+    pid, street, bw = today_trip(client)
+    assert by_place(check(client, pid))["s-breakwater"]["unassessed_reason"] == "past"  # 기록 없음: 계획 기준
+    live = by_place(ok(client.get(f"/planner/plans/{pid}/safety", params={"live": True}, headers=H)))  # 동행 중 (A1)
+    assert live["s-breakwater"]["unassessed_reason"] is None and live["s-breakwater"]["start_at"] >= "10:00"
+
+    ok(client.post(f"/planner/plans/{pid}/items/{street}/progress", json={"status": "visiting", "at": "08:30"}, headers=H))
+    bw_visit = by_place(check(client, pid))["s-breakwater"]
+    assert bw_visit["unassessed_reason"] is None and bw_visit["start_at"] >= "10:00"
+
+    seen: list[dict] = []
+    assess = sc.assess
+    sc.assess = lambda vs: (seen.extend(vs), assess(vs))[1]
+    watcher.tick(force=True)
+    sent = [v for v in seen if v.get("key") == str(bw)]
+    assert sent and sent[0]["start"] >= "10:00"

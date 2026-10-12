@@ -67,6 +67,41 @@ def test_search_unavailable(client, use_provider):
     err(client.get("/docent/search", params={"q": "x", "limit": 11}, headers=H), 422, "invalid_request")
 
 
+def test_per_user_limits(client, use_provider, monkeypatch):
+    """외부 검색·페이지 읽기는 사용자당 1시간·하루 상한 (§2.4). 캐시 결과는 세지 않고, 사용자마다 따로 센다."""
+    from app.docent.config import settings
+    from app.docent.page import Fetched, get_fetcher
+
+    monkeypatch.setattr(settings, "limit_search_hour", 2)
+    monkeypatch.setattr(settings, "limit_page_hour", 1)
+    fake = use_provider(FakeProvider())
+    me, other = {"X-User-Id": "test-docent-limit-a"}, {"X-User-Id": "test-docent-limit-b"}
+    ok(client.get("/docent/search", params={"q": "한도 1"}, headers=me))
+    ok(client.get("/docent/search", params={"q": "한도 1"}, headers=me))  # 캐시 -> 세지 않음
+    ok(client.get("/docent/search", params={"q": "한도 2"}, headers=me))
+    d = err(client.get("/docent/search", params={"q": "한도 3"}, headers=me), 429, "rate_limited")
+    assert d["kind"] == "search" and d["limit"] == 2 and d["retry_after"] > 0
+    assert len(fake.calls) == 2  # 넘은 요청은 공급자를 부르지 않는다
+    assert ok(client.get("/docent/search", params={"q": "한도 1"}, headers=me))["cached"] is True  # 캐시는 한도 뒤에도
+    ok(client.get("/docent/search", params={"q": "한도 3"}, headers=other))  # 다른 사용자는 따로
+
+    class Pages:
+        calls = 0
+
+        async def fetch(self, url):
+            Pages.calls += 1
+            return Fetched(url, b"<html><title>t</title><body>body</body></html>", "text/html", "utf-8", False)
+
+    app.dependency_overrides[get_fetcher] = lambda: Pages()
+    try:
+        ok(client.get("/docent/page", params={"url": "https://example.com/limit-1"}, headers=me))
+        ok(client.get("/docent/page", params={"url": "https://example.com/limit-1"}, headers=me))  # 캐시
+        d = err(client.get("/docent/page", params={"url": "https://example.com/limit-2"}, headers=me), 429, "rate_limited")
+        assert d["kind"] == "page" and Pages.calls == 1
+    finally:
+        app.dependency_overrides.pop(get_fetcher, None)
+
+
 def test_missing_keys_means_no_provider(monkeypatch):
     from app.docent import search
     monkeypatch.setattr(search, "_provider", None)

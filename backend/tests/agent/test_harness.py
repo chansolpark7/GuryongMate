@@ -13,9 +13,9 @@ from sqlalchemy import delete, select
 from app.agent import router as agent_router
 from app.agent.api import get_http
 from app.agent.llm import Finish, TextDelta, ToolCall, get_llm
-from app.agent.models import AgentMessage, AgentSession
+from app.agent.models import AgentMessage, AgentSession, AgentUsage
 from app.db import SessionLocal, init_db
-from app.docent.models import DocentGuideNote, DocentMemory, DocentMemoryVersion
+from app.docent.models import DocentGuideNote, DocentMemory, DocentMemoryVersion, DocentStaleMark
 from app.docent.plans import get_http as docent_http
 from app.main import app
 from app.planner.models import PlannerPlan
@@ -77,8 +77,10 @@ def client():
     def cleanup():
         with SessionLocal.begin() as s:
             s.execute(delete(AgentSession).where(AgentSession.user_id.like("test-agent-%")))
+            # 호출 수 기록: 같은 이름의 테스트 사용자를 한 시간 안에 다시 돌리면 한도 테스트가 이전 기록에 걸린다
+            s.execute(delete(AgentUsage).where(AgentUsage.user_id.like("test-agent-%")))
             s.execute(delete(PlannerPlan).where(PlannerPlan.user_id.like("test-agent-%")))
-            for model in (DocentMemory, DocentMemoryVersion, DocentGuideNote):
+            for model in (DocentMemory, DocentMemoryVersion, DocentGuideNote, DocentStaleMark):
                 s.execute(delete(model).where(model.user_id.like("test-agent-%")))
 
     cleanup()
@@ -327,6 +329,27 @@ def test_repropose(client, session):
     assert "다시 제안 요청" in system and "점심 넣어줘" in system
     assert user_msg == "이전 제안을 현재 일정에 맞춰 다시 만들어줘."
     err(client.post(f"/agent/sessions/{sid}/proposals/{p1['id']}/repropose", headers=H), 409, "proposal_not_pending")
+
+
+def test_repropose_without_changes_closes_original(client, session):
+    """A9: 다시 제안했는데 새 변경이 없으면, 승인할 수 없는(base_changed) 원래 제안을 대기로 남기지 않고 거절로 정리한다."""
+    sid, pid = session
+    p1 = last(chat(client, sid, "점심 넣어줘", [[("add_item", {"place_id": "p-food"})], ["제안"]]), "proposal")
+    ok(client.post(f"/planner/plans/{pid}/items", json={"place_id": "p-food"}, headers=H), 201)  # 그사이 직접 넣음
+    llm.script = [[("view_plan", {})], ["이미 들어 있어서 바꿀 게 없어요."]]
+    events = sse(client.post(f"/agent/sessions/{sid}/proposals/{p1['id']}/repropose", headers=H))
+    assert "proposal" not in dict(events) and last(events, "done")["text"] == "이미 들어 있어서 바꿀 게 없어요."
+    assert ok(client.get(f"/planner/plans/{pid}/proposals/{p1['id']}", headers=H))["status"] == "rejected"
+    assert not [p for p in ok(client.get(f"/planner/plans/{pid}/proposals?status=pending", headers=H))]
+
+
+def test_repropose_without_changes_keeps_approvable_original(client, session):
+    """승인할 수 있는 제안(일정이 그대로)은 다시 제안 턴이 변경 없이 끝나도 그대로 대기."""
+    sid, pid = session
+    p1 = last(chat(client, sid, "점심 넣어줘", [[("add_item", {"place_id": "p-food"})], ["제안"]]), "proposal")
+    llm.script = [["그대로 두면 돼요."]]
+    sse(client.post(f"/agent/sessions/{sid}/proposals/{p1['id']}/repropose", headers=H))
+    assert ok(client.get(f"/planner/plans/{pid}/proposals/{p1['id']}", headers=H))["status"] == "pending"
 
 
 def test_plan_changed_during_turn(client, session):

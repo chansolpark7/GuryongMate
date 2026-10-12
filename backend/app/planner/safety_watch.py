@@ -120,7 +120,8 @@ class SafetyWatcher:
             plan = db.get(PlannerPlan, plan_id)
             if plan is None:
                 return False, None
-            detail = engine.detail(plan, self.places)
+            # 여행 중인 날은 실제 진행 + 지금 기준 시각 (GET /safety·preview 와 같음). 늦어진 방문을 지난 일정으로 빼지 않는다
+            detail = engine.detail(plan, self.places, engine.live_actual(plan, self.places, now))
         result = assess_plan(detail, self.client, self.routes, now.date(), until.date())
         if result is None:
             with self.sessions.begin() as db:  # 모두 건너뜀·완료 등: 지난 상태를 남기지 않는다

@@ -1,13 +1,13 @@
 """가이드 준비 작업 (docs/docent/README.md §3.3). 대화 세션과 별개인 서버 백그라운드 작업.
 
 계획의 장소마다:
-1. 메모리 요약(작업 시작 때 한 번) + 장소 상세 + search_passages 로 내부 근거부터 모아 프롬프트에 넣는다
+1. 메모리 요약(장소마다 다시 받는다 — 준비 도중 바뀐 메모리를 남은 장소에 반영) + 장소 상세 + search_passages 로 내부 근거부터 모아 프롬프트에 넣는다
 2. LLM 이 더 필요하면 search_passages·웹 검색(장소당 상한)을 쓴다. 공급자 내장 검색(OpenAI)이 있으면 그것을,
    없으면 docent /docent/search·/docent/page 함수 도구를 쓴다
 3. LLM 이 GuideNote JSON 을 쓰면 PUT /docent/plans/{plan_id}/notes/{place_id} 로 저장한다.
    출처는 이번에 실제로 본 자료(근거 조각·검색 결과·내장 검색 인용)에서만 고른다. 하나도 없으면 failed (지어내지 않는다)
 진행은 노트 status(pending -> preparing -> ready | failed)로 docent 에 남고, 작업 상태는 이 프로세스의 메모리에 둔다
-(서버가 다시 시작되면 작업 기록은 사라지지만 노트는 남는다. preparing 으로 남은 노트는 다음 준비 때 다시 만든다).
+(서버가 다시 시작되면 작업 기록은 사라지지만 노트는 남는다. pending·preparing 으로 남은 노트는 다음 준비 때 — 자동 준비 포함 — 다시 만든다).
 한 장소에서 LLM·서비스 오류가 나면 그 장소만 failed 로 두고 다음 장소로 넘어간다 (같은 장소를 다시 시도하지 않는다).
 """
 import asyncio
@@ -158,12 +158,32 @@ def enqueue(plan_id: int, user_id: str, places: list[dict], llm: LLMProvider, ap
         f.places.setdefault(p["place_id"], p["title"])
 
 
-def plan_places(plan: dict) -> list[dict]:
-    """일정의 장소 (날짜·순서대로, 같은 장소는 한 번, 건너뛴 항목 제외) [{"place_id", "title"}]."""
+def cancel_plan(plan_id: int, user_id: str) -> bool:
+    """계획이 지워졌을 때: 이어서 준비할 장소를 버리고 진행 중인 작업을 멈춘다 (그 사용자의 작업만). 멈췄는지 돌려준다."""
+    f = _followups.get(plan_id)
+    if f is not None and f.user_id == user_id:
+        _followups.pop(plan_id, None)
+    job = running_job(plan_id)
+    if job is None or job.user_id != user_id or job.task is None:
+        return False
+    job.task.cancel()
+    return True
+
+
+def plan_places(plan: dict, auto: bool = False, today: str | None = None) -> list[dict]:
+    """일정의 장소 (날짜·순서대로, 같은 장소는 한 번, 건너뛴 항목 제외) [{"place_id", "title"}].
+    auto(자동 준비)면 다녀온(done) 항목도 빼고, 오늘(today, YYYY-MM-DD)이 계획 기간 안이면 지난 날의 항목도 뺀다
+    (현장에서 다시 볼 일이 없는 곳에 LLM 비용을 쓰지 않게. 수동 [가이드 준비]·[다시 준비]는 그대로 모두 대상)."""
+    dates = [str(d.get("date") or "") for d in plan["days"]]
+    in_trip = bool(auto and today and dates and dates[0] <= today <= dates[-1])
     out: dict[str, str] = {}
-    for d in plan["days"]:
+    for d, date in zip(plan["days"], dates):
+        if in_trip and date < today:
+            continue
         for i in d["items"]:
-            if i["status"] != "skipped" and i["place_id"] not in out:
+            if i["status"] == "skipped" or (auto and i["status"] == "done"):
+                continue
+            if i["place_id"] not in out:
                 out[i["place_id"]] = (i.get("place") or {}).get("title") or i["place_id"]
     return [{"place_id": p, "title": t} for p, t in out.items()]
 
@@ -193,18 +213,27 @@ def start(plan_id: int, user_id: str, places: list[dict], llm: LLMProvider, api:
     return launch(register(plan_id, user_id, places), llm, api)
 
 
+async def _memory(job: GuideJob, api: ServiceApi, last: tuple[str | None, int | None]) -> tuple[str | None, int | None]:
+    """(메모리 요약, memory_version). 받지 못하면 앞 장소에서 받은 것 (처음이면 메모리 없이)."""
+    try:
+        summary = await api.memory_summary(job.plan_id)
+        return summary["text"], summary["memory_version"]
+    except ApiError as e:
+        log.warning("guide plan=%s 메모리를 받지 못해 %s 준비: %s", job.plan_id,
+                    "앞서 받은 메모리로" if last[1] is not None else "메모리 없이", e)
+        return last
+
+
 async def _run(job: GuideJob, llm: LLMProvider, api: ServiceApi) -> None:
     try:
-        try:
-            summary = await api.memory_summary(job.plan_id)
-            memory, version = summary["text"], summary["memory_version"]
-        except ApiError as e:
-            log.warning("guide plan=%s 메모리를 받지 못해 메모리 없이 준비: %s", job.plan_id, e)
-            memory, version = None, None
         model = getattr(llm, "model", llm.name)
+        mem: tuple[str | None, int | None] = (None, None)
         for p in job.places:
             job.current = p["place_id"]
-            await _prepare_one(job, p, llm, api, memory, version, model)
+            # 메모리는 장소마다 다시 받는다: 준비 도중 «더 짧게» 같은 말이 오면 남은 장소는 새 메모리로 만든다.
+            # 이 장소를 쓰는 사이에 바뀌면 docent 가 ready 를 stale 로 저장한다 (memory_version 비교)
+            mem = await _memory(job, api, mem)
+            await _prepare_one(job, p, llm, api, mem[0], mem[1], model)
         log.info("guide plan=%s job=%s 끝: %d곳 중 ready %d, usage %s", job.plan_id, job.id[:8], len(job.places),
                  sum(1 for p in job.places if p["status"] == "ready"), job.usage)
     finally:

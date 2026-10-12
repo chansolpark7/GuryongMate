@@ -126,3 +126,24 @@ def test_no_anchor_leaves_now():
     # 시작 전이면 기준 일정과 같다
     items, new, delay, nxt = run(make_plan(PLANNED, PLANNED, PLANNED), Actual(1, hm("11:00")))
     assert items[0].start_at == "12:30" and delay == 0 and nxt == 1
+
+
+# ---------- 로직 버그 점검 2026-10-12 P1·T2: 앞 항목을 건너뛰고 다녀옴 ----------
+
+def test_skipped_ahead_planned_item_is_past_without_anchor():
+    """P1: 가옥거리(planned)를 건너뛰고 물회집을 다녀옴(done), 머무는 곳 없음 -> 가옥거리는 지난 항목, 다음은 문화관."""
+    plan = make_plan(PLANNED, ("done", "12:40", "13:40"), PLANNED)
+    items, new, delay, nxt = run(plan, Actual(1, hm("14:00")))
+    assert nxt == 3 and new == []
+    assert items[0].start_at == "12:30"  # 지금 시각에 끼어들지 않는다 (지난 항목, 계산값)
+    assert items[2].arrive_at == "14:06"  # 물회집에서 지금 출발
+    assert delay == hm("14:06") - hm("14:42")
+
+
+def test_moving_after_last_with_skipped_ahead_has_no_next():
+    """T2: 가옥거리(planned) 건너뜀 -> 물회집·문화관 done, 17:30 출발 (이동 중, 향할 planned 없음 -> ops._anchor 가
+    기준점 없음으로 본다) -> 다음 없음, 새 위반 없음 (예전: 다음=가옥거리, 운영시간·하루 초과 새 위반)."""
+    plan = make_plan(PLANNED, ("done", "12:40", "13:40"), ("done", "14:00", "17:30"))
+    items, new, delay, nxt = run(plan, Actual(1, hm("17:30")))
+    assert nxt is None and new == []
+    assert delay == hm("17:30") - hm("15:42")  # 그날 종료 시각 차이 (문화관 실제 완료)

@@ -31,20 +31,34 @@ def fmt(m: int) -> str:
     return f"{m // 60:02d}:{m % 60:02d}"
 
 
+# 요일 범위. 앞쪽 '요일' 은 생략할 수 있다 (`월~목요일`). 숫자 뒤의 '월'(달)은 요일로 보지 않는다
+_DAY_RANGE = re.compile(r"(?<!\d)([월화수목금토일])(?:요일)?\s*[~\-]\s*([월화수목금토일])요일")
+
+
 def closed_weekdays(rest_date: str) -> set[int]:
-    """휴무일 원문에서 '매주 반복되는' 휴무 요일(0=월)만 뽑는다. 격주·명절 등 판단 불가한 것은 무시."""
+    """휴무일 원문에서 '매주 반복되는' 휴무 요일(0=월)만 뽑는다. 격주·명절 등 판단 불가한 것은 무시.
+
+    - `/`·줄바꿈 구간 안에서 '매월·째·격주' 가 나오면 그 뒤 `,` 로 이어진 요일도 같은 조건으로 보고 무시한다
+      (`매월 셋째 토요일, 일요일` 의 일요일). '매주' 가 다시 나오면 매주 휴무로 돌아간다.
+    - 범위는 앞쪽 '요일' 을 생략해도 읽는다 (`매주 월~목요일`)."""
     text = re.sub(r"\([^)]*\)", "", rest_date).split("※")[0]  # 단서 조항·참고 문구 제거
     days: set[int] = set()
-    for seg in re.split(r"[/\n,]", text):
-        if re.search(r"매월|매달|째|격주", seg):
-            continue
-        if "주말" in seg:
-            days |= {5, 6}
-        for a, b in re.findall(r"([월화수목금토일])요일\s*[~\-]\s*([월화수목금토일])요일", seg):
-            i, j = WEEKDAYS.index(a), WEEKDAYS.index(b)
-            days |= {(i + k) % 7 for k in range((j - i) % 7 + 1)}
-        seg = re.sub(r"[월화수목금토일]요일\s*[~\-]\s*[월화수목금토일]요일", "", seg)
-        days |= {WEEKDAYS.index(c) for c in re.findall(r"([월화수목금토일])요일", seg)}
+    for part in re.split(r"[/\n]", text):
+        monthly = False
+        for seg in part.split(","):
+            if "매주" in seg:
+                monthly = False
+            if re.search(r"매월|매달|째|격주", seg):
+                monthly = True
+            if monthly:
+                continue
+            if "주말" in seg:
+                days |= {5, 6}
+            for a, b in _DAY_RANGE.findall(seg):
+                i, j = WEEKDAYS.index(a), WEEKDAYS.index(b)
+                days |= {(i + k) % 7 for k in range((j - i) % 7 + 1)}
+            seg = _DAY_RANGE.sub("", seg)
+            days |= {WEEKDAYS.index(c) for c in re.findall(r"([월화수목금토일])요일", seg)}
     return days
 
 
@@ -67,6 +81,14 @@ _HOURS_TOKEN = re.compile(
 )
 _BREAK_WORD = re.compile(r"준비\s*시간|브레이크\s*타임|휴게\s*시간")
 _TIME_RANGE = re.compile(r"\d{1,2}:\d{2}\s*[~\-]\s*\d{1,2}:\d{2}")
+# ※ 문구가 운영 기간·계절에 따라 시간이 바뀐다고 말하는지 (`매년 8월 중순~9월 말까지 개장`, `하절기 (6~8월)는 20:00 까지`,
+# `7~8월에만 운영`). 본문 범위만으로는 그날 맞는지 알 수 없다. '폐장 30분 전'·'개장 시간' 같은 시각 문구와
+# 요일로 정한 운영일(`금요일~일요일에만 운영` — 휴무는 closed_weekdays 가 본다)은 아니다
+_PERIOD_NOTE = re.compile(
+    r"하절기|동절기|하계|동계|여름|겨울|성수기|비수기|시즌|기간|개장(?!\s*(?:시간|시각|전|후|\d))|(?<!요일)(?<!평일)(?<!주말)에만\s*운영"
+    r"|\d{1,2}\s*월[^~\-\n]{0,8}[~\-]|\d{1,2}\s*[~\-]\s*\d{1,2}\s*월")
+# 요일 토큰 뒤에 이 말이 오면 쉬는 날을 말하는 것이라 뒤 범위의 조건으로 쓰지 않는다 (`(월요일 휴무)`)
+_DAY_OFF = re.compile(r"\s*(?:은|는)?\s*(?:정기\s*)?(?:휴무|휴관|휴업|휴일|쉼|쉽니다)")
 
 
 def open_hours_for(open_hours: str, day: date) -> OpenHours | None:
@@ -75,12 +97,14 @@ def open_hours_for(open_hours: str, day: date) -> OpenHours | None:
     - 시각 범위마다 앞에 나온 조건(하절기/동절기(M월~N월), 평일·주말·요일)을 붙인다. 계절이 바뀌면 요일 조건은 처음부터.
     - 준비시간·브레이크타임·휴게시간 바로 뒤의 범위는 쉬는 구간. 마지막 주문·입장 마감 같은 시각 하나는 보지 않는다.
     - 그날에 맞는 영업 범위가 요일 조건 붙은 것 중 하나, 없으면 조건 없는 것 중 하나일 때만 판단한다 (시설별 시간처럼 둘 이상이면 None).
-    - 계절에 월 범위가 없거나 조건 없는 범위가 따로 섞이면 None. ※ 뒤 참고 문구에 시각 범위가 있어도 None.
+    - 계절에 월 범위가 없거나 조건 없는 범위가 따로 섞이면 None. ※ 뒤 참고 문구에 시각 범위가 있거나
+      운영 기간·계절 변경(월 범위, 개장, 하절기·동절기, '7~8월에만 운영' 등)을 말해도 None.
+    - 뒤에 '휴무·휴관·쉼' 이 오는 요일(`(월요일 휴무)`)은 조건으로 쓰지 않는다 (휴무는 closed_weekdays 가 본다).
     - ※ 의 '주말은 준비시간 없이' 는 주말에 쉬는 구간을 뺀다. 그 밖에 쉬는 구간을 말하는 ※ 문구가 있으면 쉬는 구간만 무시한다."""
     if "입실" in open_hours or "퇴실" in open_hours:
         return None
     text, _, note = open_hours.partition("※")
-    if _TIME_RANGE.search(note):
+    if _TIME_RANGE.search(note) or _PERIOD_NOTE.search(note):
         return None
     wd, month = day.weekday(), day.month
     season: set[int] | None = None
@@ -100,6 +124,8 @@ def open_hours_for(open_hours: str, day: date) -> OpenHours | None:
             s, e = int(m["h1"]) * 60 + int(m["n1"]), int(m["h2"]) * 60 + int(m["n2"])
             entries.append((season, days, pending_break, s, e))
             pending_break = None
+        elif (m["d1"] or m["d"] or m["dw"]) and _DAY_OFF.match(text, m.end()):
+            continue  # 쉬는 요일 (조건 아님)
         elif m["d1"]:
             i, j = WEEKDAYS.index(m["d1"]), WEEKDAYS.index(m["d2"])
             days, pending_break = frozenset((i + k) % 7 for k in range((j - i) % 7 + 1)), None
@@ -170,7 +196,8 @@ class Actual:
 
     - anchor: 지금 머무는 항목(moving=False, anchor_arrive = 실제 도착) 또는
       이동 중 향하는 항목(moving=True, anchor_arrive = now + 지금 위치에서 남은 이동시간).
-    - anchor 가 없으면 아직 다녀오지 않은 첫 항목부터 '지금 출발' 로 본다 (now 이전에는 도착하지 않음).
+    - anchor 가 없으면 마지막으로 다녀온 항목 뒤의 첫 항목부터 '지금 출발' 로 본다 (now 이전에는 도착하지 않음).
+      그보다 앞의 다녀오지 않은 항목은 건너뛴 것으로 보고 지난 항목으로 둔다 (behind_last_visit).
     """
     day: int
     now: int  # 자정 기준 분
@@ -210,6 +237,8 @@ def build_schedule(
         anchored = now_day is not None and now_day.anchor_id is not None and not now_day.moving
         planned_end = _planned_end(plan, places, travel, now_day) if anchored else {}
         seen_anchor = live = False  # live: 지금 이후 항목(anchor 또는 남은 항목)을 계산하기 시작함
+        # 기준점이 없으면 마지막으로 다녀온 항목보다 앞의 항목은 지난 항목 (순서를 건너뛰고 다녀옴)
+        behind = behind_last_visit(_timeline(plan, d)) if now_day is not None and now_day.anchor_id is None else set()
         for it in _timeline(plan, d):
             place = places.get(it.place_id)
             name = _name(place, it.place_id)
@@ -231,7 +260,7 @@ def build_schedule(
             if now_day is not None:
                 if it.id == now_day.anchor_id:
                     phase, seen_anchor = ("moving" if now_day.moving else "here"), True
-                elif it.status == "done" or (now_day.anchor_id is not None and not seen_anchor):
+                elif it.status == "done" or (now_day.anchor_id is not None and not seen_anchor) or it.id in behind:
                     phase = "past"
                 elif now_day.anchor_id is None and not live:
                     cursor = max(cursor, now_day.now)  # 지금 출발
@@ -251,6 +280,10 @@ def build_schedule(
                 start = arrive if fixed is None else max(arrive, fixed)  # 이미 와 있다: 고정 시각 놓침은 따지지 않는다
                 end = None  # 운영 시작 대기까지 본 뒤 정한다 (아래)
             else:
+                if phase == "plan" and last_end is None and fixed is not None:
+                    # 그날 첫 항목: 앞 일정이 없으니 고정 시각이 하루 시작보다 일러도 그때 시작한다
+                    # (지금 기준이면 지금보다 이르게는 아님 — 지났으면 '지금 기준으로' 놓침)
+                    cursor = min(cursor, max(fixed, now_day.now if now_day is not None else fixed))
                 arrive = now_day.anchor_arrive if phase == "moving" else cursor + (leg.minutes if leg else 0)
                 start = arrive
                 if fixed is not None:
@@ -442,10 +475,21 @@ def parse_hhmm(s: str) -> int:
     return int(h) * 60 + int(m)
 
 
+def behind_last_visit(timeline: list[PlannerItem]) -> set[int]:
+    """마지막으로 다녀온·머문(done·visiting) 항목보다 앞의 항목 id (그 항목들은 순서를 건너뛰고 지나온 것)."""
+    items = [i for i in timeline if i.status != "skipped"]
+    last = max((n for n, i in enumerate(items) if i.status in ("done", "visiting")), default=0)
+    return {i.id for i in items[:last]}
+
+
 def next_item_id(plan: PlannerPlan, actual: Actual) -> int | None:
-    """다음에 갈 항목: 이동 중이면 향하는 항목, 머무는 중이면 그 뒤 첫 미완료 항목, 아니면 첫 미완료 항목."""
+    """다음에 갈 항목: 이동 중이면 향하는 항목, 머무는 중이면 그 뒤 첫 미완료 항목,
+    아니면 마지막으로 다녀온 항목 뒤의 첫 미완료 항목 (그 앞의 건너뛴 항목은 다음이 아니다)."""
     items = [i for i in _timeline(plan, actual.day) if i.status != "skipped"]
-    if actual.anchor_id is not None:
+    if actual.anchor_id is None:
+        behind = behind_last_visit(items)
+        items = [i for i in items if i.id not in behind]
+    else:
         if actual.moving:
             return actual.anchor_id
         n = next((k for k, i in enumerate(items) if i.id == actual.anchor_id), None)

@@ -58,6 +58,7 @@ void main() {
     final r = TripReplay('scene2_arrival'); // 계획 모양만 빌림
     final plan = {...r.plan, 'id': int.parse(gw.param('start', 'plan_id'))};
     gw.on('GET /planner/plans/{id}', (_) => Res.json(200, plan));
+    gw.on('GET /planner/plans', (_) => Res.json(200, [plan])); // 동행 중 계획 version 확인
     gw.on('GET /planner/plans/{id}/safety', (_) => Res.error(503, 'safety_unavailable'));
     gw.on('GET /planner/plans/{id}/safety/alerts', (_) => Res.json(200, []));
     gw.on('GET /safety/avoid', (_) => Res.json(200, {'zones': []}));

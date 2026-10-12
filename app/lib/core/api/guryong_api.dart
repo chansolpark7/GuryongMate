@@ -229,6 +229,19 @@ class GuryongApi {
   Future<List<TripEvent>> tripEvents(int planId, {int after = 0, int limit = 50}) async =>
       _l(await client.get('/trip/plans/$planId/events', {'after': after, 'limit': limit})).map(TripEvent.fromJson).toList();
 
+  /// 이벤트 전부 (오래된 순). 한 쪽([page])이 가득 차면 마지막 id 뒤를 이어 읽는다 (알림 목록·하루 요약, audit-2026-10-12 F6).
+  Future<List<TripEvent>> tripEventsAll(int planId, {int page = 200}) async {
+    final out = <TripEvent>[];
+    var after = 0;
+    for (var i = 0; i < 50; i++) {
+      final got = await tripEvents(planId, after: after, limit: page);
+      out.addAll(got);
+      if (got.length < page) break;
+      after = got.map((e) => e.id).reduce((a, b) => a > b ? a : b);
+    }
+    return out;
+  }
+
   Future<void> eventSeen(int planId, int eventId) => client.post('/trip/plans/$planId/events/$eventId/seen');
 
   Future<GuideNote> guideNoteDetail(int planId, String placeId) async => GuideNote.fromJson(await guideNote(planId, placeId));

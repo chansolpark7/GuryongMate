@@ -406,6 +406,7 @@ class _TodayScreenState extends State<TodayScreen> {
                     _RemainingSection(
                       items: beforeFirst ? items : remaining.where((i) => i.id != next?.id || moving).toList(),
                       total: beforeFirst,
+                      noNext: next == null,
                       end: (t.today?.endAt ?? items.lastOrNull?.endAt),
                       expected: s.expected,
                       safety: c.safety,
@@ -915,6 +916,7 @@ class _RemainingSection extends StatelessWidget {
   const _RemainingSection({
     required this.items,
     required this.total,
+    this.noNext = false,
     required this.end,
     this.expected,
     required this.safety,
@@ -925,6 +927,9 @@ class _RemainingSection extends StatelessWidget {
 
   /// 첫 장소 전: 머리가 "오늘 일정 n곳" (목록은 처음부터 모두).
   final bool total;
+
+  /// 다음 일정이 없음 (마지막 장소에 머무는 중): 머리가 "다음이 마지막"이 아니라 "지금이 마지막" (audit-2026-10-12 F4).
+  final bool noNext;
   final String? end;
 
   /// 서버 재계산의 예상 시각 (TripState.expected). 늦으면 '기준 → 예상'으로 보인다 (audit-2026-10-12 D2).
@@ -957,7 +962,7 @@ class _RemainingSection extends StatelessWidget {
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
         // 머리는 요약 한 줄만 — [전체 지도]·[전체 일정 ›] 는 바로 아래 하단 탭(Map·Planner)과 같아 없앴다 (2026-10-11)
         Text(
-          !total && items.isEmpty ? '다음이 마지막 일정이에요$endText' : '${total ? '오늘 일정' : '남은 일정'} ${items.length}곳$endText',
+          !total && items.isEmpty ? '${noNext ? '지금이' : '다음이'} 마지막 일정이에요$endText' : '${total ? '오늘 일정' : '남은 일정'} ${items.length}곳$endText',
           key: const ValueKey('remaining-header'),
           style: AppText.caption.copyWith(fontWeight: FontWeight.w700, color: lateEnd == null ? null : AppColors.warning),
         ),

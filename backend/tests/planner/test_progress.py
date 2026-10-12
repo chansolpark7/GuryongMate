@@ -265,3 +265,110 @@ def test_projection_defaults_and_errors(client, fixed_now):
     err(project(client, pid, position={"state": "visiting", "item_id": ids["p-food"]}), 422, "invalid_position")
     err(project(client, pid, position={"state": "visiting", "item_id": 999999}), 404, "item_not_found")
     err(project(client, pid, position={"state": "flying"}), 422, "invalid_request")
+
+
+# ---------- 여행 중 계획 응답의 위반 (§8.5) ----------
+
+@pytest.fixture
+def at(request):
+    saved = clock._clock
+    h, m = request.param
+    clock._clock = FixedClock(datetime(2026, 10, 10, h, m, tzinfo=KST))
+    yield
+    clock._clock = saved
+
+
+def keys(vs: list[dict]) -> list[tuple]:
+    return sorted((v["code"], v["day"], v["item_id"]) for v in vs)
+
+
+@pytest.mark.parametrize("at", [(12, 52)], indirect=True)
+def test_plan_violations_follow_live_progress(client, at):
+    """계획 기준으로는 물회집(13:00 고정)을 놓치지만 가옥거리를 일찍 끝내 실제로는 문제없다.
+    계획 응답의 위반은 지금 기준(Agent 의 projection 과 같음) -> 1일차 경고는 사라지고, 아직 안 간 2일차 경고는 남는다.
+    시각과 GET /validate 는 계획 기준 그대로."""
+    pid = new_plan(client, end_date="2026-10-11")["id"]
+    for day in (1, 2):
+        add(client, pid, "p-house", day=day, stay_minutes=120)
+        plan = add(client, pid, "p-food", day=day, start_time="13:00")
+    house, food1, food2 = item_id(plan, "p-house"), item_id(plan, "p-food"), item_id(plan, "p-food", day=2)
+    planned = [("fixed_time_missed", 1, food1), ("fixed_time_missed", 2, food2)]
+    assert keys(plan["violations"]) == planned
+
+    ok(progress(client, pid, house, "visiting", "12:30"))
+    r = ok(progress(client, pid, house, "done", "12:50"))
+    assert keys(r["violations"]) == [("fixed_time_missed", 2, food2)]
+    plan = get_plan(client, pid)
+    assert keys(plan["violations"]) == [("fixed_time_missed", 2, food2)]
+    assert keys(plan["violations"]) == keys(ok(project(client, pid))["plan"]["violations"])  # Agent 검토와 같은 기준
+    assert view(plan, house)["end_at"] == "14:30"  # 시각은 계획 기준
+    assert keys(ok(client.get(f"/planner/plans/{pid}/validate", headers=H))["violations"]) == planned
+    # 편집 응답도 같은 기준
+    r = ok(client.patch(f"/planner/plans/{pid}/items/{food2}", json={"memo": "2일차"}, headers=H))
+    assert keys(r["violations"]) == [("fixed_time_missed", 2, food2)]
+
+
+@pytest.mark.parametrize("at", [(13, 25)], indirect=True)
+def test_plan_violations_show_live_only_violation(client, at):
+    """반대로 계획 기준엔 없지만 늦어서 생긴 위반은 보인다. 진행 기록이 없으면(첫 도착 전) 계획 기준."""
+    pid = new_plan(client)["id"]
+    add(client, pid, "p-house", stay_minutes=20)
+    plan = add(client, pid, "p-food", start_time="13:00")
+    house, food = item_id(plan, "p-house"), item_id(plan, "p-food")
+    assert get_plan(client, pid)["violations"] == []
+    ok(progress(client, pid, house, "visiting", "12:40"))
+    ok(progress(client, pid, house, "done", "13:20"))
+    assert keys(get_plan(client, pid)["violations"]) == [("fixed_time_missed", 1, food)]
+
+
+# ---------- 로직 버그 점검 2026-10-12 (docs/audit/logic-bugs-2026-10-12.md) ----------
+
+def test_projection_skipped_ahead_item_is_not_next(client):
+    """P1·T2: 가옥거리를 건너뛰고(planned 그대로) 물회집·문화관을 다녀옴. 건너뛴 가옥거리는 '다음'이 아니다."""
+    pid, ids = trip(client)
+    ok(progress(client, pid, ids["p-food"], "visiting", "12:40"))
+    ok(progress(client, pid, ids["p-food"], "done", "13:40"))
+    r = ok(project(client, pid, day=1, now="14:00"))  # 머무는 곳 없음
+    assert r["next"]["item_id"] == ids["p-museum"] and r["new_violations"] == []
+    ok(progress(client, pid, ids["p-museum"], "visiting", "14:00"))
+    ok(progress(client, pid, ids["p-museum"], "done", "17:30"))
+    r = ok(project(client, pid, day=1, now="17:30", position={"state": "moving", "lat": 35.99, "lng": 129.557}))
+    assert r["next"] is None and r["new_violations"] == []
+
+
+def test_accept_refuses_moving_or_removing_item_visited_since_proposal(client):
+    """P6: 제안 이후 도착(visiting)한 항목을 지우거나 옮기는 제안은 409 progress_changed. 체류 변경은 승인된다."""
+    pid, ids = trip(client)
+
+    def propose(op: dict) -> dict:
+        return ok(client.post(f"/planner/plans/{pid}/proposals", headers=H,
+                              json={"ops": [{"item_id": ids["p-house"]} | op]}), 201)
+
+    gone = propose({"op": "remove_item"})
+    moved = propose({"op": "update_item", "order": 3})
+    stay = propose({"op": "update_item", "stay_minutes": 40})
+    ok(progress(client, pid, ids["p-house"], "visiting", "12:35"))
+    for prop in (gone, moved):
+        assert ok(client.get(f"/planner/plans/{pid}/proposals/{prop['id']}", headers=H))["progress_changed"] == [
+            ids["p-house"]]
+        d = err(client.post(f"/planner/plans/{pid}/proposals/{prop['id']}/accept", headers=H), 409, "progress_changed")
+        assert d["items"] == [{"item_id": ids["p-house"], "title": "가옥거리", "done_at": None}]
+    assert ok(client.get(f"/planner/plans/{pid}/proposals/{stay['id']}", headers=H))["progress_changed"] == []
+    r = ok(client.post(f"/planner/plans/{pid}/proposals/{stay['id']}/accept", headers=H))
+    assert view(r["plan"], ids["p-house"])["stay_minutes"] == 40
+
+
+def test_preview_live_without_records(client, fixed_now):
+    """A1: live=true(동행 중)면 진행 기록이 없어도 오늘을 지금 기준으로 (projection 과 같음). 생략하면 기록이 있을 때만."""
+    pid, ids = trip(client)
+    body = {"ops": [{"op": "update_item", "item_id": ids["p-museum"], "stay_minutes": 30}]}
+    plain = ok(client.post(f"/planner/plans/{pid}/preview", json=body, headers=H))
+    assert view(plain["plan"], ids["p-house"])["start_at"] == "12:30"  # 계획 기준 (기록 없음)
+    live = ok(client.post(f"/planner/plans/{pid}/preview", json=body | {"live": True}, headers=H))
+    projected = ok(project(client, pid))["plan"]
+    assert view(live["plan"], ids["p-house"])["start_at"] == view(projected, ids["p-house"])["start_at"] == "14:07"
+    ends = [c["message"] for c in live["changes"] if c["kind"] == "day_end"]
+    assert ends == [f"1일차 종료: {projected['days'][0]['end_at']} → {live['plan']['days'][0]['end_at']}"]  # 같은 기준 비교
+    prop = ok(client.post(f"/planner/plans/{pid}/proposals", json=body | {"live": True}, headers=H), 201)
+    assert view(prop["before"], ids["p-house"])["start_at"] == "14:07"
+    assert view(prop["after"], ids["p-house"])["start_at"] == "14:07"

@@ -92,6 +92,23 @@ class Forecast:
     def last_hour(self) -> datetime | None:
         return max(self.hours) if self.hours else None
 
+    @property
+    def first_hour(self) -> datetime | None:
+        return min(self.hours) if self.hours else None
+
+
+def fill_now_gap(cur: Forecast, prev: Forecast, now: datetime) -> Forecast:
+    """단기예보 기준시각 hh:00 발표는 hh+1 시부터라, 발표 직후(hh:15~hh:59)에는 지금 시각(hh) 예보가 빈다.
+    빈 시각(지금 ~ 이번 발표 첫 시각 전)을 직전 발표(prev)의 같은 시각 예보로 채운 새 Forecast (cur 는 바꾸지 않는다).
+    직전 발표는 3시간 전 것이라 같은 시각의 가장 최근 예보다."""
+    hour = now.astimezone(KST).replace(minute=0, second=0, microsecond=0)
+    first = cur.first_hour
+    if first is None or first <= hour:
+        return cur
+    gap = {t: h for t, h in prev.hours.items() if hour <= t < first}
+    return Forecast(base=cur.base, hours=dict(sorted({**gap, **cur.hours}.items())),
+                    tmin={**prev.tmin, **cur.tmin}, tmax={**prev.tmax, **cur.tmax})
+
 
 @dataclass
 class ActiveWarning:
@@ -205,6 +222,19 @@ def parse_forecast(items: list[dict], base: datetime) -> Forecast:
             h.wav = v if v is not None and v >= 0 else None  # 결측 -999 등
         elif cat == "TMP":
             h.tmp = _num(val)
+    return fc
+
+
+MIN_FORECAST_SPAN = timedelta(hours=24)  # 단기예보는 발표 후 약 3일을 덮는다. 이보다 짧으면 잘린 응답으로 본다
+
+
+def check_forecast(fc: Forecast) -> Forecast:
+    """받은 단기예보가 쓸 만한지. 시간 예보가 없거나(기상청 NODATA 03 포함) 기준시각 대비 너무 짧으면 SourceError
+    (빈 예보를 정상 수신으로 받으면 지도는 안전, 일정은 '예보 범위 밖'이 된다. 실패로 보고 짧은 TTL 뒤 다시 받는다)."""
+    if not fc.hours:
+        raise SourceError(f"단기예보 없음 (기준 {fc.base:%m/%d %H}시, NODATA)")
+    if fc.last_hour - fc.base < MIN_FORECAST_SPAN:
+        raise SourceError(f"단기예보가 너무 짧음 (기준 {fc.base:%m/%d %H}시, 마지막 {fc.last_hour:%m/%d %H}시)")
     return fc
 
 
@@ -349,15 +379,24 @@ class LiveSources:
             return UvReading(_kst(d["dateTime"]), float(d["uvIndex"]))
         return self.cache.get(("uv",), self.cfg.ttl_breakwater, self.cfg.ttl_error, load)
 
-    def forecast(self, now: datetime) -> Fetched[Forecast]:
-        base = kma_base(now)
-
+    def _forecast_at(self, base: datetime) -> Fetched[Forecast]:
         def load():
             items = self._portal("https://apis.data.go.kr/1360000/VilageFcstInfoService_2.0/getVilageFcst", {
                 "pageNo": 1, "numOfRows": 1500, "dataType": "JSON", "base_date": f"{base:%Y%m%d}",
                 "base_time": f"{base:%H%M}", "nx": self.cfg.kma_nx, "ny": self.cfg.kma_ny})
-            return parse_forecast(items.get("item") or [], base)
+            return check_forecast(parse_forecast(items.get("item") or [], base))
         return self.cache.get(("forecast", base), self.cfg.ttl_forecast, self.cfg.ttl_error, load)
+
+    def forecast(self, now: datetime) -> Fetched[Forecast]:
+        """가장 최근 발표. 지금 시각 예보가 비면(발표 직후) 직전 발표로 채운다 (fill_now_gap).
+        직전 발표도 못 받으면 빈 채로 둔다 (risk.classify 가 그 시각을 판단하지 않는다)."""
+        base = kma_base(now)
+        cur = self._forecast_at(base)
+        if cur.ok and cur.value and cur.value.first_hour > now.astimezone(KST).replace(minute=0, second=0, microsecond=0):
+            prev = self._forecast_at(base - timedelta(hours=3))
+            if prev.ok and prev.value:
+                return Fetched(fill_now_gap(cur.value, prev.value, now), cur.fetched_at)
+        return cur
 
     def warnings(self) -> Fetched[Warnings]:
         def load():
@@ -572,10 +611,12 @@ class MockSources:
     def forecast(self, now: datetime) -> Fetched[Forecast]:
         base = kma_base(now)
         fc = Forecast(base=base)
-        start = base + timedelta(hours=1)
-        for i in range(70):
-            t = start + timedelta(hours=i)
+        # 실제처럼 이번 발표는 기준시각 + 1시부터, 발표 직후 빈 지금 시각은 직전 발표로 채운 것과 같게 (LiveSources.forecast)
+        start = min(base + timedelta(hours=1), _hour(now.astimezone(KST)))
+        t = start
+        while t < base + timedelta(hours=71):
             fc.hours[t] = ForecastHour(t, **self._hour_weather(t))
+            t += timedelta(hours=1)
         for d in {t.date() for t in fc.hours}:
             fc.tmin[d], fc.tmax[d] = 15.0, 23.0
         return self._f(fc)

@@ -16,12 +16,13 @@ from pydantic import TypeAdapter
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.core.auth import AdminRequest, CurrentUser
+from app.core.auth import AdminRequest, CurrentUser, ForwardAuth
 from app.core.config import settings as core_settings
 from app.db import get_db
 from app.planner import ops as engine
 from app.planner import recommend
 from app.planner import safety as safety_check
+from app.planner.cleanup import PlanCleaner, get_plan_cleaner
 from app.planner.clock import Clock, get_clock
 from app.planner.errors import PlannerError, PlannerRoute, not_found
 from app.planner.models import (
@@ -45,6 +46,8 @@ from app.planner.schemas import (
     ConstraintView,
     ItemCreate,
     ItemUpdate,
+    LIVE_DESC,
+    LiveOpsRequest,
     OpsRequest,
     PlanCreate,
     PlanDetail,
@@ -104,7 +107,12 @@ def _apply(db: Session, plan: PlannerPlan, ops: list, places: PlaceLookup, with_
         db.rollback()
         raise
     db.commit()
-    return engine.detail(plan, places)
+    return _shown(plan, places)
+
+
+def _shown(plan: PlannerPlan, places: PlaceLookup) -> PlanDetail:
+    """응답용 계획: 여행 중인 날의 위반은 지금 기준 (engine.shown, §8.5)."""
+    return engine.shown(plan, places, get_clock().now())
 
 
 # ---------- 계획 ----------
@@ -131,7 +139,7 @@ def create_plan(body: PlanCreate, db: DbSession, user_id: UserId, places: Places
 
 @router.get("/plans/{plan_id}", response_model=PlanDetail)
 def get_plan(plan_id: int, db: DbSession, user_id: UserId, places: Places) -> PlanDetail:
-    return engine.detail(_get_plan(db, user_id, plan_id), places)
+    return _shown(_get_plan(db, user_id, plan_id), places)
 
 
 @router.patch("/plans/{plan_id}", response_model=PlanDetail)
@@ -141,9 +149,12 @@ def update_plan(plan_id: int, body: PlanUpdate, db: DbSession, user_id: UserId, 
 
 
 @router.delete("/plans/{plan_id}", status_code=204)
-def delete_plan(plan_id: int, db: DbSession, user_id: UserId) -> Response:
+def delete_plan(plan_id: int, db: DbSession, user_id: UserId, auth: ForwardAuth,
+                cleaner: Annotated[PlanCleaner, Depends(get_plan_cleaner)]) -> Response:
     db.delete(_get_plan(db, user_id, plan_id, lock=True))  # 제안·추천은 DB 의 ON DELETE CASCADE 로 함께 삭제
     db.commit()
+    # 다른 서비스의 그 계획 데이터 (agent 대화·가이드 준비 작업, docent 노트·이번 여행 메모리). 실패해도 삭제는 유지 (로그)
+    cleaner.after_delete(plan_id, auth)
     return Response(status_code=204)
 
 
@@ -193,7 +204,7 @@ def update_progress(plan_id: int, item_id: int, body: ProgressUpdate, db: DbSess
     engine.set_status(item, body.status, None if body.status == "planned" else at)
     plan.progress_version += 1
     db.commit()
-    return engine.detail(plan, places)
+    return engine.shown(plan, places, clock.now())
 
 
 @router.post("/plans/{plan_id}/projection", response_model=ProjectionResult)
@@ -235,10 +246,11 @@ def apply_ops(plan_id: int, body: OpsRequest, db: DbSession, user_id: UserId, pl
 
 
 @router.post("/plans/{plan_id}/preview", response_model=PreviewResult)
-def preview_ops(plan_id: int, body: OpsRequest, db: DbSession, user_id: UserId, places: Places,
+def preview_ops(plan_id: int, body: LiveOpsRequest, db: DbSession, user_id: UserId, places: Places,
                 clock: Now) -> PreviewResult:
     """ops 를 적용하면 어떻게 되는지 계산만 한다 (저장 안 함). 여행 중인 날은 실제 진행 + 지금 기준 (§8.4)."""
-    _, after, changes = engine.preview(_get_plan(db, user_id, plan_id), body.ops, places, now=clock.now())
+    _, after, changes = engine.preview(_get_plan(db, user_id, plan_id), body.ops, places, now=clock.now(),
+                                       started=body.live)
     return PreviewResult(plan=after, changes=changes)
 
 
@@ -286,7 +298,8 @@ def create_proposal(plan_id: int, body: ProposalCreate, db: DbSession, user_id: 
     if body.expected_version is not None and body.expected_version != plan.version:
         raise PlannerError(409, "version_conflict", "그사이 일정이 바뀌었습니다.",
                            expected_version=body.expected_version, current_version=plan.version)
-    before, after, changes = engine.preview(plan, body.ops, places, now=clock.now())  # 여행 중이면 실제 진행 기준 (§8.4)
+    before, after, changes = engine.preview(plan, body.ops, places, now=clock.now(),
+                                            started=body.live)  # 여행 중이면 실제 진행 기준 (§8.4)
     if body.supersedes is not None:
         old = _get_proposal(db, plan, body.supersedes)
         if old.status != "pending":
@@ -333,7 +346,7 @@ def accept_proposal(plan_id: int, proposal_id: int, db: DbSession, user_id: User
     gone = engine.progress_changed(PlanDetail.model_validate(prop.before), after, plan)
     if gone:
         names = ", ".join(f"'{x['title']}'" for x in gone)
-        raise PlannerError(409, "progress_changed", f"제안 이후 {names} 을(를) 다녀와서 이 제안을 그대로 반영할 수 없습니다. "
+        raise PlannerError(409, "progress_changed", f"제안 이후 {names} 을(를) 다녀오거나 도착해서 이 제안을 그대로 반영할 수 없습니다. "
                            "현재 상황에 맞춰 다시 제안받으세요.", items=gone)
 
     if plan.version == prop.base_version and mode == "auto":
@@ -355,7 +368,7 @@ def accept_proposal(plan_id: int, proposal_id: int, db: DbSession, user_id: User
         decision = "overwritten"
     _decide(prop, "accepted", decision)
     db.commit()
-    return AcceptResult(proposal=_proposal_detail(prop, plan), plan=engine.detail(plan, places))
+    return AcceptResult(proposal=_proposal_detail(prop, plan), plan=engine.shown(plan, places, clock.now()))
 
 
 @router.post("/plans/{plan_id}/proposals/{proposal_id}/reject", response_model=ProposalDetail)
@@ -424,7 +437,7 @@ def get_recommendation(plan_id: int, recommendation_id: int, db: DbSession, user
 @router.post("/plans/{plan_id}/recommendations/{recommendation_id}/candidates/{candidate_id}/add",
              response_model=RecommendationActionResult)
 def add_candidate(plan_id: int, recommendation_id: int, candidate_id: int, db: DbSession, user_id: UserId,
-                  places: Places) -> RecommendationActionResult:
+                  places: Places, clock: Now) -> RecommendationActionResult:
     plan = _get_plan(db, user_id, plan_id, lock=True)
     rec = _get_recommendation(db, plan, recommendation_id)
     cand = _get_candidate(rec, candidate_id)
@@ -433,7 +446,7 @@ def add_candidate(plan_id: int, recommendation_id: int, candidate_id: int, db: D
     matched = recommend.match_item(detail, cand)
     if matched:
         raise PlannerError(409, "already_in_plan", f"{cand.day}일차 일정에 이미 있습니다.", item_id=matched.id)
-    order = recommend.best_order(plan, detail, cand, places)
+    order = recommend.best_order(plan, detail, cand, places, clock.now())
     detail = _apply(db, plan, [recommend.add_op(cand, order)], places)
     return RecommendationActionResult(recommendation=recommend.recommendation_view(detail, rec, places), plan=detail)
 
@@ -467,20 +480,23 @@ def _safety_check(detail: PlanDetail, client: SafetyClient, routes: RouteLookup)
 
 @router.get("/plans/{plan_id}/safety", response_model=SafetyCheck)
 def check_safety(plan_id: int, db: DbSession, user_id: UserId, places: Places, client: Safety,
-                 routes: Routes) -> SafetyCheck:
-    """지금 일정의 방문·이동 구간별 위험 단계 (safe / caution / danger, 판단 불가는 null). 저장하지 않는다."""
+                 routes: Routes, clock: Now,
+                 live: Annotated[bool, Query(description=LIVE_DESC)] = False) -> SafetyCheck:
+    """지금 일정의 방문·이동 구간별 위험 단계 (safe / caution / danger, 판단 불가는 null). 저장하지 않는다.
+    여행 중인 날은 safety/preview 와 같이 실제 진행 + 지금 기준 시각으로 본다 (늦어진 방문을 지난 일정으로 빼지 않게)."""
     plan = _get_plan(db, user_id, plan_id)
-    detail = engine.detail(plan, places)
+    detail = engine.detail(plan, places, engine.live_actual(plan, places, clock.now(), live))
     db.rollback()  # safety 호출 동안 DB 연결을 잡고 있지 않게
     return _safety_check(detail, client, routes)
 
 
 @router.post("/plans/{plan_id}/safety/preview", response_model=SafetyCheck)
-def preview_safety(plan_id: int, body: OpsRequest, db: DbSession, user_id: UserId, places: Places,
+def preview_safety(plan_id: int, body: LiveOpsRequest, db: DbSession, user_id: UserId, places: Places,
                    client: Safety, routes: Routes, clock: Now) -> SafetyCheck:
     """ops 를 적용했다고 치고 안전 점검 (저장 안 함). 변경안을 만들 때 쓴다. 새 항목 item_id 는 음수 임시값.
     여행 중인 날은 preview 와 같이 실제 진행 + 지금 기준 시각으로 본다."""
-    after = engine.simulate(_get_plan(db, user_id, plan_id), body.ops, places, with_index=True, now=clock.now())
+    after = engine.simulate(_get_plan(db, user_id, plan_id), body.ops, places, with_index=True, now=clock.now(),
+                            started=body.live)
     db.rollback()
     return _safety_check(after, client, routes)
 

@@ -23,9 +23,11 @@ class Upstream(httpx.AsyncBaseTransport):
         self.trip: dict | int | Exception = 404  # TripState | 오류 HTTP 상태 | 연결 오류
         self.sim: str | None = None  # 가상 시각 (None 이면 404 sim_disabled -> 시스템 시각)
         self.trip_calls = 0
+        self.seen: list[tuple[str, str, str, bytes]] = []  # (method, path, query, body) — planner 로 보낸 요청 확인용
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
         path = request.url.path
+        self.seen.append((request.method, path, request.url.query.decode(), request.content))
         if path.startswith("/trip/"):
             self.trip_calls += 1
             if isinstance(self.trip, Exception):
@@ -119,7 +121,7 @@ def test_event_turn_creates_proposal(client, trip_plan, up):  # noqa: F811
     assert "- 1일차 2026-10-10 14:20 (시뮬레이션 시각)" in system
     assert "- 위치: 물회집 (도착 13:40, 머무는 중)" in system
     assert "- 다음: 카페 15:00 예정, 예상 도착 15:12 (12분 늦음)" in system
-    assert "- 오늘 남은 일정: 2곳 / 완료 1곳" in system
+    assert "- 오늘 남은 일정: 1곳 / 머무는 중 1곳 / 완료 1곳" in system  # 머무는 곳은 따로 (A10)
 
     # 대화 화면: 숨김 이벤트 메시지는 안 보이고, 선제 턴 답변은 앞 턴과 다른 말풍선 (id = message_id)
     detail = ok(client.get(f"/agent/sessions/{sid}", headers=H))
@@ -319,7 +321,7 @@ def test_progress_changed_proposal_is_refused_and_replaced(client, trip_plan, up
     p2 = last(chat(client, sid, "카페는 짧게", [[("update_item", {"item_id": items["p-cafe"], "stay_minutes": 30})],
                                                ["카페를 30분으로 줄여요."]]), "proposal")
     system = system_of(turn)
-    assert "다녀왔다(완료)" in system and "체류 60분 → 30분" in system and "## 승인 대기 중인 제안" not in system
+    assert "다녀오거나 도착했다(완료·머무는 중)" in system and "체류 60분 → 30분" in system and "## 승인 대기 중인 제안" not in system
     assert [c["item_id"] for c in p2["changes"] if c["kind"] == "updated"] == [items["p-cafe"]]
     assert ok(client.get(f"/planner/plans/{pid}/proposals/{p1['id']}", headers=H))["status"] == "superseded"
     ok(client.post(f"/agent/sessions/{sid}/proposals/{p2['id']}/accept", headers=H))
@@ -479,3 +481,138 @@ def test_same_event_id_returns_previous_result(client, trip_plan, up):  # noqa: 
     th.llm.script = [["다시 확인했어요."]]
     retried = ok(client.post(f"/agent/sessions/{sid}/events", json=other, headers=H))
     assert retried["error"] is None and retried["message_id"] != first["message_id"]
+
+
+# ---------- 동행 모드 거부 규칙·기본값·현재 상황 (docs/audit/logic-bugs-2026-10-12.md A3·A4·A6·A7·A8·A10) ----------
+
+def tool_results(call: int = -1) -> list[str]:
+    """그 호출에서 이번 턴(마지막 사용자 메시지 뒤)의 도구 결과."""
+    msgs = th.llm.calls[call]
+    start = max(n for n, m in enumerate(msgs) if m["role"] == "user" and not m["content"].startswith("[시스템]"))
+    return [m["content"] for m in msgs[start:] if m["role"] == "tool"]
+
+
+def test_guide_refuses_slot_before_passed_items(client, trip_plan, up):  # noqa: F811
+    """A3: 가옥거리 완료 -> 물회집 머무는 중일 때 order 1·2 로 넣거나 옮기면 지난 시간대에 끼어든다 -> 거부. 3 이후·생략은 된다."""
+    sid, pid, items = trip_plan
+    up.trip = trip_state(pid, items)
+    events = chat(client, sid, "카페 앞으로", [
+        [("add_item", {"place_id": "p-cafe", "order": 1}),
+         ("add_item", {"place_id": "p-cafe", "order": 2}),
+         ("update_item", {"item_id": items["p-cafe"], "order": 1})],
+        ["그 자리는 이미 지났어요."]])
+    results = tool_results()
+    assert len(results) == 3 and all("not_allowed_during_trip" in r for r in results)
+    assert "3번째 이후" in results[0] and "물회집" in results[0]
+    assert "proposal" not in dict(events)
+
+    events = chat(client, sid, "카페 하나 더", [
+        [("add_item", {"place_id": "p-cafe", "order": 3}), ("add_item", {"place_id": "p-house"})], ["넣었어요."]])
+    assert not any("not_allowed_during_trip" in r for r in tool_results())
+    assert "proposal" in dict(events)
+
+
+def test_guide_guard_normalizes_string_ids(client, trip_plan, up):  # noqa: F811
+    """A4: "88" 같은 문자열 id·day·order 로도 거부 규칙을 우회하지 못한다."""
+    sid, pid, items = trip_plan
+    up.trip = trip_state(pid, items)
+    events = chat(client, sid, "가옥거리 고쳐", [
+        [("update_item", {"item_id": str(items["p-house"]), "stay_minutes": 10}),
+         ("remove_item", {"item_id": str(items["p-house"])}),
+         ("update_item", {"item_id": str(items["p-food"]), "order": "3"}),
+         ("add_item", {"place_id": "p-cafe", "day": "1", "order": "1"}),
+         ("update_item", {"item_id": items["p-cafe"], "order": "abc"})],
+        ["못 바꿔요."]])
+    results = tool_results()
+    assert all("not_allowed_during_trip" in r for r in results[:4]), results
+    assert "완료" in results[0] and "완료" in results[1] and "체류 시간" in results[2]
+    assert "인자가 잘못됐습니다" in results[4]
+    assert "proposal" not in dict(events)
+
+
+def test_guide_past_day_and_default_day(client, trip_plan, up):  # noqa: F811
+    """A3·A6: 2일차 여행 중이면 1일차(지난 날)에 넣거나 옮기거나 그 항목을 고칠 수 없고, day 를 생략하면 오늘(2일차)."""
+    sid, pid, items = trip_plan
+    ok(client.patch(f"/planner/plans/{pid}", json={"end_date": "2026-10-11"}, headers=H))
+    ok(client.post(f"/planner/plans/{pid}/items", json={"place_id": "p-cafe", "day": 2}, headers=H), 201)
+    day2 = th.plan_of(client, pid)["days"][1]["items"][0]["id"]
+    up.trip = {**trip_state(pid, items), "day": 2, "current": None, "next": None}
+    events = chat(client, sid, "어제 일정에 넣어줘", [
+        [("add_item", {"place_id": "p-food", "day": 1}),
+         ("update_item", {"item_id": day2, "day": 1}),
+         ("update_item", {"item_id": items["p-cafe"], "stay_minutes": 20})],
+        ["지난 날은 못 바꿔요."]])
+    results = tool_results()
+    assert all("not_allowed_during_trip" in r and "지난 날" in r for r in results), results
+    assert "proposal" not in dict(events)
+
+    events = chat(client, sid, "물회집 넣어줘", [[("add_item", {"place_id": "p-food"})], ["넣었어요."]])
+    p = last(events, "proposal")
+    assert [c["day"] for c in p["changes"] if c["kind"] == "added"] == [2]
+
+    th.llm.script = [[("recommend_places", {"title": "추천", "candidates": [{"place_id": "p-house"}]})], ["골라 보세요."]]
+    rec = last(th.sse(client.post(f"/agent/sessions/{sid}/chat", json={"message": "추천"}, headers=H)), "recommendation")
+    assert rec["candidates"][0]["day"] == 2
+
+
+def test_update_item_drops_unchanged_filler(client, trip_plan, up):  # noqa: F811
+    """A8: 채움값 start_time "none" 이 같이 와도 머무는 곳의 체류 변경은 된다 (장면 ③). 고정 시각이 있던 곳은 해제했다고 알린다."""
+    sid, pid, items = trip_plan
+    up.trip = trip_state(pid, items)
+    events = chat(client, sid, "더 있을래", [
+        [("update_item", {"item_id": items["p-food"], "start_time": "none", "stay_minutes": 90, "travel_mode": None})],
+        ["늘렸어요."]])
+    [result] = tool_results()
+    assert "not_allowed_during_trip" not in result and "plan_after" in result
+    assert "proposal" in dict(events)
+
+    ok(client.patch(f"/planner/plans/{pid}/items/{items['p-cafe']}", json={"start_time": "16:30"}, headers=H))
+    chat(client, sid, "카페 짧게", [
+        [("update_item", {"item_id": items["p-cafe"], "start_time": "none", "stay_minutes": 30})], ["줄였어요."]])
+    [result] = tool_results()
+    assert "고정 시각 16:30 을 해제했다" in result
+
+    chat(client, sid, "그대로", [[("update_item", {"item_id": items["p-cafe"], "stay_minutes": 30})], ["그대로예요."]])
+    assert "바뀌는 값이 없어" in tool_results()[0]
+
+
+def test_situation_marks_approved_basis_with_pending(client, trip_plan, up):  # noqa: F811
+    """A7: 대기 제안이 다음 장소 시각을 바꾸면, 현재 상황의 '다음'은 승인된 계획 기준이라고 밝히고 제안 적용 시각을 함께 적는다."""
+    sid, pid, items = trip_plan
+    up.trip = trip_state(pid, items)
+    chat(client, sid, "물회집 더", [[("update_item", {"item_id": items["p-food"], "stay_minutes": 150})], ["늘렸어요."]])
+    turn = len(th.llm.calls)
+    chat(client, sid, "다음 어디야?", [["카페예요."]])
+    line = next(x for x in system_of(turn).split("\n") if x.startswith("- 다음:"))
+    assert line.startswith("- 다음: 카페 15:00 예정, 예상 도착 15:12 (12분 늦음) — 승인된 계획 기준. "
+                           "승인 대기 제안을 적용한 현재 일정에서는 ") and line.endswith(" 시작"), line
+    # 대기 제안이 없으면 trip 값 그대로
+    assert "승인된 계획 기준" not in next(x for x in system_of(0).split("\n") if x.startswith("- 다음:"))
+
+
+def _planner_calls(up, *suffixes):
+    import json as _json
+    out = []
+    for method, path, query, body in up.seen:
+        if path.startswith("/planner/") and path.endswith(suffixes):
+            out.append((method, path.rsplit("/", 1)[1], query, _json.loads(body) if body else None))
+    return out
+
+
+@pytest.mark.parametrize("active", [True, False])
+def test_guide_mode_sends_live_to_planner(client, trip_plan, up, active):  # noqa: F811
+    """A1 (planner live 옵션): 동행 모드면 미리보기·안전 점검(초안 있음·없음)·제안 생성에 live=true. 계획 모드는 보내지 않는다."""
+    sid, pid, items = trip_plan
+    up.trip = trip_state(pid, items, active=active)
+    chat(client, sid, "안전해?", [[("check_safety", {})], ["네."]])
+    chat(client, sid, "카페 짧게", [[("update_item", {"item_id": items["p-cafe"], "stay_minutes": 30}),
+                                   ("check_safety", {}), ("review_plan", {})], ["줄였어요."]])
+    calls = _planner_calls(up, "/preview", "/safety", "/proposals")
+    gets = [q for m, name, q, _ in calls if m == "GET" and name == "safety"]
+    posts = [(name, b) for m, name, _, b in calls if m == "POST"]
+    assert gets and {n for n, _ in posts} >= {"preview", "proposals"}
+    assert any(p == f"/planner/plans/{pid}/safety/preview" for _, p, _, _ in up.seen)
+    if active:
+        assert all(q == "live=true" for q in gets) and all(b.get("live") is True for _, b in posts)
+    else:
+        assert all("live" not in q for q in gets) and all("live" not in b for _, b in posts)

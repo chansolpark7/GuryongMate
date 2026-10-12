@@ -59,6 +59,9 @@ class Visit(BaseModel):
         description="이동 경로 평가: (lat, lng) 점 목록 (길찾기 경로선). 주면 장소 대신 이 경로를 start~end 동안 지나는 것으로 본다")
     mode: Literal["walk", "car"] | None = Field(
         None, description="이동 수단 (path 와 함께). walk: 야외 기준 / car: 차 안이라 비·바람은 참고까지, 침수 구역은 그대로")
+    path_estimated: bool = Field(
+        False, description="path 가 길찾기 경로가 아니라 두 장소를 잇는 직선(길찾기 실패·추정)인지. true 면 주의·위험 근거는 "
+                           "그대로 쓰지만 안전으로는 판단하지 않는다 (risk=null, data_missing)")
 
     @model_validator(mode="after")
     def _check(self):

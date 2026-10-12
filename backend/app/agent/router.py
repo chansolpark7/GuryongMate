@@ -24,7 +24,7 @@ from starlette.background import BackgroundTask
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
-from app.agent import guide, limits
+from app.agent import clock, guide, limits
 from app.agent.api import ApiError, ServiceApi, get_http
 from app.agent.config import settings
 from app.agent.errors import AgentError, AgentRoute
@@ -406,8 +406,10 @@ async def remove_candidate(session_id: str, recommendation_id: int, candidate_id
 GUIDE_TOKEN_TTL = timedelta(hours=2)  # 작업이 길어도 받은 토큰 만료와 상관없이 끝나게
 
 
-# 자동 준비가 건너뛰는 노트 상태: 이미 있음·준비 중. failed 는 자동으로 다시 시도하지 않는다 (앱의 [다시 시도]로만)
-AUTO_SKIP = ("ready", "pending", "preparing", "failed")
+# 자동 준비가 건너뛰는 노트 상태: 이미 있음. failed 는 자동으로 다시 시도하지 않는다 (앱의 [다시 시도]로만).
+# pending·preparing 은 이 프로세스에서 지금 준비 중·대기 중일 때만 건너뛴다 (busy_places). 작업 상태는 프로세스 메모리에만 있어서,
+# agent 가 다시 시작되면 그 전 작업의 pending·preparing 노트는 아무도 만들지 않는다 -> 자동 준비가 다시 대상으로 삼는다
+AUTO_SKIP = ("ready", "failed")
 _auto_tasks: set[asyncio.Task] = set()  # 백그라운드 자동 준비 (GC 로 사라지지 않게 참조를 잡아 둔다)
 
 
@@ -416,13 +418,15 @@ async def _prepare(plan_id: int, user_id: str, auth: dict[str, str], http: httpx
                    auto: bool = False) -> guide.GuideJob:
     """가이드 준비 요청 (엔드포인트·자동 준비 공통). 계획당 작업 하나: 진행 중이면 빠진 장소를 그 작업 뒤에 잇고 그 작업을 돌려준다.
     대상: place_ids(일정에 있어야 함, auto 면 없는 것은 무시) 또는 일정의 모든 장소 중 지금 준비 중·대기 중이 아닌 곳.
-    force 가 아니면 ready 노트는 건너뛴다 (auto 면 AUTO_SKIP 모두). 새로 준비할 곳이 있을 때만 consume(호출 수 제한)을 부른다."""
+    force 가 아니면 ready 노트는 건너뛴다 (auto 면 AUTO_SKIP 모두). 새로 준비할 곳이 있을 때만 consume(호출 수 제한)을 부른다.
+    auto 면 다녀온(done) 항목과, 여행 기간 중이면 지난 날의 장소도 대상에서 뺀다 (guide.plan_places)."""
     api = ServiceApi(http, auth)
     plan = await api.get_plan(plan_id)  # 존재·소유 확인 (404 plan_not_found 전달)
     running = guide.running_job(plan_id)
     if running is not None and running.user_id != user_id:  # 계획 주인만 여기까지 온다. 혹시 모를 경우를 막는다
         raise AgentError(409, "guide_busy", "이 계획의 가이드를 준비하는 중입니다.")
-    places = guide.plan_places(plan)
+    today = (await clock.now(api))[0].date().isoformat() if auto else None  # trip·planner 와 같은 '지금' (가상 시각)
+    places = guide.plan_places(plan, auto=auto, today=today)
     if place_ids is not None:
         missing = sorted(set(place_ids) - {p["place_id"] for p in places})
         if missing and not auto:
@@ -511,7 +515,19 @@ def guide_job(plan_id: int, job_id: str, user_id: UserId) -> dict:
     return job.view()
 
 
-# ---------- 탈퇴 ----------
+# ---------- 계획 삭제 · 탈퇴 ----------
+
+@router.delete("/plans/{plan_id}", status_code=204)
+async def delete_plan_data(plan_id: int, db: DbSession, user_id: UserId) -> Response:
+    """그 계획의 대화 세션·메시지를 지우고, 진행 중인 가이드 준비 작업(이어서 할 장소 포함)을 멈춘다.
+    planner 가 계획을 지운 뒤 같은 인증으로 부른다. 계획은 이미 없으므로 planner 에 묻지 않고 이 사용자의 것만 지운다."""
+    if guide.cancel_plan(plan_id, user_id):
+        log.info("guide plan=%s 계획 삭제 -> 진행 중인 준비 작업을 멈춤", plan_id)
+    for s in db.scalars(select(AgentSession).where(AgentSession.user_id == user_id, AgentSession.plan_id == plan_id)):
+        db.delete(s)
+    db.commit()
+    return Response(status_code=204)
+
 
 @router.delete("/me", status_code=204)
 def delete_my_data(db: DbSession, user_id: UserId) -> Response:

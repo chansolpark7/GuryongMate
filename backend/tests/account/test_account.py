@@ -5,6 +5,7 @@
 import time
 from datetime import timedelta
 
+import httpx
 import jwt
 import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
@@ -298,6 +299,34 @@ def test_delete_account(client):
     err(client.post("/auth/refresh", json={"refresh_token": t["refresh_token"]}), 401, "invalid_refresh_token")
     with SessionLocal() as s:
         assert s.scalars(select(AccountRefreshToken).where(AccountRefreshToken.user_id == t["user"]["id"])).all() == []
+
+
+def test_data_cleaner_deletes_every_service(client):
+    """탈퇴는 planner·trip·docent·agent 의 이 사용자 데이터를 모두 지운다 (관제 콘솔 reset.js WIPE 와 같은 순서).
+    실제 DataCleaner 를 같은 앱으로 보내 각 서비스의 DELETE /me 가 있는지·실제로 지우는지 본다."""
+    from app.account.router import DataCleaner
+
+    t = signup(client)
+    h = bearer(t)
+    plan = ok(client.post("/planner/plans", json={"title": "t", "start_date": "2026-10-10"}, headers=h), 201)
+    ok(client.post("/docent/memory", json={"scope": "user", "category": "interest", "text": "역사", "source": "user_edit"},
+                   headers=h), 201)
+    from app.agent.models import AgentSession  # 세션 생성 API 는 planner 를 HTTP 로 부르므로 여기서는 DB 에 직접
+    with SessionLocal.begin() as s:
+        s.add(AgentSession(id=uid("test-sess"), user_id=t["user"]["id"], plan_id=plan["id"]))
+    assert len(ok(client.get("/agent/sessions", headers=h))) == 1
+    seen: list[str] = []
+
+    class Spy(httpx.BaseTransport):
+        def handle_request(self, request):
+            seen.append(f"{request.method} {request.url.path}")
+            return client._transport.handle_request(request)
+
+    DataCleaner("http://testserver", transport=Spy()).delete_all(h["Authorization"])
+    assert seen == ["DELETE /planner/me", "DELETE /trip/me", "DELETE /docent/me", "DELETE /agent/me"]
+    assert ok(client.get("/docent/memory", headers=h))["items"] == []
+    assert ok(client.get("/planner/plans", headers=h)) == []
+    assert ok(client.get("/agent/sessions", headers=h)) == []
 
 
 def test_non_utf8_body_uses_error_format(client):

@@ -8,6 +8,8 @@ from pathlib import Path
 
 import pytest
 
+from app.trip import judge
+
 from .conftest import H, ok
 from .fakes import PLACES
 
@@ -111,6 +113,52 @@ def test_scene4_safety(env):
     assert museum["payload"]["out_of_order"] is False and cafe["payload"]["out_of_order"] is False
     assert museum["now"] < hazard["now"] < cafe["now"]
     assert "delay" not in [e["type"] for e in events]
+
+
+HOUSE, PORT, MUSEUM, BREAKWATER, CAFE, HISTORY = ("kto-1909659", "kto-2610501", "kto-2660046", "poi-gr-breakwater-north",
+                                                   "kto-2834344", "kto-2603493")
+
+
+def walk_times(order: list[str], parts: list[list[dict]], swap: tuple[int, str] | None = None) -> list[tuple]:
+    """진행 스크립트(scripts/demo/run_demo.py)가 보내는 위치 열을 판정에 그대로 넣는다 (경로선 대신 직선, 가짜 서비스 없이).
+    시작: 12:25, 구룡포항 -> 가옥거리 길에서 가옥거리 420m 앞. parts: run_demo 단계마다의 재생 단계. swap: (그 단계 뒤, 바꿀 장소)."""
+    spots = [judge.Spot(i, i, p, p, *coords(p), "planned") for i, p in enumerate(order, start=1)]
+    track, cfg, out = judge.Track(), judge.TrackConfig(), []
+    house, port = coords(HOUSE), coords(PORT)
+    f = 420 / scene._dist(port, house)
+    pos, t = [house[0] + (port[0] - house[0]) * f, house[1] + (port[1] - house[1]) * f], "2026-10-10T12:25:00+09:00"
+    for n, steps in enumerate([[]] + parts):
+        for a in scene.expand({"start": t, "steps": [{"goto": pos}] + steps}, coords)[1:]:
+            if a.kind != "loc":
+                continue
+            p = judge.Point(a.lat, a.lng, 10, a.at)
+            if judge.ignore_reason(track, p, cfg) is None:
+                track, dets = judge.step(track, spots, p, cfg)
+                spots = judge.apply_progress(spots, dets)
+                out += [(d.type, d.payload["title"], f"{d.at:%H:%M:%S}") for d in dets]
+            pos, t = [a.lat, a.lng], a.at.isoformat()
+        if swap and swap[0] == n:  # 제안 승인: 북방파제 -> 근대문화역사관 (같은 순서)
+            spots = [judge.replace(s, item_id=99, title=swap[1], place_id=swap[1], lat=coords(swap[1])[0],
+                                   lng=coords(swap[1])[1]) if s.title == BREAKWATER else s for s in spots]
+    return out
+
+
+def test_demo_walk_arrival_departure_times():
+    """T1(멈춤 판정) 전후로 데모 진행 스크립트의 도착·출발 시각이 같다 (logic-bugs-2026-10-12 T1, 수정 전 값으로 고정).
+    장면 ②~④: 가옥거리 3분 → 13:47 까지 → 14:00 구룡포항 30분 → 과메기문화관 → 15:25 승인 → 15:47 역사관 40분 → 차로 수협 앞 → 카페."""
+    parts = [[{"walk_to": HOUSE, "stay": 3}], [{"at": "13:45"}, {"at": "13:47"}],
+             [{"at": "14:00"}, {"walk_to": PORT, "stay": 30}, {"walk_to": MUSEUM, "stay": 5}, {"at": "15:18"}],
+             [{"at": "15:25"}], [{"at": "15:47", "walk_to": HISTORY, "stay": 40}], [{"drive_to": [35.9912, 129.5572]}],
+             [{"drive_to": CAFE, "stay": 5}], [{"at": "17:05"}]]
+    got = walk_times([HOUSE, PORT, MUSEUM, BREAKWATER, CAFE], parts, swap=(4, HISTORY))
+    assert got == [("arrived", HOUSE, "12:29:56"), ("departed", HOUSE, "14:01:27"), ("arrived", PORT, "14:05:53"),
+                   ("departed", PORT, "14:37:25"), ("arrived", MUSEUM, "14:45:17"), ("departed", MUSEUM, "15:48:27"),
+                   ("arrived", HISTORY, "15:49:57"), ("departed", HISTORY, "16:30:51"), ("arrived", CAFE, "16:35:25")]
+    # 가까운 두 장소 (가옥거리 -> 근대문화역사관 104m, 반경이 겹침): 암묵 전환 시각도 그대로
+    got = walk_times([HOUSE, HISTORY, PORT], [[{"walk_to": HOUSE, "stay": 10}, {"walk_to": HISTORY, "stay": 10},
+                                              {"walk_to": PORT, "stay": 5}]])
+    assert got == [("arrived", HOUSE, "12:29:56"), ("departed", HOUSE, "12:41:53"), ("arrived", HISTORY, "12:41:53"),
+                   ("departed", HISTORY, "12:53:49"), ("arrived", PORT, "12:59:14")]
 
 
 @pytest.mark.parametrize("name", sorted(p.name for p in (SCRIPTS / "scenes").glob("*.json")))

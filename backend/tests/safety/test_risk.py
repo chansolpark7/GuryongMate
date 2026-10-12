@@ -138,3 +138,27 @@ def test_seasonal_notes_are_marked_as_tendency():
 def test_public_levels_are_three():
     assert [risk.public(x) for x in ("none", "info", "caution", "danger")] == ["safe", "safe", "caution", "danger"]
     assert risk.worst_public(["safe", "danger", "caution"]) == "danger" and risk.worst_public([]) == "safe"
+
+
+def test_classify_needs_forecast_from_first_hour():
+    """발표 직후 지금 시각 예보가 비어 있으면(첫 시각이 다음 시각) 지금 방문은 판단하지 않는다 (S1)."""
+    now = datetime(2026, 10, 4, 5, 20, tzinfo=KST)
+    first = datetime(2026, 10, 4, 6, tzinfo=KST)
+    t = risk.classify(now + timedelta(minutes=10), now + timedelta(minutes=40), now, FC_LAST, True, first)
+    assert (t.horizon, t.forecast_available) == ("now", False)
+    t = risk.classify(*at(first), now, FC_LAST, True, first)
+    assert t.forecast_available
+
+
+def test_recheck_from_is_never_today_or_past():
+    """recheck_from 은 내일 이후 (S6). 예보가 아직 덮지 못한 모레 오후 일정도 '오늘부터 다시 확인'이라 하지 않는다."""
+    t = risk.classify(*at(datetime(2026, 10, 7, 13, tzinfo=KST)), NOW, FC_LAST, True)
+    assert t.horizon == "medium_range" and t.recheck_from == date(2026, 10, 5)
+
+
+def test_forecast_hazards_group_only_contiguous_hours():
+    """떨어진 시각(14시·18시)은 따로 안내한다 (S7). 이어진 시각은 묶는다."""
+    d = datetime(2026, 10, 5, 14, tzinfo=KST)
+    hours = [ForecastHour(d + timedelta(hours=k), wsd=16.0) for k in (0, 4, 5)]
+    hz = risk.forecast_hazards(hours, {"breakwater"})
+    assert sorted(h.reason for h in hz) == ["10/05 14시 풍속 16m/s 예보", "10/05 18~20시 풍속 최대 16m/s 예보"]
