@@ -115,6 +115,36 @@ void main() {
         reason: '12:30 에 와도 13:00 고정이면 13:00 에 시작해 체류만큼 머문다 (projection 과 같은 기준)');
   });
 
+  testWidgets('규칙 B 늦게 도착한 곳: 시작 + 체류가 아니라 계획 끝까지 예정', (tester) async {
+    final r = TripReplay('scene2_arrival', flows: ['f4_arrival_docent.json']);
+    r.advanceTo('12:35:00');
+    final first = ((r.plan['days'] as List).first['items'] as List).first as Map<String, dynamic>;
+    // 계획을 앞당겨 늦게 도착한 것으로: 계획 끝 12:50 (지금 12:25, 도착 + 체류보다 이르다)
+    first
+      ..['start_at'] = '12:00'
+      ..['end_at'] = '12:50';
+    await phone(tester);
+    final s = await signedInSession(r.gw, prefs: {'demo_location_mode': true});
+    await tester.pumpWidget(app(s, PlannerShell(planId: r.planId, locationSource: FakeLocationSource())));
+    await settle(tester, 30);
+    expect(find.textContaining('12:50까지 예정 (25분 남음)'), findsOneWidget,
+        reason: '늦게 왔으면 계획 끝에 떠난다고 본다 (서버 projection 규칙 B 와 같게)');
+  });
+
+  testWidgets('규칙 B 늦게 도착해 계획 끝을 넘김: 계획 끝 기준으로 더 머무는 중', (tester) async {
+    final r = TripReplay('scene2_arrival', flows: ['f4_arrival_docent.json']);
+    r.advanceTo('12:35:00');
+    final first = ((r.plan['days'] as List).first['items'] as List).first as Map<String, dynamic>;
+    first
+      ..['start_at'] = '11:10'
+      ..['end_at'] = '12:10';
+    await phone(tester);
+    final s = await signedInSession(r.gw, prefs: {'demo_location_mode': true});
+    await tester.pumpWidget(app(s, PlannerShell(planId: r.planId, locationSource: FakeLocationSource())));
+    await settle(tester, 30);
+    expect(find.textContaining('예정보다 15분 더 머무는 중'), findsOneWidget);
+  });
+
   testWidgets('B7 순서 바꿔 마지막 장소에 머무는 중(서버 다음 없음): 건너뛴 앞 항목을 다음으로 그리지 않는다', (tester) async {
     final r = TripReplay('scene2_arrival', flows: ['f4_arrival_docent.json']);
     r.advanceTo('12:35:00');

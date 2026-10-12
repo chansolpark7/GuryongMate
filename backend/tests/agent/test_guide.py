@@ -360,7 +360,12 @@ def test_event_turn_single_proposal_format(client, trip_plan, up):  # noqa: F811
 
 
 def test_guide_view_and_changes_follow_live_progress(client, trip_plan, up, planner_now):  # noqa: F811
-    """동행 모드에서 LLM 이 보는 일정·변경 요약은 실제 진행(물회집 13:40 도착) + planner 의 지금 기준이다."""
+    """동행 모드에서 LLM 이 보는 일정·변경 요약은 실제 진행(물회집 13:40 도착) + planner 의 지금 기준이다.
+    지금은 물회집 예정 종료(14:36)를 넘긴 14:50 — 그 전에는 예정 종료에 떠난다고 봐서(규칙 B) 종료 시각이 계획과 같다."""
+    from datetime import datetime
+
+    from app.planner import clock as planner_clock
+    planner_clock._clock = planner_clock.FixedClock(datetime(2026, 10, 10, 14, 50, tzinfo=planner_clock.KST))
     sid, pid, items = trip_plan
     up.trip = trip_state(pid, items)
     baseline = th.plan_of(client, pid)["days"][0]
@@ -369,7 +374,7 @@ def test_guide_view_and_changes_follow_live_progress(client, trip_plan, up, plan
     import json as _json
     plan_json = system_of(0).split("## 현재 일정\n", 1)[1].split("\n\n", 1)[0]
     food = next(i for i in _json.loads(plan_json)["days"][0]["items"] if i["item_id"] == items["p-food"])
-    assert food["time"] == "13:40~14:40"
+    assert food["time"] == "13:40~14:50"
     prop = last(events, "proposal")
     live_end = prop["before"]["days"][0]["end_at"]
     assert live_end != baseline["end_at"]

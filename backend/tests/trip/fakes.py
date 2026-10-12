@@ -2,7 +2,7 @@
 
 가짜 planner 는 실제 planner 의 시간 모델(docs/planner/README.md §2.1, §8.2)을 단순하게 흉내 낸다:
 도보 이동시간 = 직선거리 × 1.3 / 70m, 차량 = 직선거리 × 1.3 / 400m + 주차 5분 (분 올림), 운영시간 밖·하루 초과·고정 시각 놓침만 본다.
-재계산(actual)에서는 문을 열기 전에 도착하면 기다린다.
+재계산(actual)에서는 문을 열기 전에 도착하면 기다리고, 머무는 곳에 늦게 왔으면 예정 종료에 떠난다고 본다 (규칙 B).
 도착지에 road(실제 길 / 직선 비율)가 있으면 1.3 대신 그 값 (항구를 돌아가는 방파제, 해안도로로 돌아가는 카페 — 실제 길찾기 거리로 맞춤).
 """
 import math
@@ -170,7 +170,11 @@ class FakePlanner:
             if actual and it["order"] == pivot and anchor is not None:
                 arrive = actual["arrived"]
                 start = self._opened(place, arrive)
-                end = max(start + it["stay"], now)
+                # 늦게 왔으면 기준 일정의 예정 종료에 떠난다고 본다 (planner §8.2 규칙 B). 개장 대기만큼은 온전히 머문다
+                planned = {r["id"]: r["end"] for r in self._schedule(p)[0]}[it["id"]]
+                if "open" in place:
+                    planned = max(planned, hm(place["open"][0]) + it["stay"])
+                end = max(start, min(start + it["stay"], planned), now)
                 rows.append({"id": it["id"], "arrive": arrive, "start": start, "end": end})
                 self._check_open(place, it, start, end, vs)
                 t, prev = end, place

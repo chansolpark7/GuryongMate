@@ -7,6 +7,7 @@ from datetime import date, time
 
 from app.planner.models import PlannerItem, PlannerPlan
 from app.planner.schemas import PlaceInfo
+from app.planner.travel import TravelLeg
 from app.planner.validation import Actual, build_schedule, delay_minutes, new_violations, next_item_id
 
 A = PlaceInfo(id="a", title="가옥거리", lat=35.9880, lng=129.5570, open_hours="10:00~18:00")
@@ -119,3 +120,65 @@ def test_out_of_order_skipped_items_are_past():
     plan = make_plan(PLANNED, PLANNED, ("visiting", "10:10", None))
     items, new, delay, nxt = run(plan, Actual(1, hm("10:20"), anchor_id=3, anchor_arrive=hm("10:10")))
     assert new == [] and nxt is None
+
+
+# ---------- 4. 늦게 도착한 곳 — 예정 종료에 떠난다고 본다 (규칙 B, 2026-10-12) ----------
+
+def test_opening_wait_before_planned_end_keeps_full_stay():
+    """계획이 개장 전(09:00~10:00)에 잡혀 있어도, 09:30 에 와서 10:00 개장까지 기다리면 체류를 온전히(11:00) 본다."""
+    plan = make_plan(("visiting", "09:30", None), PLANNED, PLANNED, day_start=time(9, 0))
+    items, new, delay, nxt = run(plan, Actual(1, hm("09:35"), anchor_id=1, anchor_arrive=hm("09:30")))
+    assert (items[0].start_at, items[0].end_at) == ("10:00", "11:00") and new == []
+
+
+def _guryongpo_plan(camellia: tuple) -> tuple[PlannerPlan, dict, dict]:
+    """사용자 로컬 재현 (차량): 과메기문화관 12:30 고정 (~15:50) -> 까멜리아 15:58~16:48 -> 가옥거리 16:54
+    -> 카페파도 17:50 -> 구룡포항 18:30~19:30 (하루 종료 19:30)."""
+    spots = [("m", "과메기문화관", 200, time(12, 30)), ("k", "까멜리아인구룡포", 50, None), ("h", "가옥거리", 50, None),
+             ("c", "카페파도", 30, None), ("p", "구룡포항", 60, None)]
+    places = {pid: PlaceInfo(id=pid, title=t, lat=35.98 + n * 0.002, lng=129.55)
+              for n, (pid, t, _, _) in enumerate(spots)}
+    minutes = {("m", "k"): 8, ("k", "h"): 6, ("h", "c"): 6, ("c", "p"): 10}
+    travel = {(a, b, mode): TravelLeg(m if mode == "car" else m * 3, 1000, "road")
+              for (a, b), m in minutes.items() for mode in ("walk", "car")}
+    plan = PlannerPlan(id=1, user_id="u", title="t", start_date=date(2026, 10, 12), end_date=date(2026, 10, 12),
+                       day_start=time(10, 0), day_end=time(19, 30), travel_mode="car", memo="")
+    rows = [("done", "12:30", "16:11"), camellia, PLANNED, PLANNED, PLANNED]
+    for n, ((pid, _, stay, fixed), (status, arrived, done)) in enumerate(zip(spots, rows), start=1):
+        plan.items.append(PlannerItem(
+            id=n, place_id=pid, day=1, position=n, stay_minutes=stay, memo="", status=status, travel_mode=None,
+            start_time=fixed, arrived_at=time.fromisoformat(arrived) if arrived else None,
+            done_at=time.fromisoformat(done) if done else None))
+    return plan, places, travel
+
+
+def _run_with(plan, places, travel, actual):
+    base_days, base_v = build_schedule(plan, places, travel)
+    days, v = build_schedule(plan, places, travel, actual)
+    nxt = next_item_id(plan, actual)
+    return days[0].items, [x.code for x in new_violations(base_v, v)], delay_minutes(base_days, days, 1, nxt), nxt
+
+
+def test_late_arrival_at_camellia_leaves_at_planned_end():
+    """까멜리아에 14분 늦게(16:12) 와서 16:17 -> 예정 종료 16:48 에 떠난다고 본다: 가옥거리 16:54, 지연 0 (기존: 17:08, +14)."""
+    plan, places, travel = _guryongpo_plan(("visiting", "16:12", None))
+    base, _ = build_schedule(plan, places, travel)
+    assert [(i.start_at, i.end_at) for i in base[0].items] == [
+        ("12:30", "15:50"), ("15:58", "16:48"), ("16:54", "17:44"), ("17:50", "18:20"), ("18:30", "19:30")]
+    items, new, delay, nxt = _run_with(plan, places, travel,
+                                       Actual(1, hm("16:17"), anchor_id=2, anchor_arrive=hm("16:12")))
+    assert (items[1].start_at, items[1].end_at, items[2].arrive_at) == ("16:12", "16:48", "16:54")
+    assert nxt == 3 and delay == 0 and new == []
+    # 16:55 에도 아직 까멜리아 -> 지금 끝난다고 본다: 가옥거리 17:01, +7 (하루 종료 19:37 -> day_overflow)
+    items, new, delay, nxt = _run_with(plan, places, travel,
+                                       Actual(1, hm("16:55"), anchor_id=2, anchor_arrive=hm("16:12")))
+    assert (items[1].end_at, items[2].arrive_at) == ("16:55", "17:01") and delay == 7
+    assert new == ["day_overflow"]
+
+
+def test_done_items_keep_recorded_times_under_rule_b():
+    """다녀온 항목은 기록 그대로 (규칙 B 는 머무는 항목만): 까멜리아 16:12~16:30 완료 -> 16:31 출발, 가옥거리 16:37."""
+    plan, places, travel = _guryongpo_plan(("done", "16:12", "16:30"))
+    items, _, delay, nxt = _run_with(plan, places, travel, Actual(1, hm("16:31")))
+    assert (items[1].start_at, items[1].end_at) == ("16:12", "16:30")
+    assert nxt == 3 and items[2].arrive_at == "16:37" and delay == -17
