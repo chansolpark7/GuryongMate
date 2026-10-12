@@ -23,9 +23,11 @@ class Upstream(httpx.AsyncBaseTransport):
         self.trip: dict | int | Exception = 404  # TripState | 오류 HTTP 상태 | 연결 오류
         self.sim: str | None = None  # 가상 시각 (None 이면 404 sim_disabled -> 시스템 시각)
         self.trip_calls = 0
+        self.seen: list[tuple[str, str, str, bytes]] = []  # (method, path, query, body) — planner 로 보낸 요청 확인용
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
         path = request.url.path
+        self.seen.append((request.method, path, request.url.query.decode(), request.content))
         if path.startswith("/trip/"):
             self.trip_calls += 1
             if isinstance(self.trip, Exception):
@@ -319,7 +321,7 @@ def test_progress_changed_proposal_is_refused_and_replaced(client, trip_plan, up
     p2 = last(chat(client, sid, "카페는 짧게", [[("update_item", {"item_id": items["p-cafe"], "stay_minutes": 30})],
                                                ["카페를 30분으로 줄여요."]]), "proposal")
     system = system_of(turn)
-    assert "다녀왔다(완료)" in system and "체류 60분 → 30분" in system and "## 승인 대기 중인 제안" not in system
+    assert "다녀오거나 도착했다(완료·머무는 중)" in system and "체류 60분 → 30분" in system and "## 승인 대기 중인 제안" not in system
     assert [c["item_id"] for c in p2["changes"] if c["kind"] == "updated"] == [items["p-cafe"]]
     assert ok(client.get(f"/planner/plans/{pid}/proposals/{p1['id']}", headers=H))["status"] == "superseded"
     ok(client.post(f"/agent/sessions/{sid}/proposals/{p2['id']}/accept", headers=H))
@@ -586,3 +588,31 @@ def test_situation_marks_approved_basis_with_pending(client, trip_plan, up):  # 
                            "승인 대기 제안을 적용한 현재 일정에서는 ") and line.endswith(" 시작"), line
     # 대기 제안이 없으면 trip 값 그대로
     assert "승인된 계획 기준" not in next(x for x in system_of(0).split("\n") if x.startswith("- 다음:"))
+
+
+def _planner_calls(up, *suffixes):
+    import json as _json
+    out = []
+    for method, path, query, body in up.seen:
+        if path.startswith("/planner/") and path.endswith(suffixes):
+            out.append((method, path.rsplit("/", 1)[1], query, _json.loads(body) if body else None))
+    return out
+
+
+@pytest.mark.parametrize("active", [True, False])
+def test_guide_mode_sends_live_to_planner(client, trip_plan, up, active):  # noqa: F811
+    """A1 (planner live 옵션): 동행 모드면 미리보기·안전 점검(초안 있음·없음)·제안 생성에 live=true. 계획 모드는 보내지 않는다."""
+    sid, pid, items = trip_plan
+    up.trip = trip_state(pid, items, active=active)
+    chat(client, sid, "안전해?", [[("check_safety", {})], ["네."]])
+    chat(client, sid, "카페 짧게", [[("update_item", {"item_id": items["p-cafe"], "stay_minutes": 30}),
+                                   ("check_safety", {}), ("review_plan", {})], ["줄였어요."]])
+    calls = _planner_calls(up, "/preview", "/safety", "/proposals")
+    gets = [q for m, name, q, _ in calls if m == "GET" and name == "safety"]
+    posts = [(name, b) for m, name, _, b in calls if m == "POST"]
+    assert gets and {n for n, _ in posts} >= {"preview", "proposals"}
+    assert any(p == f"/planner/plans/{pid}/safety/preview" for _, p, _, _ in up.seen)
+    if active:
+        assert all(q == "live=true" for q in gets) and all(b.get("live") is True for _, b in posts)
+    else:
+        assert all("live" not in q for q in gets) and all("live" not in b for _, b in posts)

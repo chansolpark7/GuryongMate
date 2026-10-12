@@ -475,7 +475,7 @@ async def run_turn(session_id: str, plan_id: int, user_text: str, llm: LLMProvid
         # 초안 -> 변경 제안
         proposal = None
         full_text = "\n\n".join(said)
-        if draft.changed and draft.ops and not (await api.preview(plan_id, draft.ops))["changes"]:
+        if draft.changed and draft.ops and not (await api.preview(plan_id, draft.ops, live=toolbox.live))["changes"]:
             draft.ops = []  # 고치다 보니 원래대로 돌아옴 -> 빈 제안을 만들지 않는다
         if draft.changed and draft.ops:
             for ev in steps.start("proposal", "잠시만요..."):
@@ -483,7 +483,7 @@ async def run_turn(session_id: str, plan_id: int, user_text: str, llm: LLMProvid
             try:
                 proposal = await api.create_proposal(
                     plan_id, draft.ops, summary=full_text, request=request, origin=session_id,
-                    supersedes=draft.base_proposal_id, expected_version=base_version)
+                    supersedes=draft.base_proposal_id, expected_version=base_version, live=toolbox.live)
             except ApiError as e:
                 yield steps.finish(False, "만들지 못함")
                 if e.code == "version_conflict":

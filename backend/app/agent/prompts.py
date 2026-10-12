@@ -337,7 +337,7 @@ def _sections(plan_view: dict, pending: dict | None, dropped: dict | None, repro
                         "변경 요청이 아니면 이 제안을 고치지 말고 질문에만 답한다 (제안은 그대로 승인 대기로 남는다)."
                       + (" 아직 대기 중이라는 안내는 앱이 답변 끝에 붙이니 따로 말하지 않는다." if docent else "")))
     if dropped:
-        why = ("그 제안이 바꾸는 곳을 그사이 다녀왔다(완료)" if dropped.get("progress_changed")
+        why = ("그 제안이 바꾸는 곳을 그사이 다녀오거나 도착했다(완료·머무는 중)" if dropped.get("progress_changed")
                else "그 뒤로 일정이 바뀌어 지금 일정과 기준이 다르다")
         parts.append((False, f"## 참고\n이전에 만든 제안 #{dropped['id']} 은 {why}. 그대로는 승인할 수 없다. "
                       "이번에 새 변경 제안을 만들면 그 제안을 대체한다. 필요하면 현재 일정을 기준으로 다시 제안한다.\n"
@@ -346,7 +346,8 @@ def _sections(plan_view: dict, pending: dict | None, dropped: dict | None, repro
         parts.append((False, f"## 다시 제안 요청\n사용자가 제안 #{repropose['id']} 을 현재 일정에 맞춰 다시 만들어 달라고 했다.\n"
                       f"원래 요청: {repropose.get('request') or '(기록 없음)'}\n당시 제안한 변경:\n"
                       + "\n".join(f"- {c['message']}" for c in repropose.get("changes", []))
-                      + ("\n그사이 다녀온(완료) 곳을 바꾸는 변경이 있어 그대로 승인할 수 없었다. 다녀온 곳은 바꾸지 않는다."
+                      + ("\n그사이 다녀오거나 도착한(완료·머무는 중) 곳을 바꾸는 변경이 있어 그대로 승인할 수 없었다. "
+                         "다녀온 곳은 바꾸지 않고, 머무는 곳은 체류 시간·메모만 바꾼다."
                          if repropose.get("progress_changed") else "")
                       + "\n같은 의도를 지금 일정에 맞게 변경 도구로 다시 만든다."
                       + ("\n원래 요청에 적힌 시각·문제는 그때 기준이다. 지금 문제는 현재 일정의 시각과 violations 로만 판단한다. "

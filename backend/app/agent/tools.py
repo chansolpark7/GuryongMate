@@ -371,6 +371,11 @@ class Toolbox:
         self._source_keys: dict[str, str] = {}
         self.citations: list[dict] = []  # 공급자 내장 검색 답변의 인용 [{"title", "url"}]
 
+    @property
+    def live(self) -> bool:
+        """동행 모드: planner 미리보기·안전 점검·제안을 지금(실제 진행) 기준으로 (live=true, planner §8.4)."""
+        return bool(self.trip)
+
     # ----- 자료 출처 -----
     def add_source(self, prefix: str, title: str, url: str) -> str:
         """본 자료를 등록하고 source_id 를 돌려준다. 같은 자료(웹은 URL, 근거 조각은 제목)는 같은 id."""
@@ -447,7 +452,7 @@ class Toolbox:
         planner preview 는 여행 중인 날을 실제 진행 + 지금 기준으로 계산한다. 초안이 없을 때도 동행 모드면
         같은 기준(projection)으로 보여준다 (LLM 이 보는 시각·위반이 현실과 맞게)."""
         if self.draft.ops:
-            r = await self.api.preview(self.plan_id, self.draft.ops)
+            r = await self.api.preview(self.plan_id, self.draft.ops, live=self.live)
             self.last_plan = r["plan"]
             self.changes = [c["message"] for c in r["changes"]]
             return compact_plan(r["plan"], self.changes, len(self.draft.ops))
@@ -662,7 +667,7 @@ class Toolbox:
                                "destination": brief(res[f"v{n}"])}
 
     async def _t_check_safety(self) -> ToolOutcome:
-        check = await self.api.check_safety(self.plan_id, self.draft.ops)
+        check = await self.api.check_safety(self.plan_id, self.draft.ops, live=self.live)
         out = compact_safety(check)
         risky = [i for i in check["items"] if i["risk"] in ("caution", "danger")]
         if risky:
@@ -798,7 +803,7 @@ class Toolbox:
         self.reviewed_rev = self.rev
         issues = review(self.last_plan, self.trip)
         try:
-            issues += safety_issues(await self.api.check_safety(self.plan_id, self.draft.ops))
+            issues += safety_issues(await self.api.check_safety(self.plan_id, self.draft.ops, live=self.live))
         except ApiError:
             issues.append({"level": "info", "kind": "safety",
                            "message": "안전 정보를 확인하지 못했다 (서비스 장애). 안전하다고 단정하지 않는다."})
@@ -815,7 +820,7 @@ class Toolbox:
     async def _stage(self, op: dict, label: str, notice: str = "") -> ToolOutcome:
         self._guard(op)
         candidate = [*self.draft.ops, op]
-        r = await self.api.preview(self.plan_id, candidate)  # 적용 불가면 ApiError -> 초안에 넣지 않음
+        r = await self.api.preview(self.plan_id, candidate, live=self.live)  # 적용 불가면 ApiError -> 초안에 넣지 않음
         before_travel = total_travel(self.last_plan) if self.last_plan else None
         self.draft.ops = candidate
         self.draft.changed = True

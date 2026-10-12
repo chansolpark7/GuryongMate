@@ -614,6 +614,8 @@ trip 이 단계 3 이벤트(`delay`, `safety_raised`)에서 부른다. 앱은 �
   사용자가 대기 중인 제안에 조건을 붙이면 `add_rule`로 등록하고 그 제안 위에서 고쳐 다시 제안한다.
 - **현재 일정은 실제 진행 기준**이다: 초안이 있으면 planner `preview`, 없으면 planner `projection` 의 일정 (실제 도착·완료 기록 + planner 의 지금,
   planner §8.4). 그래서 LLM 이 보는 시각·위반과 제안 카드의 전후 비교(`day_end` 등)가 현실과 맞는다. projection 이 실패하면(오늘이 기간 밖 등) 계획 기준.
+  동행 모드의 planner 호출(미리보기 `preview`·안전 점검 `safety/preview`·`GET …/safety?live=true`·제안 생성)에는 `live: true`를 보낸다 —
+  진행 기록이 아직 없어도(첫 도착 전) projection 과 같은 지금 기준이라, 초안이 생기는 순간 기준이 바뀌지 않는다. 계획 모드는 보내지 않는다.
 - 하네스가 변경 도구에서 **직접 거부**한다 (도구 오류 `not_allowed_during_trip`, LLM 이 이유를 받고 다른 방법을 찾는다):
   - 완료(`done`) 항목의 수정·삭제
   - 지난 날 항목의 수정, 지난 날로 넣거나 옮기기 (`add_item`·`update_item`의 `day` < 오늘)
