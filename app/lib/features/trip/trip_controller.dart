@@ -9,6 +9,7 @@ import 'package:flutter/widgets.dart';
 import '../../core/api/api_client.dart';
 import '../../core/api/guryong_api.dart';
 import '../../core/app_session.dart';
+import '../../core/format.dart' show dateOnly;
 import '../../core/models/account.dart';
 import '../../core/models/plan.dart';
 import '../../core/models/safety.dart';
@@ -26,6 +27,8 @@ class TripTiming {
     this.state = const Duration(seconds: 15),
     this.stateDemo = const Duration(seconds: 5),
     this.stateDemoTrip = const Duration(seconds: 1),
+    this.planCheck = const Duration(seconds: 20),
+    this.planCheckDemo = const Duration(seconds: 5),
     this.markerGlide = const Duration(seconds: 1),
     this.zones = const Duration(seconds: 60),
     this.toast = const Duration(seconds: 4),
@@ -43,6 +46,13 @@ class TripTiming {
 
   /// 데모 위치 모드 + 여행 중: 재생기·관제 화면이 약 1초마다 보내는 위치를 끊기지 않게 따라 그린다.
   final Duration stateDemoTrip;
+
+  /// 동행 중 계획 version 가벼운 확인 (`GET /planner/plans` 목록의 version·progress_version) 주기.
+  /// 다른 클라이언트(진행 스크립트·대시보드)가 제안을 승인하면 다음 도착·출발 전에도 일정을 다시 읽는다 (audit-2026-10-12 F2).
+  final Duration planCheck;
+
+  /// 데모 위치 모드: 발표 중 다른 화면에서 승인한 일정이 곧 보이게 더 자주.
+  final Duration planCheckDemo;
 
   /// 실제 GPS 모드에서 사용자 마커가 새 위치로 옮겨 가는 시간 (위치는 30m·45초마다 들어와 주기가 일정하지 않다).
   final Duration markerGlide;
@@ -112,13 +122,19 @@ class TripController extends ChangeNotifier with WidgetsBindingObserver {
   final _seenSent = <int>{};
   DateTime? _waitSince;
 
-  /// 오늘 이벤트 (오래된 순).
-  List<TripEvent> get events => (_events.values.toList()..sort((a, b) => a.id.compareTo(b.id)));
+  /// 오늘 이벤트 (오래된 순). 여러 날 여행에서 지난 여행일 이벤트는 뺀다 (audit-2026-10-12 F7).
+  List<TripEvent> get events => (_events.values.where(isToday).toList()..sort((a, b) => a.id.compareTo(b.id)));
 
-  /// 알림 목록 배지: seen 안 된 level ≥ 1 (24).
-  int get unseenCount => _events.values.where((e) => e.level >= 1 && !e.suppressed && e.seenAt == null && !_seenSent.contains(e.id)).length;
+  /// 이 이벤트가 지금 여행일의 것인지 (여행일·이벤트 day 를 모르면 그렇다고 본다).
+  bool isToday(TripEvent e) {
+    final d = state?.day;
+    return d == null || e.day == null || e.day == d;
+  }
 
-  bool get waitingAgent => _events.values.any((e) => e.waitingAgent);
+  /// 알림 목록 배지: seen 안 된 level ≥ 1 (24). 오늘 것만.
+  int get unseenCount => _events.values.where((e) => isToday(e) && e.level >= 1 && !e.suppressed && e.seenAt == null && !_seenSent.contains(e.id)).length;
+
+  bool get waitingAgent => _events.values.any((e) => isToday(e) && e.waitingAgent);
 
   // ---------- 화면에 떠 있는 것 ----------
 
@@ -173,6 +189,7 @@ class TripController extends ChangeNotifier with WidgetsBindingObserver {
   Timer? _arrivalTimer;
   LocationSender? sender;
   bool _companion = false;
+  bool _observing = false;
   bool _disposed = false;
   bool _polling = false;
 
@@ -213,6 +230,8 @@ class TripController extends ChangeNotifier with WidgetsBindingObserver {
   void dispose() {
     _disposed = true;
     _stopCompanion();
+    if (_observing) WidgetsBinding.instance.removeObserver(this);
+    _observing = false;
     _chat?.removeListener(_onChat);
     session.removeListener(_onSession);
     todayChrome.dispose();
@@ -226,8 +245,11 @@ class TripController extends ChangeNotifier with WidgetsBindingObserver {
   // ---------- 시작 · 종료 ----------
 
   /// 계획 화면 진입: state 를 읽고 active 면 동행 모드를 켠다.
+  /// 아니어도 여행 기간 중이면 state 를 주기적으로 (그리고 앱이 다시 보일 때) 읽어, 다른 클라이언트(진행 스크립트·대시보드)가
+  /// 여행을 시작하면 동행 모드로 바뀐다 (audit-2026-10-12 F1).
   Future<void> load() async {
     session.addListener(_onSession);
+    _observe();
     try {
       _setState(await api.tripState(planId));
       stateError = null;
@@ -236,7 +258,17 @@ class TripController extends ChangeNotifier with WidgetsBindingObserver {
     }
     loaded = true;
     _notify();
-    if (active) await _startCompanion();
+    if (active) {
+      await _startCompanion();
+    } else {
+      _scheduleState();
+    }
+  }
+
+  void _observe() {
+    if (_observing || _disposed) return;
+    _observing = true;
+    WidgetsBinding.instance.addObserver(this);
   }
 
   /// [여행 시작] (11). 409 not_trip_day 는 그대로 던진다 → 12.
@@ -273,7 +305,7 @@ class TripController extends ChangeNotifier with WidgetsBindingObserver {
   Future<void> _startCompanion() async {
     if (_companion || _disposed) return;
     _companion = true;
-    WidgetsBinding.instance.addObserver(this);
+    _observe();
     _scheduleState();
     unawaited(loadZones());
     unawaited(loadGuideNotes());
@@ -282,10 +314,10 @@ class TripController extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   void _stopCompanion() {
-    if (_companion) WidgetsBinding.instance.removeObserver(this);
     _companion = false;
     _pollTimer?.cancel();
     _stateTimer?.cancel();
+    _stateTimer = null;
     _toastTimer?.cancel();
     _previewTimer?.cancel();
     _arrivalTimer?.cancel();
@@ -349,7 +381,10 @@ class TripController extends ChangeNotifier with WidgetsBindingObserver {
 
   void _onSession() {
     // 데모 위치 모드를 켜면 GPS 전송을 멈추고, 끄면 다시 (33)
-    if (!active) return;
+    if (!active) {
+      if (loaded) _scheduleState(); // 여행 전 state 확인 주기 (데모면 더 짧게)
+      return;
+    }
     if (demoMode) {
       sender?.stop();
     } else if (sender?.running != true) {
@@ -361,12 +396,28 @@ class TripController extends ChangeNotifier with WidgetsBindingObserver {
 
   // ---------- 상태 ----------
 
+  /// state 주기 읽기. 동행 중이면 늘, 아니면 여행 기간 중일 때만 (다른 클라이언트가 시작한 여행을 알아차리게, F1).
+  /// 주기: 동행 15초 (데모 위치 모드 1초), 여행 전 15초 (데모 위치 모드 5초). 같은 주기면 타이머를 다시 만들지 않는다.
   void _scheduleState() {
+    final every = _disposed || !(_companion || _watchStart) ? null : _stateEvery;
+    if (every != null && every == _stateTimerEvery && _stateTimer?.isActive == true) return;
     _stateTimer?.cancel();
-    if (!_companion) return;
-    _stateTimer = Timer.periodic(_stateEvery, (_) {
+    _stateTimer = null;
+    _stateTimerEvery = every;
+    if (every == null) return;
+    _stateTimer = Timer.periodic(every, (_) {
       if (!_stateLoading) refreshState(); // 1초 주기에서 응답이 늦으면 쌓지 않는다
     });
+  }
+
+  Duration? _stateTimerEvery;
+
+  /// 여행 전에도 state 를 지켜볼지: 오늘(서버 시각)이 계획 기간 안.
+  bool get _watchStart {
+    final p = plan.plan;
+    if (!loaded || active || p == null) return false;
+    final d = dateOnly(serverNow());
+    return !d.isBefore(dateOnly(p.startDate)) && !d.isAfter(dateOnly(p.endDate));
   }
 
   Duration get _stateEvery => demoMode ? (active ? timing.stateDemoTrip : timing.stateDemo) : timing.state;
@@ -378,9 +429,13 @@ class TripController extends ChangeNotifier with WidgetsBindingObserver {
 
   Future<void> refreshState() async {
     _stateLoading = true;
+    var started = false;
     try {
+      final was = active;
       _setState(await api.tripState(planId));
       if (offline) offline = false;
+      // 다른 클라이언트가 여행을 시작함 → 동행 모드 (F1)
+      started = !was && active && loaded && !_companion;
     } on ApiException catch (e) {
       if (e.isNetwork) offline = true;
     } catch (_) {
@@ -388,6 +443,11 @@ class TripController extends ChangeNotifier with WidgetsBindingObserver {
       _stateLoading = false;
     }
     _notify();
+    if (started) {
+      await _startCompanion();
+    } else if (_companion) {
+      unawaited(_checkPlanVersion());
+    }
   }
 
   void _setState(TripState s) {
@@ -399,13 +459,43 @@ class TripController extends ChangeNotifier with WidgetsBindingObserver {
       _stopCompanion();
       _clearOverlays();
       onEnded?.call(s);
+      _scheduleState(); // 여행 기간이 남았으면 다시 시작을 지켜본다
     }
     if (prev != null && (prev.currentItemId != s.currentItemId || prev.currentState != s.currentState)) {
       plan.load(silent: true).catchError((_) {}); // 진행 상태 (progress_version)
       guideTo = null;
+    } else if (prev != null && prev.active && s.active && _planSign(prev) != _planSign(s)) {
+      // 다음 일정·계획 시작·남은 항목이 바뀜 = 다른 곳에서 일정이 바뀜 (승인 등, F2)
+      plan.load(silent: true).catchError((_) {});
     }
     _checkHazardLeft();
     _notify();
+  }
+
+  /// state 에서 계획이 바뀌었는지 볼 수 있는 값: 다음 일정·그 계획 시작(예상 아님)·남은 항목 목록 (expected 가 둘 다 있을 때만).
+  static String _planSign(TripState s) => '${s.nextItemId}|${s.nextPlannedStart}|${s.expected == null ? '' : (s.expected!.items.keys.toList()..sort()).join(',')}';
+
+  DateTime? _planCheckedAt;
+  bool _planChecking = false;
+
+  /// 동행 중 계획 version 가벼운 확인 (F2): state 에 version 이 없어 `GET /planner/plans` 목록에서 이 계획의
+  /// version·progress_version 을 보고, 지금 일정과 다르면 다시 읽는다. 주기 [TripTiming.planCheck] (데모 위치 모드 planCheckDemo).
+  Future<void> _checkPlanVersion() async {
+    final cur = plan.plan, at = _planCheckedAt;
+    if (cur == null || _planChecking || _disposed) return;
+    if (at != null && clock.now().difference(at) < (demoMode ? timing.planCheckDemo : timing.planCheck)) return;
+    _planChecking = true;
+    _planCheckedAt = clock.now();
+    try {
+      final row = (await api.plans()).where((p) => p.id == planId).firstOrNull;
+      final now = plan.plan;
+      if (row != null && now != null && (row.version != now.version || row.progressVersion != now.progressVersion)) {
+        await plan.load(silent: true);
+      }
+    } catch (_) {
+    } finally {
+      _planChecking = false;
+    }
   }
 
   // ---------- 위험 구역 ----------
@@ -461,14 +551,24 @@ class TripController extends ChangeNotifier with WidgetsBindingObserver {
     _pollTimer = Timer(pollInterval, poll);
   }
 
+  /// 한 번에 읽는 이벤트 수. 이만큼 오면 다음 쪽을 이어 읽는다 (서버 최대 200).
+  static const eventPage = 50;
+
   /// `GET …/events?after=`. 선제 턴을 기다리는 이벤트가 있으면 그 앞부터 다시 읽어 agent 가 채워졌는지 본다.
+  /// 한 쪽([eventPage])이 가득 차면 끝까지 이어 읽는다 — 앱을 연 직후 쌓인 것이 많아도 모두 backlog 로 (옛 이벤트를 새것처럼 알리지 않게, F6).
   Future<void> poll({bool backlog = false}) async {
     if (_polling) return;
     _polling = true;
-    final waiting = _events.values.where((e) => e.waitingAgent).map((e) => e.id);
-    final after = waiting.isEmpty ? _lastId : waiting.reduce(math.min) - 1;
+    final waiting = _events.values.where((e) => isToday(e) && e.waitingAgent).map((e) => e.id);
+    var after = waiting.isEmpty ? _lastId : waiting.reduce(math.min) - 1;
     try {
-      final list = await api.tripEvents(planId, after: after, limit: 50);
+      final list = <TripEvent>[];
+      for (var page = 0; page < 40; page++) {
+        final got = await api.tripEvents(planId, after: after, limit: eventPage);
+        list.addAll(got);
+        if (got.length < eventPage) break;
+        after = got.map((e) => e.id).reduce(math.max);
+      }
       if (offline) offline = false;
       ingest(list, backlog: backlog);
       // 준비 중인 노트가 있으면 폴링 때 같이 (10초에 한 번) — Today 한 줄 · 열린 17 이 새 노트로
@@ -487,7 +587,11 @@ class TripController extends ChangeNotifier with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (!_companion) return;
+    if (!_companion) {
+      // 여행 전: 다시 보이면 state 를 한 번 (그사이 다른 곳에서 여행을 시작했을 수 있다, F1)
+      if (state == AppLifecycleState.resumed && loaded && !_disposed && !_stateLoading) refreshState();
+      return;
+    }
     if (state == AppLifecycleState.resumed) {
       // 포그라운드로 돌아옴: 즉시 1회 + state, 위치 다시
       refreshState();
@@ -514,6 +618,7 @@ class TripController extends ChangeNotifier with WidgetsBindingObserver {
       final old = _events[e.id];
       _events[e.id] = e;
       if (e.id > _lastId) _lastId = e.id;
+      if (!isToday(e)) continue; // 지난 여행일 것은 기억만 하고 알리지 않는다 (F7)
       if (old == null) {
         _handleNew(e, backlog: backlog);
       } else if (old.waitingAgent && e.agentReady) {
@@ -780,8 +885,20 @@ class TripController extends ChangeNotifier with WidgetsBindingObserver {
 
   // ---------- 화면용 계산 ----------
 
-  /// 오늘 (여행일) 의 Day.
-  PlanDay? get today => plan.plan?.dayOf(state?.day ?? plan.day);
+  /// 오늘 (여행일) 의 Day. 동행 중이면 그 여행일, 아니면 서버 시각의 오늘이 계획 기간 안일 때 그날
+  /// (지난 여행일 state 의 day 가 아니라 — 2일차 시작 시트가 1일차를 보이지 않게, audit-2026-10-12 F5).
+  PlanDay? get today => plan.plan?.dayOf(todayDay);
+
+  int get todayDay {
+    final s = state, p = plan.plan;
+    if (s?.active == true && s?.day != null) return s!.day!;
+    if (p != null && s?.now != null) {
+      final d = dateOnly(serverNow()), start = dateOnly(p.startDate);
+      final n = (DateTime.utc(d.year, d.month, d.day).difference(DateTime.utc(start.year, start.month, start.day)).inDays) + 1;
+      if (n >= 1 && n <= p.numDays) return n;
+    }
+    return s?.day ?? plan.day;
+  }
 
   PlanItem? item(int? id) => id == null ? null : plan.plan?.item(id);
 

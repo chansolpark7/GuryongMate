@@ -8,6 +8,19 @@ import '../../core/theme/app_theme.dart';
 import '../../core/widgets/common.dart';
 import 'trip_overlay.dart' show shortZoneName;
 
+/// 이번 여행일을 실제로 시작한 시각 (제안 decided_at 은 실제 시각이라 이것과 비교한다, audit-2026-10-12 F3).
+/// started_at 은 서버 시계(가상 시각이면 그 시각)라 바로 비교할 수 없다:
+/// 1. 그날 day_started 이벤트의 created_at (서버가 실제 시각으로 남김)
+/// 2. 실제 시계(system)면 지금 − (state.now − started_at)
+/// 3. 모르면 18시간 전 (예전 동작)
+DateTime tripRealStart(TripState s, List<TripEvent> events, DateTime realNow) {
+  final started = events.where((e) => e.type == 'day_started' && e.createdAt != null && (s.day == null || e.day == null || e.day == s.day)).toList()
+    ..sort((a, b) => a.id.compareTo(b.id));
+  if (started.isNotEmpty) return started.first.createdAt!;
+  if (s.clock == 'system' && s.startedAt != null && s.now != null) return realNow.subtract(s.now!.difference(s.startedAt!));
+  return realNow.subtract(const Duration(hours: 18));
+}
+
 /// 30 Trip End (Figma 73:5458): 하루 요약. 요약 API 가 없어 앱이 계산한다 (gaps b8).
 /// - 실제 동선·다녀온 곳: PlanDetail 그날 항목의 arrived_at·done_at
 /// - 이동: done·visiting 항목의 travel_minutes 합 (수단별)
@@ -54,13 +67,15 @@ class _TripEndScreenState extends State<TripEndScreen> {
       _plan = await api.plan(widget.planId);
     } catch (_) {}
     try {
-      _events = await api.tripEvents(widget.planId, after: 0, limit: 200);
+      // 끝까지 넘겨 읽고 (F6) 이번 여행일 것만 (여러 날 여행에서 지난 날 알림이 섞이지 않게, F7)
+      final day = widget.state.day;
+      _events = (await api.tripEventsAll(widget.planId)).where((e) => day == null || e.day == null || e.day == day).toList();
     } catch (_) {}
     try {
       final all = await api.proposals(widget.planId, status: 'accepted');
-      // decided_at 은 실제 시각이다 (가상 시각과 다를 수 있다): 오늘 결정한 것
-      final now = DateTime.now();
-      _accepted = all.where((p) => p.decidedAt != null && now.difference(p.decidedAt!) < const Duration(hours: 18)).toList();
+      // 이번 여행일을 시작한 뒤 승인한 것만 (계획을 만든 제안은 빼고, audit-2026-10-12 F3)
+      final since = tripRealStart(widget.state, _events, DateTime.now());
+      _accepted = all.where((p) => p.decidedAt != null && !p.decidedAt!.isBefore(since)).toList();
       for (final p in all) {
         _proposalById[p.id] = p;
       }

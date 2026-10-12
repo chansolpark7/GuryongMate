@@ -57,8 +57,9 @@
 
 1. **위치 전송 응답** — `POST /trip/plans/{id}/location` 의 `events` (그 요청으로 생긴 이벤트). `near_hazard`·`arrived`·`departed` 는 대부분 여기서 바로 온다. 받은 즉시 그린다.
 2. **폴링** — `GET /trip/plans/{id}/events?after={마지막 id}&limit=50`. 위치와 상관없이 생기는 `delay`(시간 경과)·`safety_raised`·`safety_eased` 와, 3단계의 `agent` 결과(선제 턴이 끝나 `status` 가 `delivered` 가 되면 채워짐)를 받는다.
+   50개가 가득 차면 마지막 id 뒤를 이어 읽는다 — 앱을 연 직후 쌓인 것이 50개를 넘어도 모두 backlog 로 처리해 옛 이벤트를 새것처럼 알리지 않는다 (audit-2026-10-12 F6).
 
-두 경로에서 같은 id 가 오면 한 번만 처리한다 (마지막 id 를 기억).
+두 경로에서 같은 id 가 오면 한 번만 처리한다 (마지막 id 를 기억). 여러 날 여행에서는 이벤트 `day` 가 지금 여행일(state `day`)과 다른 것은 목록·배지·알림에서 뺀다 (F7).
 
 ## 5. 폴링 시점
 
@@ -68,9 +69,12 @@
 | 동행 모드, push 화면(가이드 노트 등) | 10초 |
 | 3단계 이벤트가 `queued` / `agent` 가 아직 null | 2초 (최대 60초, 그 뒤 5초) |
 | 앱이 포그라운드로 돌아옴 | 즉시 1회 + `GET …/state` |
-| 계획 모드 | 하지 않음 (Plan List·Planner 는 planner 경고 `GET …/safety/alerts?status=new` 를 화면 진입 시 1회) |
+| 계획 모드 | 이벤트는 하지 않음 (Plan List·Planner 는 planner 경고 `GET …/safety/alerts?status=new` 를 화면 진입 시 1회) |
 
-- `TripState` 는 15초마다 `GET …/state` (또는 위치 응답의 `state`).
+- `TripState` 는 동행 중 15초마다 `GET …/state` (데모 위치 모드 1초, 또는 위치 응답의 `state`).
+- 계획 모드라도 오늘(서버 시각)이 계획 기간 안이면 `GET …/state` 를 15초(데모 위치 모드 5초)마다, 그리고 앱이 다시 보일 때 읽는다. 다른 클라이언트(진행 스크립트·대시보드)가 여행을 시작하면 active 가 되어 동행 모드로 바뀐다 (audit-2026-10-12 F1). 기간 밖이면 읽지 않는다.
+- 동행 중 다른 곳에서 승인한 일정: state 의 다음 일정·그 계획 시작·남은 항목이 바뀌면 바로, 아니면 `GET /planner/plans` 목록의 이 계획 `version`·`progress_version` 을 20초(데모 위치 모드 5초)마다 확인해 다르면 계획을 다시 읽는다 (state 에 version 이 없다, F2).
+- 계획 GET 응답의 `version`·`progress_version` 이 지금 가진 것보다 작으면 늦게 온 옛 응답이라 버린다 (F8).
 - 이벤트를 화면에 보여주면(카드·토스트·경고가 실제로 보였거나 알림 목록에서 보이면) `POST …/events/{id}/seen`.
 - 나중에 SSE 가 생기면 같은 처리기를 쓰고 폴링만 바꾼다 (trip 문서 "나중에 SSE").
 

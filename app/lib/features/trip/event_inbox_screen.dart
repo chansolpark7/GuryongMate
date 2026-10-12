@@ -40,8 +40,9 @@ class _EventInboxScreenState extends State<EventInboxScreen> {
 
   Future<void> _load() async {
     try {
-      final list = await t.api.tripEvents(t.planId, after: 0, limit: 50);
-      final shown = list.where((e) => e.level >= 1 && !e.suppressed).toList().reversed.toList();
+      // 끝까지 넘겨 읽고 최신순 (50개가 넘어도 가장 오래된 것만 보이지 않게, F6) · 오늘 여행일 것만 (F7)
+      final list = await t.api.tripEventsAll(t.planId);
+      final shown = (list.where((e) => t.isToday(e) && e.level >= 1 && !e.suppressed).toList()..sort((a, b) => b.id.compareTo(a.id)));
       _fresh = {for (final e in shown) if (e.seenAt == null) e.id};
       for (final e in shown.where((e) => e.proactive && e.agent?.proposalId != null)) {
         try {

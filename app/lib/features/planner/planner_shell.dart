@@ -118,7 +118,8 @@ class _PlannerShellState extends State<PlannerShell> {
     }
   }
 
-  DateTime get _today => dateOnly(trip.state?.now ?? DateTime.now());
+  /// 서버 기준 오늘 (KST). state 를 못 읽었으면 세션의 서비스 시각 (기기 시각 아님 — 데모 가상 시각).
+  DateTime get _today => dateOnly(trip.state?.now ?? trip.session.serverToday());
 
   Future<void> _afterTripLoad() async {
     _onTripChanged();

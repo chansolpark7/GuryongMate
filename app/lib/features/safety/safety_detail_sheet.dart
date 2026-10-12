@@ -147,7 +147,7 @@ class SafetyDetailSheet extends StatelessWidget {
             ),
           ],
           const SizedBox(height: 14),
-          Text('예보는 바뀔 수 있어요${checkedAt == null ? '' : ' · ${two(checkedAt!.toLocal().month)}/${two(checkedAt!.toLocal().day)} ${hhmm(checkedAt!)} 확인'}', style: AppText.caption),
+          Text('예보는 바뀔 수 있어요${checkedAt == null ? '' : ' · ${two(kst(checkedAt!).month)}/${two(kst(checkedAt!).day)} ${hhmm(checkedAt!)} 확인'}', style: AppText.caption),
           if (assessed) ...[
             const SizedBox(height: 16),
             AppButton(label: 'AI에게 대안 묻기', icon: Icons.auto_awesome, kind: ButtonKind.aiSoft, onPressed: () => onAskAi(ask)),
