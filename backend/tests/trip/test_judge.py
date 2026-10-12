@@ -437,3 +437,95 @@ def test_normal_departure_keeps_earlier_entry_to_next():
     assert (track.state, track.cand_item_id, track.cand_since) == ("moving", 2, T0 + timedelta(seconds=60))
     track, dets = run([pt(north(B, 0), 150)], track)
     assert [(d.type, d.at) for d in dets] == [("arrived", T0 + timedelta(seconds=60))]  # 출발 점부터 다시 세지 않음
+
+
+# ---------- 로직 점검 (docs/audit/logic-bugs-2026-10-12.md) ----------
+
+def east(spot: Spot, x: float, y: float = 0) -> tuple[float, float]:
+    """spot 에서 동쪽 x, 북쪽 y 미터."""
+    return spot.lat + y / 111_320, spot.lng + x / (111_320 * 0.809)
+
+
+def test_t1_walking_past_is_not_arrival():
+    """T1 재현: 계획 장소 옆 길을 1.0m/s 로 지나가기만 함 (중심에서 0·30·45m, accuracy 20, 10초 간격).
+    반경(80m) 안 시간은 90초를 넘지만 멈춘 적이 없어 도착·출발이 없고 항목은 planned 그대로."""
+    for off in (0, 30, 45):
+        pts = [Point(*east(A, -300 + 10 * k, off), 20, T0 + timedelta(seconds=10 * k)) for k in range(60)]
+        track, dets = run(pts, Track(state="moving", item_id=9))
+        assert dets == [], off
+        assert track.state == "moving" and track.cand_still_sec == 0
+
+
+def test_t1_walk_in_and_stay_arrives_at_first_entry():
+    """걸어 들어와 머물면 도착. 시각은 그대로 반경에 처음 들어온 때 (멈춘 시간은 판정에만 쓴다)."""
+    walk = [Point(*east(A, -280 + 35 * k), 10, T0 + timedelta(seconds=30 * k)) for k in range(9)]  # 70m/분, 마지막 점 = 중심
+    stay = [Point(*east(A, 0), 10, walk[-1].recorded_at + timedelta(seconds=s)) for s in range(30, 181, 30)]
+    entry = next(p for p in walk if distance_m(p.lat, p.lng, A.lat, A.lng) <= 70)
+    track, dets = run(walk + stay)
+    assert [(d.type, d.at) for d in dets] == [("arrived", entry.recorded_at)]
+    assert track.state == "visiting" and track.since == entry.recorded_at
+    # 잠깐(30초) 멈췄다 다시 걸어가면 도착이 아니다
+    pause = [Point(*east(A, 0), 10, walk[-1].recorded_at + timedelta(seconds=30))]
+    on = [Point(*east(A, 35 * k), 10, pause[0].recorded_at + timedelta(seconds=30 * k)) for k in range(1, 6)]
+    _, dets = run(walk + pause + on)
+    assert dets == []
+
+
+def test_t5_rewound_clock_is_not_out_of_order():
+    """T5 (가): 같은 날 가상 시각을 크게(10분 이상) 되돌린 점은 버리지 않고, 머무름을 그 점부터 다시 잰다."""
+    track = Track(last_at=T0)
+    assert judge.ignore_reason(track, pt(north(A, 0), -60), CFG) == "out_of_order"  # 조금 이른 점은 순서 뒤바뀜
+    assert judge.ignore_reason(track, pt(north(A, 0), -600), CFG) is None  # 10분 이상 이르면 되돌림
+    # 15:00 쯤 A 근처에 있다가(후보) 시각을 1시간 되돌려 다시 A 에 머묾 -> 되돌린 시각부터 세서 도착
+    before = [pt(north(A, 10), s) for s in (3600, 3630)]
+    after = [pt(north(A, 10), s) for s in (0, 30, 60, 90)]
+    track, dets = run(before + after)
+    assert [(d.type, d.at) for d in dets] == [("arrived", T0)]
+    assert track.last_at == T0 + timedelta(seconds=90)
+
+
+def test_t6_same_spot_next_item_switches_by_time():
+    """T6 재현: 같은 자리(5.5m)의 두 항목 가옥거리 -> 피어라계단. 거리로는 구별할 수 없어 앞 항목의 예정 종료에 넘어간다."""
+    a = Spot(1, 1, "가옥거리", "p-a", 35.9872, 129.5659, "planned", planned_start="14:00", planned_end="14:30")
+    b = Spot(2, 2, "피어라계단", "p-b", 35.9872 + 5.5 / 111_320, 129.5659, "planned", planned_start="14:30",
+             planned_end="14:50")
+    c = Spot(3, 3, "과메기문화관", "p-c", 35.9934, 129.5570, "planned")
+    spots = [a, b, c]
+    # 피어라계단 쪽(더 가까움)에 서 있어도 일정 순서가 앞선 가옥거리에 먼저 도착
+    on_b = (b.lat, b.lng)
+    track, dets = run([pt(on_b, s) for s in range(0, 91, 30)], Track(), spots)
+    assert [(d.type, d.item_ids) for d in dets] == [("arrived", [1])]
+    spots = judge.apply_progress(spots, dets)
+    # 14:29 까지는 가옥거리 (거리로 하는 암묵 전환 없음)
+    track, dets = run([pt(on_b, s) for s in range(120, 29 * 60 + 1, 60)], track, spots)
+    assert dets == [] and track.item_id == 1
+    # 14:30 이 지나면 가옥거리 출발 -> 피어라계단 도착 (시각 = 가옥거리 예정 종료)
+    track, dets = run([pt(on_b, 30 * 60 + 15)], track, spots)
+    assert [(d.type, d.item_ids, d.at) for d in dets] == [("departed", [1], T0 + timedelta(minutes=30)),
+                                                           ("arrived", [2], T0 + timedelta(minutes=30))]
+    assert track.state == "visiting" and track.item_id == 2
+
+
+def test_t6_identical_coordinates():
+    """구룡포항 -> 구룡포항(점심): 좌표가 같아도 두 번째 도착이 난다. 늦게 왔으면(예정 종료 뒤 도착) 도착 시각에 바로 넘어간다."""
+    port = Spot(1, 1, "구룡포항", "p", 35.9893, 129.5556, "planned", planned_end="14:20")
+    lunch = Spot(2, 2, "구룡포항(점심)", "p", 35.9893, 129.5556, "planned", planned_end="15:10")
+    track, dets = run([pt((port.lat, port.lng), 60 * k) for k in range(0, 60)], Track(), [port, lunch])
+    assert [(d.type, d.item_ids, d.at.strftime("%H:%M")) for d in dets] == [
+        ("arrived", [1], "14:00"), ("departed", [1], "14:20"), ("arrived", [2], "14:20")]
+    late = Track(state="visiting", item_id=1, since=T0 + timedelta(minutes=40))
+    track, dets = run([pt((port.lat, port.lng), 60 * 41)], late, [judge.replace(port, status="visiting"), lunch])
+    assert [(d.type, d.at.strftime("%H:%M")) for d in dets] == [("departed", "14:40"), ("arrived", "14:40")]
+
+
+def test_t7_drop_raise_lifted_in_same_tick():
+    """T7: 같은 틱에 상승(경고 5)과 그 뒤 해제(경고 6, 같은 항목 safe)가 함께 오면 상승은 버린다. 앞선 해제는 아니다."""
+    day = date(2026, 10, 10)
+    raised = judge.judge_alert({"id": 5, "needs_action": True, "changes": [change("raised", 3, "safe", "danger")]},
+                               day, {3}, T0)
+    eased = judge.judge_alert({"id": 6, "changes": [change("cleared", 3, "danger", "safe")]}, day, {3}, T0)
+    assert [d.type for d in judge.drop_lifted_raises(raised + eased)] == ["safety_eased"]
+    old = judge.judge_alert({"id": 4, "changes": [change("cleared", 3, "danger", "safe")]}, day, {3}, T0)
+    assert [d.type for d in judge.drop_lifted_raises(old + raised)] == ["safety_eased", "safety_raised"]
+    cleared = judge.Detection("safety_eased", T0, payload={"reason": "situation_cleared", "changes": []})
+    assert [d.type for d in judge.drop_lifted_raises(raised + [cleared])] == ["safety_eased"]

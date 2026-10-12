@@ -39,6 +39,8 @@ class TripDay(Base):
     cand_item_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     cand_since: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     outside_since: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # 후보 반경 안에서 멈춰 있던 시간 합(초). 옆을 걸어 지나가기만 하면 0 이라 도착이 아니다 (judge.step, audit-2026-10-12 T1)
+    cand_still_sec: Mapped[float | None] = mapped_column(Float, nullable=True)
 
     # 마지막 재계산 (planner projection)
     delay_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -94,6 +96,7 @@ _UPGRADES = [
     "ALTER TABLE trip_day ADD COLUMN IF NOT EXISTS situation JSONB",
     "ALTER TABLE trip_day ADD COLUMN IF NOT EXISTS expected JSONB",
     "ALTER TABLE trip_day ADD COLUMN IF NOT EXISTS delay_state JSONB",
+    "ALTER TABLE trip_day ADD COLUMN IF NOT EXISTS cand_still_sec DOUBLE PRECISION",
 ]
 for _sql in _UPGRADES:
     event.listen(Base.metadata, "after_create", DDL(_sql).execute_if(dialect="postgresql"))
