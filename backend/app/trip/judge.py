@@ -1,7 +1,7 @@
 """이벤트 판정 (순수 함수). 입력: 오늘 일정·마지막 상태·위치·now / planner·safety 응답 → 출력: 새 상태·감지(Detection).
 DB·HTTP 를 쓰지 않는다. 같은 입력이면 같은 결과라 pytest 와 재생 파일로 그대로 검증한다 (docs/trip/README.md §3, §8).
 
-- 도착·출발: step()       반경(60m + accuracy, 최대 150m) 안 90초 머묾 / 머무는 곳 반경 밖 120초
+- 도착·출발: step()       반경(60m + accuracy, 최대 150m) 안 90초 머묾 (그중 60초는 멈춤) / 머무는 곳 반경 밖 120초
 - 지연:      judge_delay() planner projection 의 new_violations 중 일정에 영향이 있는 것, 또는 다음 일정이 15분 이상 밀림
             resolve_violations() 알린 위반이 10분 이어서 사라지면 해소 (다시 생기면 또 알린다)
 - 위험 구역: judge_hazard() safety /avoid 구역 안이거나 50m 안
@@ -36,6 +36,7 @@ class Spot:
     status: str  # planned | visiting | done | skipped
     planned_start: str | None = None
     leg_mode: str | None = None
+    planned_end: str | None = None  # 기준 일정의 종료 (같은 자리 다음 항목으로 시간에 넘어갈 때)
 
 
 @dataclass(frozen=True)
@@ -57,6 +58,9 @@ class Track:
     cand_since: datetime | None = None
     outside_since: datetime | None = None  # 머무는 곳 반경 밖으로 처음 나간 시각
     last_at: datetime | None = None  # 마지막으로 받은 점의 시각 (순서 뒤바뀜 판정)
+    cand_still_sec: float = 0  # 후보 반경 안에서 멈춰 있던(점 사이 이동이 느린) 시간 합 (지나가기만 하면 0)
+    last_lat: float | None = None  # 마지막으로 받은 점의 위치 (멈춤 판정)
+    last_lng: float | None = None
 
 
 @dataclass(frozen=True)
@@ -66,6 +70,10 @@ class TrackConfig:
     arrive_dwell_sec: float = 90
     depart_dwell_sec: float = 120
     max_accuracy_m: float = 100
+    arrive_still_sec: float = 60  # 도착: 반경 안 arrive_dwell_sec 중 이만큼은 멈춰 있어야 한다 (옆을 걸어 지나가면 도착이 아님)
+    still_speed_mps: float = 0.5  # 이웃한 두 점 사이 속도가 이 이하면 멈춘 것 (걷기 1.0~1.4 m/s)
+    rewind_sec: float = 600  # 마지막 점보다 이만큼 이상 이른 점은 순서 뒤바뀜이 아니라 시각을 되돌린 것 (가상 시각)
+    same_spot_m: float = 20  # 이보다 가까운 항목들은 같은 자리 (도착은 일정 순서대로, 다음 항목으로는 시간에 넘어간다)
 
 
 @dataclass
@@ -110,7 +118,7 @@ def spots_from_plan(plan: dict, day: int) -> list[Spot]:
         place = it.get("place") or {}
         out.append(Spot(item_id=it["id"], order=it["order"], title=place.get("title") or it["place_id"],
                         place_id=it["place_id"], lat=place.get("lat"), lng=place.get("lng"), status=it["status"],
-                        planned_start=it.get("start_at"), leg_mode=it.get("leg_mode")))
+                        planned_start=it.get("start_at"), leg_mode=it.get("leg_mode"), planned_end=it.get("end_at")))
     return out
 
 
@@ -146,81 +154,150 @@ def radius_m(cfg: TrackConfig, accuracy: float) -> float:
 
 
 def ignore_reason(track: Track, point: Point, cfg: TrackConfig) -> str | None:
-    """버릴 점이면 이유 (accuracy: 부정확 / out_of_order: 마지막 점보다 이름), 아니면 None."""
+    """버릴 점이면 이유 (accuracy: 부정확 / out_of_order: 마지막 점보다 이름), 아니면 None.
+    마지막 점보다 rewind_sec(10분) 이상 이르면 순서 뒤바뀜이 아니라 가상 시각을 되돌린 것으로 보고 받는다 (step 이 측정을 새로 시작)."""
     if point.accuracy > cfg.max_accuracy_m:
         return "accuracy"
-    if track.last_at is not None and point.recorded_at < track.last_at:
+    if (track.last_at is not None and point.recorded_at < track.last_at
+            and (track.last_at - point.recorded_at).total_seconds() < cfg.rewind_sec):
         return "out_of_order"
     return None
+
+
+def _still_sec(track: Track, point: Point, cfg: TrackConfig) -> float:
+    """마지막 점에서 이 점까지 멈춰 있었으면(속도 still_speed_mps 이하) 그 시간(초), 움직였거나 모르면 0."""
+    if track.last_at is None or track.last_lat is None or track.last_lng is None:
+        return 0
+    dt = (point.recorded_at - track.last_at).total_seconds()
+    if dt <= 0:
+        return 0
+    moved = distance_m(track.last_lat, track.last_lng, point.lat, point.lng)
+    return dt if moved <= cfg.still_speed_mps * dt else 0
+
+
+def _switch_at(spot: Spot, since: datetime | None, t: datetime) -> datetime | None:
+    """같은 자리 다음 항목으로 넘어갈 시각: 지금 항목의 예정 종료 (늦게 왔으면 도착 시각). 예정 종료를 모르면 None."""
+    if not spot.planned_end:
+        return None
+    end = datetime.combine(t.date(), time_of(spot.planned_end), tzinfo=t.tzinfo)
+    return max(end, since) if since is not None else end
+
+
+def _next_same_spot(spots: list[Spot], spot: Spot, cfg: TrackConfig) -> Spot | None:
+    """지금 항목 다음의 첫 남은(planned) 항목이 같은 자리(same_spot_m 안)면 그 항목."""
+    if spot.lat is None:
+        return None
+    nxt = next((s for s in sorted(spots, key=lambda x: x.order) if s.order > spot.order and s.status == "planned"),
+               None)
+    if nxt is None or nxt.lat is None or distance_m(spot.lat, spot.lng, nxt.lat, nxt.lng) >= cfg.same_spot_m:
+        return None
+    return nxt
 
 
 def step(track: Track, spots: list[Spot], point: Point, cfg: TrackConfig) -> tuple[Track, list[Detection]]:
     """점 하나를 받아 새 상태와 도착·출발 감지를 돌려준다 (ignore_reason 을 통과한 점만 넣는다).
 
+    - 머묾: 반경 안에 arrive_dwell_sec 이상, 그중 arrive_still_sec 이상은 멈춰 있음 (이웃한 두 점 사이 속도가 still_speed_mps 이하).
+      장소 옆을 걸어서 지나가기만 하면 반경 안 시간이 차도 멈춘 시간이 없어 도착이 아니다 (audit-2026-10-12 T1).
     - 머무는 중(A): 반경 밖이 depart_dwell_sec 이상 이어지면 출발 (시각 = 처음 나간 시각). 한 점만 밖이면 다시 들어올 때 초기화.
-      가까운 장소로 옮겨 갈 때(반경이 겹쳐 A 반경 밖 시간이 짧다): 남은 항목 B 의 반경 안이고 A 보다 B 에 더 가까운 점이
-      arrive_dwell_sec 이어지면 A 출발 → B 도착 (암묵 전환). 출발 시각 = A 반경을 이미 벗어났으면 처음 나간 시각, 아니면 B 후보 시작
+      가까운 장소로 옮겨 갈 때(반경이 겹쳐 A 반경 밖 시간이 짧다): 남은 항목 B 의 반경 안이고 A 보다 B 에 더 가까운 점으로
+      머묾(위)이 차면 A 출발 → B 도착 (암묵 전환). 출발 시각 = A 반경을 이미 벗어났으면 처음 나간 시각, 아니면 B 후보 시작
       (도착보다 늦지 않게), 도착 시각 = B 후보 시작. 그 전에 정상 출발(반경 밖 depart_dwell_sec)이 나면 B 후보 시작을 이어받는다.
-    - 그 밖: 오늘 남은(planned) 항목 중 가장 가까운 것의 반경 안에 arrive_dwell_sec 이상 머물면 도착 (시각 = 처음 들어온 시각).
-      예정 순서가 아니어도 도착으로 본다 (out_of_order).
+    - 같은 자리(same_spot_m 안) 항목: 거리로는 구별할 수 없어 A 다음 남은 항목이 같은 자리면 A 의 예정 종료(늦게 왔으면 도착 시각)가
+      지나고 아직 A 반경 안일 때 A 출발 → B 도착 (시각 = 그 예정 종료). 거리로 하는 암묵 전환 후보에서는 뺀다.
+    - 그 밖: 오늘 남은(planned) 항목 중 가장 가까운 것(같은 자리 항목들 중에서는 일정 순서가 앞선 것)에서 머묾이 차면 도착
+      (시각 = 처음 들어온 시각). 예정 순서가 아니어도 도착으로 본다 (out_of_order).
+    - 시각을 되돌린 점(ignore_reason 이 받은, 마지막 점보다 이른 점): 재던 머무름·나감을 버리고 이 점부터 다시 잰다.
     """
     t, r = point.recorded_at, radius_m(cfg, point.accuracy)
     by_id = {s.item_id: s for s in spots}
     dets: list[Detection] = []
     left: int | None = None
+    if track.last_at is not None and t < track.last_at:
+        track = replace(track, cand_item_id=None, cand_since=None, cand_still_sec=0, outside_since=None,
+                        last_lat=None, last_lng=None)
+    still = _still_sec(track, point, cfg)
+
+    def done(tr: Track) -> tuple[Track, list[Detection]]:
+        return replace(tr, last_at=t, last_lat=point.lat, last_lng=point.lng), dets
 
     if track.state == "visiting":
         spot = by_id.get(track.item_id)
         if spot is None or spot.status in ("done", "skipped"):
-            track = Track(last_at=track.last_at)  # 일정에서 빠졌거나 다른 곳에서 완료 처리됨 -> 조용히 끝
+            track = Track(last_at=track.last_at, last_lat=track.last_lat, last_lng=track.last_lng)  # 일정에서 빠졌거나 다른 곳에서 완료 -> 조용히 끝
         else:
             here = distance_m(point.lat, point.lng, spot.lat, spot.lng) if spot.lat is not None else None
             out = None if here is not None and here <= r else (track.outside_since or t)
-            # 머무는 중에도 다른 남은 항목 B 를 본다: B 반경 안이고 A 보다 B 에 더 가까울 때만 후보 (깨지면 초기화)
-            cand = _nearest(spots, point, r, skip=spot.item_id, closer_than=here)
-            c_since = None
+            same = _next_same_spot(spots, spot, cfg)
+            switch = _switch_at(spot, track.since, t) if same is not None and out is None else None
+            if switch is not None and t >= switch:
+                dets += [_departed(spot, switch, track.since), _arrived(same, switch, spots)]
+                return done(Track(state="visiting", item_id=same.item_id, since=switch))
+            # 머무는 중에도 다른 남은 항목 B 를 본다: B 반경 안이고 A 보다 B 에 더 가까울 때만 후보 (깨지면 초기화). 같은 자리 항목은 빼고
+            cand = _nearest(spots, point, r, cfg, skip=spot.item_id, closer_than=here, away_from=spot)
+            c_since, c_still = None, 0.0
             if cand is not None:
-                c_since = track.cand_since if track.cand_item_id == cand.item_id and track.cand_since else t
-            if cand is not None and (t - c_since).total_seconds() >= cfg.arrive_dwell_sec:
+                kept = track.cand_item_id == cand.item_id and track.cand_since is not None
+                c_since = track.cand_since if kept else t
+                c_still = track.cand_still_sec + still if kept else 0
+            if cand is not None and _dwelt(t, c_since, c_still, cfg):
                 dep = min(out, c_since) if out is not None else c_since
                 dets += [_departed(spot, dep, track.since), _arrived(cand, c_since, spots)]
-                return Track(state="visiting", item_id=cand.item_id, since=c_since, last_at=t), dets
+                return done(Track(state="visiting", item_id=cand.item_id, since=c_since))
             if out is not None and (t - out).total_seconds() >= cfg.depart_dwell_sec:
                 dets.append(_departed(spot, out, track.since))
                 # 머무는 중에 이미 B 에 들어와 있었으면 그 시각부터 이어서 센다 (도착 시각 = 실제 진입 시각)
                 track = Track(state="moving", item_id=spot.item_id, since=out,
-                              cand_item_id=cand.item_id if cand else None, cand_since=c_since)
+                              cand_item_id=cand.item_id if cand else None, cand_since=c_since, cand_still_sec=c_still)
                 left = spot.item_id
             else:
                 track = replace(track, outside_since=out, cand_item_id=cand.item_id if cand else None,
-                                cand_since=c_since)
+                                cand_since=c_since, cand_still_sec=c_still)
 
     if track.state != "visiting":
-        s = _nearest(spots, point, r, skip=left)
+        s = _nearest(spots, point, r, cfg, skip=left)
         if s is None:
-            track = replace(track, cand_item_id=None, cand_since=None)
+            track = replace(track, cand_item_id=None, cand_since=None, cand_still_sec=0)
         else:
-            since = track.cand_since if track.cand_item_id == s.item_id and track.cand_since else t
-            if (t - since).total_seconds() >= cfg.arrive_dwell_sec:
+            kept = track.cand_item_id == s.item_id and track.cand_since is not None
+            since = track.cand_since if kept else t
+            # 방금 떠난 점이면 멈춘 시간은 위(머무는 중)에서 이미 더했다
+            s_still = (track.cand_still_sec + (still if left is None else 0)) if kept else 0
+            if _dwelt(t, since, s_still, cfg):
                 dets.append(_arrived(s, since, spots))
                 track = Track(state="visiting", item_id=s.item_id, since=since)
             else:
-                track = replace(track, cand_item_id=s.item_id, cand_since=since)
+                track = replace(track, cand_item_id=s.item_id, cand_since=since, cand_still_sec=s_still)
 
-    return replace(track, last_at=t), dets
+    return done(track)
 
 
-def _nearest(spots: list[Spot], point: Point, r: float, skip: int | None = None,
-             closer_than: float | None = None) -> Spot | None:
-    """반경 r 안의 남은(planned) 항목 중 가장 가까운 것. closer_than: 그 거리보다 가까울 때만 (머무는 곳보다 더 가까움)."""
-    near = None
+def _dwelt(t: datetime, since: datetime, still: float, cfg: TrackConfig) -> bool:
+    """머묾이 찼는지: 반경 안 arrive_dwell_sec 이상, 그중 멈춘 시간 arrive_still_sec 이상."""
+    return (t - since).total_seconds() >= cfg.arrive_dwell_sec and still >= cfg.arrive_still_sec
+
+
+def _nearest(spots: list[Spot], point: Point, r: float, cfg: TrackConfig, skip: int | None = None,
+             closer_than: float | None = None, away_from: Spot | None = None) -> Spot | None:
+    """반경 r 안의 남은(planned) 항목 중 가장 가까운 것. closer_than: 그 거리보다 가까울 때만 (머무는 곳보다 더 가까움).
+    away_from: 그 항목과 같은 자리(same_spot_m 안)인 항목은 뺀다. 가장 가까운 것과 같은 자리에 일정 순서가 앞선 항목이
+    (반경 안에) 있으면 그것 (같은 자리 항목은 거리로 구별할 수 없어 일정 순서대로 도착한다)."""
+    def same_spot(a: Spot, b: Spot) -> bool:
+        return distance_m(a.lat, a.lng, b.lat, b.lng) < cfg.same_spot_m
+
+    near = []
     for s in spots:
         if s.status != "planned" or s.lat is None or s.item_id == skip:
             continue
+        if away_from is not None and away_from.lat is not None and same_spot(s, away_from):
+            continue
         d = distance_m(point.lat, point.lng, s.lat, s.lng)
-        if d <= r and (closer_than is None or d < closer_than) and (near is None or d < near[0]):
-            near = (d, s)
-    return near[1] if near else None
+        if d <= r and (closer_than is None or d < closer_than):
+            near.append((d, s))
+    if not near:
+        return None
+    best = min(near, key=lambda x: x[0])[1]
+    return min((s for _, s in near if same_spot(s, best)), key=lambda s: s.order)
 
 
 def _departed(spot: Spot, at: datetime, since: datetime | None) -> Detection:
@@ -351,7 +428,8 @@ def behind_suggestion(plan: dict | None, day: int, track: Track | None, nxt: dic
     - 머무는 중: 지금 장소 체류를 계획 시작부터 (지금 + 여유 15분)과 재계산의 그 장소 종료 중 늦은 때까지로 늘린다 (5분 올림)
       -> 뒤 일정이 자동으로 밀린다. 계획 시작 기준이라 도착이 늦었던 만큼도 함께 흡수한다 (audit-2026-10-12 B5).
       규칙 B(늦게 온 곳은 예정 종료에 떠난다, planner §8.2)라 승인 뒤 재계산 종료 = max(계획 시작 + 새 체류, 지금) 이다.
-      일찍 왔으면 재계산은 실제 시작 + 체류에 끝나므로 계획 시작·재계산 시작 중 이른 쪽부터 센다.
+      일찍 왔어도 계획 시작부터 센다: 기준 일정은 계획 시작 + 새 체류에 끝나므로, 실제 도착부터 세면 일찍 온 만큼
+      기준 일정이 더 밀린다 (logic-bugs-2026-10-12 T4). 재계산(실제 시작 + 체류)은 이미 지금을 지났으니 지금에 끝난다.
     - 이동 중·첫 장소 전 (늘릴 체류가 없음): 다음 장소 시작 시각을 예상 도착(5분 올림)으로 정한다 -> 그 뒤 일정이 밀린다.
     projected: 재계산 일정 PlanDetail (projection.plan)."""
     items = _day_items(plan, day)
@@ -363,9 +441,6 @@ def behind_suggestion(plan: dict | None, day: int, track: Track | None, nxt: dic
         here = _day_items(projected, day).get(cur["id"])
         if here and here.get("end_at"):
             until = max(until, minutes_of(here["end_at"]))
-        if here and here.get("start_at"):
-            # 일찍 왔으면 재계산은 실제 시작 + 체류에 끝난다 (늦게 왔으면 예정 종료, 규칙 B) -> 둘 중 이른 시작 기준
-            start = min(start, minutes_of(here["start_at"]))
         stay = max(_ceil5(until - start), cur["stay_minutes"] + 5)
         return {"kind": "extend_stay", "item_id": cur["id"], "title": (cur.get("place") or {}).get("title"),
                 "stay_minutes": stay, "from_stay_minutes": cur["stay_minutes"]}
@@ -495,6 +570,33 @@ def judge_alert(alert: dict, trip_date: date, remaining: set[int], at: datetime)
                              payload={"alert_id": alert["id"], "changes": eased},
                              cause_key=f"safety_eased:{alert['id']}", severity="info"))
     return out
+
+
+def is_lifted(raised_id: int, item_ids: list[int], eased: list[tuple[int, dict]]) -> bool:
+    """안전 상승(raised_id: 그 이벤트·경고의 순서 번호)이 그 뒤의 해제로 이미 풀렸는지. eased: (순서 번호, safety_eased payload).
+    상황 해제(situation_cleared)이거나, 그 항목들이 모두 safe 로 내려간 경고 완화면 풀린 것."""
+    for n, p in eased:
+        if n < raised_id:
+            continue
+        if p.get("reason") == "situation_cleared" or p.get("situation_cleared"):
+            return True
+        safe = {c["item"]["item_id"] for c in p.get("changes") or [] if c.get("to_risk") == "safe"}
+        if item_ids and set(item_ids) <= safe:
+            return True
+    return False
+
+
+def drop_lifted_raises(dets: list[Detection]) -> list[Detection]:
+    """같은 판정(틱)에서 나온 safety_raised 중 더 새 경고의 완화나 상황 해제로 이미 풀린 것은 뺀다 (logic-bugs-2026-10-12 T7).
+    경고는 경고 id 순서로 본다 (상황 해제는 경고보다 나중에 본 것으로 친다)."""
+    def order(p: dict) -> float:
+        cleared = p.get("reason") == "situation_cleared" or p.get("situation_cleared")
+        return float("inf") if cleared else p.get("alert_id") or 0
+
+    eased = [(order(d.payload), d.payload) for d in dets if d.type == "safety_eased"]
+    # 같은 경고 안의 완화는 그 상승보다 새것이 아니다 -> 순서 번호를 경고 id + 1 로
+    return [d for d in dets if not (d.type == "safety_raised"
+                                    and is_lifted((d.payload.get("alert_id") or 0) + 1, d.item_ids, eased))]
 
 
 # ---------- 상황 해제 (safety /situation) ----------

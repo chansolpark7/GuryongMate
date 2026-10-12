@@ -16,6 +16,9 @@ class TripSettings(BaseSettings):
     arrive_radius_m: float = 60  # + accuracy, 최대 max_radius_m
     max_radius_m: float = 150
     arrive_dwell_sec: float = 90
+    arrive_still_sec: float = 60  # 반경 안 arrive_dwell_sec 중 멈춰 있어야 하는 시간 (옆을 걸어 지나가기만 하면 도착이 아님)
+    still_speed_mps: float = 0.5  # 이웃한 두 점 사이 속도가 이 이하면 멈춘 것
+    same_spot_m: float = 20  # 이보다 가까운 항목들은 같은 자리 (일정 순서대로 도착, 다음 항목으로는 예정 종료에 넘어감)
     depart_dwell_sec: float = 120
     max_accuracy_m: float = 100  # 이보다 부정확한 점은 버린다
     default_accuracy_m: float = 30  # accuracy 를 보내지 않은 점
