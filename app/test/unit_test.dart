@@ -155,7 +155,7 @@ void main() {
       ]);
       final after = planJson([
         itemJson(1, 1, '구룡포 시장', '09:00', '10:30'),
-        itemJson(-1, 2, '과메기문화관', '15:30', '16:30'),
+        itemJson(-1, 2, '과메기문화관', '16:00', '17:00'),
       ]);
       final p = ProposalDetail.fromJson({
         'id': 5,
@@ -183,6 +183,7 @@ void main() {
       expect(rows.single.badge, '교체');
       expect(rows.single.fromText, '호미곶 해맞이광장');
       expect(rows.single.toText, '과메기문화관');
+      expect(rows.single.title, '16:00 과메기문화관', reason: '제목은 바뀐 뒤 시각·장소');
     });
   });
 }
