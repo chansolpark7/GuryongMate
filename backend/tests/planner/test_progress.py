@@ -319,3 +319,56 @@ def test_plan_violations_show_live_only_violation(client, at):
     ok(progress(client, pid, house, "visiting", "12:40"))
     ok(progress(client, pid, house, "done", "13:20"))
     assert keys(get_plan(client, pid)["violations"]) == [("fixed_time_missed", 1, food)]
+
+
+# ---------- 로직 버그 점검 2026-10-12 (docs/audit/logic-bugs-2026-10-12.md) ----------
+
+def test_projection_skipped_ahead_item_is_not_next(client):
+    """P1·T2: 가옥거리를 건너뛰고(planned 그대로) 물회집·문화관을 다녀옴. 건너뛴 가옥거리는 '다음'이 아니다."""
+    pid, ids = trip(client)
+    ok(progress(client, pid, ids["p-food"], "visiting", "12:40"))
+    ok(progress(client, pid, ids["p-food"], "done", "13:40"))
+    r = ok(project(client, pid, day=1, now="14:00"))  # 머무는 곳 없음
+    assert r["next"]["item_id"] == ids["p-museum"] and r["new_violations"] == []
+    ok(progress(client, pid, ids["p-museum"], "visiting", "14:00"))
+    ok(progress(client, pid, ids["p-museum"], "done", "17:30"))
+    r = ok(project(client, pid, day=1, now="17:30", position={"state": "moving", "lat": 35.99, "lng": 129.557}))
+    assert r["next"] is None and r["new_violations"] == []
+
+
+def test_accept_refuses_moving_or_removing_item_visited_since_proposal(client):
+    """P6: 제안 이후 도착(visiting)한 항목을 지우거나 옮기는 제안은 409 progress_changed. 체류 변경은 승인된다."""
+    pid, ids = trip(client)
+
+    def propose(op: dict) -> dict:
+        return ok(client.post(f"/planner/plans/{pid}/proposals", headers=H,
+                              json={"ops": [{"item_id": ids["p-house"]} | op]}), 201)
+
+    gone = propose({"op": "remove_item"})
+    moved = propose({"op": "update_item", "order": 3})
+    stay = propose({"op": "update_item", "stay_minutes": 40})
+    ok(progress(client, pid, ids["p-house"], "visiting", "12:35"))
+    for prop in (gone, moved):
+        assert ok(client.get(f"/planner/plans/{pid}/proposals/{prop['id']}", headers=H))["progress_changed"] == [
+            ids["p-house"]]
+        d = err(client.post(f"/planner/plans/{pid}/proposals/{prop['id']}/accept", headers=H), 409, "progress_changed")
+        assert d["items"] == [{"item_id": ids["p-house"], "title": "가옥거리", "done_at": None}]
+    assert ok(client.get(f"/planner/plans/{pid}/proposals/{stay['id']}", headers=H))["progress_changed"] == []
+    r = ok(client.post(f"/planner/plans/{pid}/proposals/{stay['id']}/accept", headers=H))
+    assert view(r["plan"], ids["p-house"])["stay_minutes"] == 40
+
+
+def test_preview_live_without_records(client, fixed_now):
+    """A1: live=true(동행 중)면 진행 기록이 없어도 오늘을 지금 기준으로 (projection 과 같음). 생략하면 기록이 있을 때만."""
+    pid, ids = trip(client)
+    body = {"ops": [{"op": "update_item", "item_id": ids["p-museum"], "stay_minutes": 30}]}
+    plain = ok(client.post(f"/planner/plans/{pid}/preview", json=body, headers=H))
+    assert view(plain["plan"], ids["p-house"])["start_at"] == "12:30"  # 계획 기준 (기록 없음)
+    live = ok(client.post(f"/planner/plans/{pid}/preview", json=body | {"live": True}, headers=H))
+    projected = ok(project(client, pid))["plan"]
+    assert view(live["plan"], ids["p-house"])["start_at"] == view(projected, ids["p-house"])["start_at"] == "14:07"
+    ends = [c["message"] for c in live["changes"] if c["kind"] == "day_end"]
+    assert ends == [f"1일차 종료: {projected['days'][0]['end_at']} → {live['plan']['days'][0]['end_at']}"]  # 같은 기준 비교
+    prop = ok(client.post(f"/planner/plans/{pid}/proposals", json=body | {"live": True}, headers=H), 201)
+    assert view(prop["before"], ids["p-house"])["start_at"] == "14:07"
+    assert view(prop["after"], ids["p-house"])["start_at"] == "14:07"
