@@ -39,6 +39,11 @@ class ApiError(RuntimeError):
         return {"detail": {"code": self.code, "message": self.message}}
 
 
+def _live(live: bool) -> dict:
+    """planner 의 live 옵션 (여행 중 지금 기준). 끈 경우엔 보내지 않아 요청이 예전과 같다."""
+    return {"live": True} if live else {}
+
+
 class ServiceApi:
     def __init__(self, http: httpx.AsyncClient, auth: dict[str, str]):
         """auth: 사용자의 인증 헤더 (받은 Authorization 그대로, 개발 모드면 X-User-Id) — app.core.auth.ForwardAuth"""
@@ -79,8 +84,9 @@ class ServiceApi:
     async def get_plan(self, plan_id: int) -> dict:
         return await self._req("GET", f"/planner/plans/{plan_id}")
 
-    async def preview(self, plan_id: int, ops: list[dict]) -> dict:
-        return await self._req("POST", f"/planner/plans/{plan_id}/preview", json={"ops": ops})
+    async def preview(self, plan_id: int, ops: list[dict], live: bool = False) -> dict:
+        """live: 여행 중(동행 모드)이면 진행 기록이 없어도 planner 의 지금 기준으로 계산한다 (projection 과 같은 기준)."""
+        return await self._req("POST", f"/planner/plans/{plan_id}/preview", json={"ops": ops, **_live(live)})
 
     async def projection(self, plan_id: int) -> dict:
         """여행 중 오늘을 실제 진행 + planner 의 지금 기준으로 다시 계산한 일정 (저장 안 함)."""
@@ -95,11 +101,11 @@ class ServiceApi:
                                json={"mode": mode, "stops": stops, "hazards": hazards, "steps": False})
 
     # ----- planner: 안전 점검 · safety -----
-    async def check_safety(self, plan_id: int, ops: list[dict]) -> dict:
-        """초안(ops)이 있으면 적용했다고 치고, 없으면 지금 일정의 안전 점검 (방문 + 이동 구간)."""
+    async def check_safety(self, plan_id: int, ops: list[dict], live: bool = False) -> dict:
+        """초안(ops)이 있으면 적용했다고 치고, 없으면 지금 일정의 안전 점검 (방문 + 이동 구간). live: preview 와 같다."""
         if ops:
-            return await self._req("POST", f"/planner/plans/{plan_id}/safety/preview", json={"ops": ops})
-        return await self._req("GET", f"/planner/plans/{plan_id}/safety")
+            return await self._req("POST", f"/planner/plans/{plan_id}/safety/preview", json={"ops": ops, **_live(live)})
+        return await self._req("GET", f"/planner/plans/{plan_id}/safety", params={"live": "true"} if live else None)
 
     async def safety_situation(self) -> dict:
         return await self._req("GET", "/safety/situation")
@@ -159,9 +165,9 @@ class ServiceApi:
         return await self._req("GET", f"/planner/plans/{plan_id}/proposals/{proposal_id}")
 
     async def create_proposal(self, plan_id: int, ops: list[dict], *, summary: str, request: str, origin: str,
-                              supersedes: int | None, expected_version: int | None) -> dict:
+                              supersedes: int | None, expected_version: int | None, live: bool = False) -> dict:
         body = {"ops": ops, "summary": summary[:2000], "request": request[:4000], "source": "llm", "origin": origin,
-                "supersedes": supersedes, "expected_version": expected_version}
+                "supersedes": supersedes, "expected_version": expected_version, **_live(live)}
         return await self._req("POST", f"/planner/plans/{plan_id}/proposals", json=body)
 
     async def accept_proposal(self, plan_id: int, proposal_id: int, mode: str = "auto") -> dict:

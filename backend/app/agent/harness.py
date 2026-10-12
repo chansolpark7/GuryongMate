@@ -475,7 +475,7 @@ async def run_turn(session_id: str, plan_id: int, user_text: str, llm: LLMProvid
         # 초안 -> 변경 제안
         proposal = None
         full_text = "\n\n".join(said)
-        if draft.changed and draft.ops and not (await api.preview(plan_id, draft.ops))["changes"]:
+        if draft.changed and draft.ops and not (await api.preview(plan_id, draft.ops, live=toolbox.live))["changes"]:
             draft.ops = []  # 고치다 보니 원래대로 돌아옴 -> 빈 제안을 만들지 않는다
         if draft.changed and draft.ops:
             for ev in steps.start("proposal", "잠시만요..."):
@@ -483,7 +483,7 @@ async def run_turn(session_id: str, plan_id: int, user_text: str, llm: LLMProvid
             try:
                 proposal = await api.create_proposal(
                     plan_id, draft.ops, summary=full_text, request=request, origin=session_id,
-                    supersedes=draft.base_proposal_id, expected_version=base_version)
+                    supersedes=draft.base_proposal_id, expected_version=base_version, live=toolbox.live)
             except ApiError as e:
                 yield steps.finish(False, "만들지 못함")
                 if e.code == "version_conflict":
@@ -504,6 +504,12 @@ async def run_turn(session_id: str, plan_id: int, user_text: str, llm: LLMProvid
                 await api.reject_proposal(plan_id, draft.base_proposal_id)
             except ApiError as e:
                 log.warning("session=%s 이어받은 제안 거절 실패: %s", sid, e)
+        elif repropose and (repropose.get("base_changed") or repropose.get("progress_changed")):
+            # 다시 제안했지만 새 변경이 없음 (원래 문제가 지금은 없는 등) -> 원래 제안은 승인할 수 없는 채 대기로 남지 않게 정리
+            try:
+                await api.reject_proposal(plan_id, repropose["id"])
+            except ApiError as e:
+                log.warning("session=%s 다시 제안 턴의 원래 제안 정리 실패: %s", sid, e)
 
         if not full_text:
             # 모델이 생각·도구 호출만 하고 답변 없이 끝난 경우에도 사용자에게는 항상 한마디 남긴다

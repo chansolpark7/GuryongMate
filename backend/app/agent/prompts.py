@@ -237,8 +237,10 @@ def _delay_text(minutes) -> str:
     return f"{round(minutes)}분 늦음" if minutes > 0 else f"{-round(minutes)}분 여유"
 
 
-def situation(trip: dict, plan: dict | None, now: datetime, simulated: bool) -> str:
-    """동행 모드의 '현재 상황' 블록 (docs/trip/README.md §4.4). plan: 현재 일정 (PlanDetail, 제목·진행 상태용)."""
+def situation(trip: dict, plan: dict | None, now: datetime, simulated: bool, pending: bool = False) -> str:
+    """동행 모드의 '현재 상황' 블록 (docs/trip/README.md §4.4). plan: 현재 일정 (PlanDetail, 제목·진행 상태용).
+    pending: plan 이 승인 대기 제안을 적용한 일정이다. '다음'의 예정 시각·늦음은 trip 이 승인된 계획으로 계산한 값이라
+    그렇게 밝히고, 현재 일정(제안 적용)의 시각이 다르면 함께 적는다 (두 시각이 서로 다른 말을 하지 않게)."""
     items = _item_index(plan)
     day = trip.get("day")
     lines = [f"- {day}일차 {now:%Y-%m-%d %H:%M}" + (" (시뮬레이션 시각)" if simulated else "")]
@@ -257,13 +259,23 @@ def situation(trip: dict, plan: dict | None, now: datetime, simulated: bool) -> 
     if nxt:
         title = nxt.get("title") or _title(items.get(nxt.get("item_id")), "다음 장소")
         eta = f", 예상 도착 {nxt['eta']}" if nxt.get("eta") else ""
-        lines.append(f"- 다음: {title} {nxt.get('planned_start') or ''} 예정{eta} ({_delay_text(trip.get('delay_minutes'))})")
+        line = f"- 다음: {title} {nxt.get('planned_start') or ''} 예정{eta} ({_delay_text(trip.get('delay_minutes'))})"
+        if pending:
+            shown = items.get(nxt.get("item_id"))
+            line += " — 승인된 계획 기준"
+            if shown is None or shown.get("status") == "skipped":
+                line += ". 승인 대기 제안을 적용한 현재 일정에서는 이 장소가 빠진다"
+            elif shown.get("start_at") and shown["start_at"] != nxt.get("planned_start"):
+                line += f". 승인 대기 제안을 적용한 현재 일정에서는 {shown['start_at']} 시작"
+        lines.append(line)
     else:
         lines.append("- 다음: 오늘 남은 일정 없음")
     today = [i for i in items.values() if i["day"] == day and i["status"] != "skipped"]
     if today:
         done = sum(1 for i in today if i["status"] == "done")
-        lines.append(f"- 오늘 남은 일정: {len(today) - done}곳 / 완료 {done}곳")
+        here = sum(1 for i in today if i["status"] == "visiting")
+        lines.append(f"- 오늘 남은 일정: {len(today) - done - here}곳" + (f" / 머무는 중 {here}곳" if here else "")
+                     + f" / 완료 {done}곳")
     lines.append("- 바꿀 수 없는 것: 완료한 항목, 지난 시각")
     return "## 현재 상황 (여행 중)\n" + "\n".join(lines)
 
@@ -305,7 +317,7 @@ def _sections(plan_view: dict, pending: dict | None, dropped: dict | None, repro
     clock = f"{now:%Y-%m-%d %H:%M} (KST, {'월화수목금토일'[now.weekday()]}요일" + (", 시뮬레이션 시각)" if simulated else ")")
     parts = [(True, system)]
     if trip:
-        parts += [(True, GUIDE), (False, situation(trip, plan, now, simulated))]
+        parts += [(True, GUIDE), (False, situation(trip, plan, now, simulated, pending=bool(pending)))]
     if docent:  # 동행 모드 대화, 또는 장소 맥락 질문 (여행 전에도)
         parts.append((True, GUIDE_DOCENT.replace(
             "<<WEB>>", GUIDE_WEB.format(n=web_searches) if web_searches else GUIDE_NO_WEB)))
@@ -325,7 +337,7 @@ def _sections(plan_view: dict, pending: dict | None, dropped: dict | None, repro
                         "변경 요청이 아니면 이 제안을 고치지 말고 질문에만 답한다 (제안은 그대로 승인 대기로 남는다)."
                       + (" 아직 대기 중이라는 안내는 앱이 답변 끝에 붙이니 따로 말하지 않는다." if docent else "")))
     if dropped:
-        why = ("그 제안이 바꾸는 곳을 그사이 다녀왔다(완료)" if dropped.get("progress_changed")
+        why = ("그 제안이 바꾸는 곳을 그사이 다녀오거나 도착했다(완료·머무는 중)" if dropped.get("progress_changed")
                else "그 뒤로 일정이 바뀌어 지금 일정과 기준이 다르다")
         parts.append((False, f"## 참고\n이전에 만든 제안 #{dropped['id']} 은 {why}. 그대로는 승인할 수 없다. "
                       "이번에 새 변경 제안을 만들면 그 제안을 대체한다. 필요하면 현재 일정을 기준으로 다시 제안한다.\n"
@@ -334,7 +346,8 @@ def _sections(plan_view: dict, pending: dict | None, dropped: dict | None, repro
         parts.append((False, f"## 다시 제안 요청\n사용자가 제안 #{repropose['id']} 을 현재 일정에 맞춰 다시 만들어 달라고 했다.\n"
                       f"원래 요청: {repropose.get('request') or '(기록 없음)'}\n당시 제안한 변경:\n"
                       + "\n".join(f"- {c['message']}" for c in repropose.get("changes", []))
-                      + ("\n그사이 다녀온(완료) 곳을 바꾸는 변경이 있어 그대로 승인할 수 없었다. 다녀온 곳은 바꾸지 않는다."
+                      + ("\n그사이 다녀오거나 도착한(완료·머무는 중) 곳을 바꾸는 변경이 있어 그대로 승인할 수 없었다. "
+                         "다녀온 곳은 바꾸지 않고, 머무는 곳은 체류 시간·메모만 바꾼다."
                          if repropose.get("progress_changed") else "")
                       + "\n같은 의도를 지금 일정에 맞게 변경 도구로 다시 만든다."
                       + ("\n원래 요청에 적힌 시각·문제는 그때 기준이다. 지금 문제는 현재 일정의 시각과 violations 로만 판단한다. "
