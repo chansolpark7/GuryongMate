@@ -23,7 +23,9 @@ class TripSettings(BaseSettings):
     hazard_cache_sec: float = 5  # 이 시간 동안은 safety 상황(fingerprint)을 다시 묻지 않는다 (틱마다 새로 본다)
 
     # 일정 밀림 (§3.2): 다음 일정의 예상 시작이 계획보다 이만큼(분) 늦으면 delay(behind_schedule). 이 간격마다 다시 묻는다. 0 이면 끔
-    behind_min: float = 30
+    behind_min: float = 15
+    # 위반 해소 (§4.1): 알린 위반이 재계산에서 이만큼(분, trip 의 지금 기준) 이어서 사라지면 해소로 보고, 다시 생기면 또 알린다
+    resolve_min: float = 10
 
     # Event Policy (§4)
     proactive_cooldown_min: float = 10

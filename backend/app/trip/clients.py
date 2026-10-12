@@ -1,7 +1,8 @@
 """다른 서비스 HTTP 클라이언트 (모듈 간 규칙: 내부 코드 import 금지, 게이트웨이 경유). 명세: docs/trip/README.md §6
 
     planner  GET /planner/plans/{id}, POST …/items/{item_id}/progress, POST …/projection,
-             GET …/safety/alerts?status=new, POST …/safety/alerts/{id}/seen
+             GET …/safety/alerts?status=new, POST …/safety/alerts/{id}/seen,
+             GET …/proposals?status=accepted (지연 알림 뒤 제안을 승인했는지 — 일정 밀림을 새로 셀 기준, §3.2)
     safety   GET /safety/situation (fingerprint), GET /safety/avoid
     agent    GET·POST /agent/sessions, POST /agent/sessions/{sid}/events (선제 턴),
              POST /agent/plans/{id}/guide/prepare (가이드 자동 준비: 여행 시작·도착·틱의 stale 노트)
@@ -57,6 +58,7 @@ class PlannerClient(Protocol):
     def projection(self, plan_id: int, body: dict, auth: dict) -> dict: ...
     def safety_alerts(self, plan_id: int, auth: dict) -> list[dict]: ...
     def alert_seen(self, plan_id: int, alert_id: int, auth: dict) -> None: ...
+    def accepted_proposals(self, plan_id: int, auth: dict) -> list[dict]: ...
 
 
 class SafetyClient(Protocol):
@@ -94,6 +96,9 @@ class HttpPlannerClient(_Http):
 
     def alert_seen(self, plan_id, alert_id, auth):
         self.call("POST", f"/planner/plans/{plan_id}/safety/alerts/{alert_id}/seen", auth)
+
+    def accepted_proposals(self, plan_id, auth):
+        return self.call("GET", f"/planner/plans/{plan_id}/proposals", auth, params={"status": "accepted"})
 
 
 class HttpSafetyClient(_Http):

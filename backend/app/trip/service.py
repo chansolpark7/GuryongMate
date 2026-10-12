@@ -6,7 +6,7 @@ import threading
 import time as _time
 from datetime import date, datetime, timedelta
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from app.core.auth import issue_token
@@ -131,21 +131,85 @@ def mark_seen(db: Session, user_id: str, plan_id: int, event_id: int, clock: Clo
 # ---------- 이벤트 기록 ----------
 
 def _known(db: Session, td: TripDay, not_queued: bool = False) -> set[str]:
-    q = select(TripEvent.cause_key).where(TripEvent.trip_day_id == td.id)
+    """이 여행일에 알린 원인 (중복 억제, §4.1). 원인 키는 여행일마다 따로다.
+    - 큐에서 빠진(suppressed) delay 는 알린 것이 아니다 (따라잡아 지연이 풀렸거나, 더 새 delay 가 대체했거나, 여행일이 끝남).
+    - 해소된 위반(trip_day.delay_state.released, _resolve)은 그 뒤 이벤트가 다시 담을 때만 센다 -> 다시 생기면 또 알린다.
+    not_queued: 아직 큐에 있는 것도 빼고 (큐의 delay 가 지금도 새로 알릴 것인지 볼 때, _refresh_queued_delay)."""
+    q = select(TripEvent.id, TripEvent.cause_key, TripEvent.type, TripEvent.status).where(TripEvent.trip_day_id == td.id)
     if not_queued:
         q = q.where(TripEvent.status != "queued")
-    return policy.known_causes(list(db.scalars(q)))
+    rows = [(i, k) for i, k, t, s in db.execute(q) if not (t == "delay" and s == "suppressed")]
+    return policy.active_causes(rows, (td.delay_state or {}).get("released"))
 
 
-def _last_delay(db: Session, td: TripDay, not_queued: bool = False) -> tuple[int, float | None] | None:
-    """이 여행일의 마지막 delay 이벤트 (id, 그때 delay_minutes). 일정 밀림을 다시 물을 기준 (judge.behind_ref).
-    전송에 실패(failed)했거나 큐에서 대체된(suppressed) 것도 센다 — 원인 키와 같이, 같은 상황을 다시 만들지 않는다.
-    not_queued: 아직 큐에 있는 것은 빼고 (보류된 delay 가 지금도 유효한지 볼 때, _revalidate)."""
-    q = select(TripEvent.id, TripEvent.payload).where(TripEvent.trip_day_id == td.id, TripEvent.type == "delay")
+def _last_delay(db: Session, td: TripDay,
+                not_queued: bool = False) -> tuple[int, float | None, int | None, int | None] | None:
+    """이 여행일에 마지막으로 알린 delay 이벤트 (id, 그때 delay_minutes, 그때 계획 version, 선제 턴 제안 id).
+    일정 밀림을 다시 물을 기준 (judge.behind_ref). 전송에 실패(failed)한 것은 센다 (같은 상황을 다시 만들지 않는다).
+    큐에서 빠진(suppressed) 것은 세지 않는다 — 보내기 전에 따라잡아 지연이 풀렸으면 알린 적이 없으므로 다음 밀림은 처음부터 센다.
+    not_queued: 아직 큐에 있는 것도 빼고 (보류된 delay 가 지금도 유효한지 볼 때, _revalidate)."""
+    q = select(TripEvent.id, TripEvent.payload, TripEvent.agent).where(
+        TripEvent.trip_day_id == td.id, TripEvent.type == "delay", TripEvent.status != "suppressed")
     if not_queued:
         q = q.where(TripEvent.status != "queued")
     row = db.execute(q.order_by(TripEvent.id.desc()).limit(1)).first()
-    return (row[0], (row[1] or {}).get("delay_minutes")) if row else None
+    if row is None:
+        return None
+    payload = row[1] or {}
+    return row[0], payload.get("delay_minutes"), payload.get("plan_version"), (row[2] or {}).get("proposal_id")
+
+
+def _notice(db: Session, td: TripDay, plan: dict, clients: Clients, auth: dict,
+            not_queued: bool = False) -> tuple[int, float | None, bool] | None:
+    """일정 밀림을 셀 기준 (judge.behind_ref 의 notice): 마지막으로 알린 delay (id, 그때 지연, 그 뒤 제안을 승인했는지)."""
+    last = _last_delay(db, td, not_queued)
+    if last is None:
+        return None
+    eid, delay, version, proposal_id = last
+    return eid, delay, _accepted_after(td, eid, version, proposal_id, plan, clients, auth)
+
+
+def _accepted_after(td: TripDay, eid: int, version: int | None, proposal_id: int | None, plan: dict, clients: Clients,
+                    auth: dict) -> bool:
+    """그 delay 알림 뒤 제안을 승인해 계획이 바뀌었는지 (§3.2: 그러면 승인한 일정 기준으로 밀림을 새로 센다).
+    - 계획 version 이 알릴 때와 같거나 선제 턴 제안이 없으면 아니다 (planner 를 부르지 않는다).
+    - 다르면 planner 의 승인된 제안 중 그 선제 턴 제안 id 이후의 것이 있는지 본다 (대화로 고쳐 대체한 제안을 승인해도 맞다).
+    결과는 trip_day.delay_state.accepted 에 둔다: 같은 알림·같은 version 이면 다시 묻지 않고, 승인이면 그 알림 동안 그대로다.
+    planner 에 접근할 수 없으면 아니라고 보고 기록하지 않는다 (다음 판정에서 다시)."""
+    cur = plan.get("version")
+    if proposal_id is None or version is None or cur is None or cur == version:
+        return False
+    st = dict(td.delay_state or {})
+    memo = st.get("accepted") or {}
+    if memo.get("event") == eid and (memo.get("ok") or memo.get("version") == cur):
+        return bool(memo.get("ok"))
+    try:
+        props = clients.planner.accepted_proposals(td.plan_id, auth)
+    except UpstreamError as e:
+        log.warning("trip: 승인된 제안을 받지 못함 (계획 %s): %s", td.plan_id, e)
+        return False
+    ok = any(p.get("status") == "accepted" and p["id"] >= proposal_id for p in props)
+    st["accepted"] = {"event": eid, "version": cur, "ok": ok}
+    td.delay_state = st
+    if ok:
+        log.info("trip: 지연 알림 %s 뒤 제안 승인 -> 일정 밀림을 승인한 일정 기준으로 새로 센다 (여행일 %s)", eid, td.id)
+    return ok
+
+
+def _resolve(db: Session, td: TripDay, proj: dict, at: datetime) -> None:
+    """알린 위반 중 재계산에서 TRIP_RESOLVE_MIN 이어서 사라진 것을 해소로 기록한다 (§4.1 다시 알리기, judge.resolve_violations).
+    재계산을 받았을 때만 부른다 (실패면 모르는 것이라 그대로)."""
+    old = td.delay_state or {}
+    last_id = db.scalar(select(func.max(TripEvent.id)).where(TripEvent.trip_day_id == td.id)) or 0
+    st = judge.resolve_violations(old, judge.current_violation_keys(proj), _known(db, td), at, settings.resolve_min,
+                                  last_id)
+    if st == old:
+        return
+    before = old.get("released") or {}
+    new = sorted(k for k, v in st["released"].items() if before.get(k) != v)
+    if new:
+        log.info("trip: 위반 해소 %s (여행일 %s) — 다시 생기면 또 알린다", new, td.id)
+    td.delay_state = st
 
 
 def _record(db: Session, td: TripDay, dets: list[judge.Detection], known: set[str]) -> list[TripEvent]:
@@ -423,17 +487,17 @@ def _project(clients: Clients, td: TripDay, track: judge.Track, now: datetime, a
 
 
 def _judge_delay(db: Session, td: TripDay, proj: dict, at: datetime, known: set[str], plan: dict,
-                 track: judge.Track) -> judge.Detection | None:
+                 track: judge.Track, clients: Clients, auth: dict) -> judge.Detection | None:
     """지연 판정 (새 delay 감지). 새것이 없으면 큐에서 기다리는 delay 를 지금 상황으로 고친다 (_refresh_queued_delay)."""
     d = judge.judge_delay(proj, at, known, behind_min=settings.behind_min, plan=plan, day=td.day, track=track,
-                          notice=_last_delay(db, td))
+                          notice=_notice(db, td, plan, clients, auth))
     if d is None:
-        _refresh_queued_delay(db, td, proj, at, plan, track)
+        _refresh_queued_delay(db, td, proj, at, plan, track, clients, auth)
     return d
 
 
 def _refresh_queued_delay(db: Session, td: TripDay, proj: dict, at: datetime, plan: dict,
-                          track: judge.Track) -> None:
+                          track: judge.Track, clients: Clients, auth: dict) -> None:
     """큐에서 기다리는(Agent 응답 중·쿨다운) delay 를 지금 상황으로 (audit-2026-10-12 B6).
     만든 때의 내용으로 늦게 보내면 떠난 곳 체류를 늘리자거나 이미 도착한 곳을 '다음'으로 말한다.
     - 지금 재판정(보낸 적 있는 원인·지연만 기준, 큐의 것은 뺌)에 새로 알릴 것이 남아 있으면 가장 새 delay 의 문구·payload·항목을 바꾼다
@@ -449,7 +513,7 @@ def _refresh_queued_delay(db: Session, td: TripDay, proj: dict, at: datetime, pl
         return
     sent = _known(db, td, not_queued=True)
     cur = judge.judge_delay(proj, at, sent, behind_min=settings.behind_min, plan=plan, day=td.day, track=track,
-                            notice=_last_delay(db, td, not_queued=True))
+                            notice=_notice(db, td, plan, clients, auth, not_queued=True))
     if cur is None or policy.cause_parts(cur.cause_key) <= sent:
         for e in rows:
             e.status = "suppressed"
@@ -574,7 +638,9 @@ def record_location(db: Session, user_id: str, plan_id: int, points: list[Locati
         proj = _project(clients, td, track, last.recorded_at, auth)
         if proj is not None:
             _apply_projection(td, proj)
-            d = _judge_delay(db, td, proj, last.recorded_at, known, plan, track)
+            _resolve(db, td, proj, last.recorded_at)
+            known = _known(db, td)
+            d = _judge_delay(db, td, proj, last.recorded_at, known, plan, track, clients, auth)
             if d:
                 dets.append(d)
         by_id = {s.item_id: s for s in spots}
@@ -622,11 +688,13 @@ def tick_trip(db: Session, td: TripDay, clients: Clients, clock: Clock, now: dat
     delay_valid: bool | None = None  # 큐의 delay 가 지금도 유효한지 (revalidate). None: 재계산 실패 -> 모름
     if proj is not None:
         _apply_projection(td, proj)
+        _resolve(db, td, proj, now)
+        known = _known(db, td)
         if revalidate:  # 큐에 있는 것을 빼고 본 기준으로: 지금도 위반이나 밀림이 있나
             delay_valid = judge.judge_delay(proj, now, frozenset(), behind_min=settings.behind_min, plan=plan,
                                             day=td.day, track=track,
-                                            notice=_last_delay(db, td, not_queued=True)) is not None
-        d = _judge_delay(db, td, proj, now, known, plan, track)
+                                            notice=_notice(db, td, plan, clients, auth, not_queued=True)) is not None
+        d = _judge_delay(db, td, proj, now, known, plan, track, clients, auth)
         if d:
             dets.append(d)
 

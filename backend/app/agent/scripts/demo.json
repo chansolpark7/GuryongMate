@@ -100,10 +100,22 @@
    ]
   },
   {
+   "id": "scene3_behind",
+   "when": {"event": "delay", "reason": "behind_schedule", "system": "kto-2610501[\\s\\S]*kto-2660046"},
+   "steps": [
+    {"thinking": "가옥거리에 오래 머물러 구룡포항에 15분쯤 늦는다. trip 이 계산한 추천 변경(가옥거리 체류 늘리기)으로 남은 일정을 미루면 18시 규칙을 넘으니, 구룡포항 점심을 30분으로 줄여 과메기문화관을 지키면서 18시 전에 끝낸다.",
+     "tools": [{"name": "view_plan"}]},
+    {"tools": [{"name": "update_item", "args": {"item_id": "$event:suggest.item_id", "stay_minutes": "$event:suggest.stay_minutes", "start_time": "$event:suggest.start_time"}}]},
+    {"tools": [{"name": "update_item", "args": {"item_id": "$item:kto-2610501", "stay_minutes": 30}}]},
+    {"tools": [{"name": "review_plan"}]},
+    {"text": "**{{event:next.title}}** 도착이 {{event:next.planned_start}} 예정에서 **{{event:next.eta}}**으로 {{event:delay_minutes}}분쯤 늦어질 것 같아요.\n\n**{{event:suggest.title}}**에 더 머무르시도록 남은 일정을 미루고, 대신 **구룡포항 점심을 30분**으로 줄이는 안을 준비했어요. 그러면 오늘 일정은 **{{end:1}}**에 끝나 18시 전에 마칠 수 있어요.\n\n다른 방법으로 과메기문화관을 빼서 여유 있게 마칠 수도 있어요."}
+   ]
+  },
+  {
    "id": "behind_schedule",
    "when": {"event": "delay", "reason": "behind_schedule"},
    "steps": [
-    {"thinking": "새 위반은 없지만 다음 일정에 30분 넘게 늦는다. 지난 일은 바꾸지 않고, trip 이 계산한 추천 변경(머무는 곳 체류 늘리기 또는 다음 장소 시작 미루기)으로 남은 일정을 미룬다.",
+    {"thinking": "새 위반은 없지만 다음 일정에 15분 넘게 늦는다. 지난 일은 바꾸지 않고, trip 이 계산한 추천 변경(머무는 곳 체류 늘리기 또는 다음 장소 시작 미루기)으로 남은 일정을 미룬다.",
      "tools": [{"name": "view_plan"}]},
     {"tools": [{"name": "update_item", "args": {"item_id": "$event:suggest.item_id", "stay_minutes": "$event:suggest.stay_minutes", "start_time": "$event:suggest.start_time"}}]},
     {"tools": [{"name": "review_plan"}]},
@@ -122,15 +134,25 @@
    ]
   },
   {
-   "id": "scene3_keep_museum",
-   "when": {"user": "과메기\\s*문화관.*(유지|꼭|가고 싶)", "pending": true},
+   "id": "scene3_keep_museum_removed",
+   "when": {"user": "과메기\\s*문화관.*(유지|꼭|가고 싶)", "pending": true, "system": "삭제: [^\\n]*과메기"},
    "steps": [
-    {"thinking": "과메기문화관을 꼭 포함하는 조건을 걸고, 빼는 대신 구룡포항 점심 시간을 줄여 18시 전에 끝낸다.",
+    {"thinking": "대기 제안이 과메기문화관을 뺀다. 과메기문화관을 꼭 포함하는 조건을 걸고, 빼는 대신 구룡포항 점심 시간을 줄여 18시 전에 끝낸다.",
      "tools": [{"name": "discard_changes"}]},
     {"tools": [{"name": "add_rule", "args": {"type": "must_include", "place_id": "kto-2660046", "hard": true, "note": "과메기문화관은 꼭 가기"}}]},
     {"tools": [{"name": "update_item", "args": {"item_id": "$item:kto-2610501", "stay_minutes": 30}}]},
     {"tools": [{"name": "review_plan"}]},
     {"text": "**과메기문화관**은 꼭 가는 조건으로 바꿨어요.\n\n대신 **구룡포항 점심을 30분**으로 줄이면 **{{end:1}}**에 끝나 18시 전에 마칠 수 있어요."}
+   ]
+  },
+  {
+   "id": "scene3_keep_museum",
+   "when": {"user": "과메기\\s*문화관.*(유지|꼭|가고 싶)", "pending": true},
+   "steps": [
+    {"thinking": "대기 제안은 과메기문화관을 그대로 둔다. 그 위에 과메기문화관을 꼭 포함하는 조건만 더해, 다음에 일정을 고칠 때도 빠지지 않게 한다.",
+     "tools": [{"name": "add_rule", "args": {"type": "must_include", "place_id": "kto-2660046", "hard": true, "note": "과메기문화관은 꼭 가기"}}]},
+    {"tools": [{"name": "review_plan"}]},
+    {"text": "**과메기문화관**은 꼭 가는 조건으로 걸어 둘게요. 앞으로 일정을 고쳐도 빠지지 않아요.\n\n앞의 안은 그대로 두고 조건만 더했어요. 오늘 일정은 **{{end:1}}**에 끝나 18시 전에 마칠 수 있어요."}
    ]
   },
   {

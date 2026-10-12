@@ -29,6 +29,19 @@ def test_worse_situation_is_notified_again():
     assert policy.fresh([same_hazard_worse], {"near_hazard:flood_4:caution"}) == [same_hazard_worse]
 
 
+def test_resolved_cause_is_notified_again():
+    """해소된 위반(released[키] = 그때 마지막 이벤트 id)은 그 id 까지의 이벤트로는 세지 않는다 -> 다시 생기면 또 알린다."""
+    over = "delay:day_overflow:1:5:None"
+    rows = [(10, f"{over}|delay:rule_end_before:1:None:7"), (11, "arrived:3")]
+    assert policy.active_causes(rows) == policy.known_causes([k for _, k in rows])
+    known = policy.active_causes(rows, {over: 11})
+    assert over not in known and "delay:rule_end_before:1:None:7" in known and "arrived:3" in known
+    again = det("delay", over)
+    assert policy.fresh([again], known) == [again]
+    # 다시 알린 뒤(이벤트 12)에는 다시 센다
+    assert over in policy.active_causes(rows + [(12, over)], {over: 11})
+
+
 def test_fresh_orders_by_priority_and_dedups_within_batch():
     a = det("arrived", "arrived:3")
     h = det("near_hazard", "near_hazard:flood_4:danger")

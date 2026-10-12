@@ -66,6 +66,7 @@ class FakePlanner:
         self.down = False
         self._next_id = 100
         self._alert_id = 1
+        self.proposals: dict[int, list[dict]] = {}  # 승인된 제안 (plan_id -> [{id, status, base_version}])
 
     # ----- 준비 (테스트) -----
     def create(self, user: str, plan: dict) -> int:
@@ -98,10 +99,19 @@ class FakePlanner:
         self.plans[plan_id]["version"] += 1
 
     def set_stay(self, plan_id: int, place_id: str, stay: int) -> None:
-        """사용자가 체류 시간을 바꾸는 제안을 승인함 (일정 밀림: 지금 장소 체류 늘리기). version 이 오른다."""
+        """사용자가 체류 시간을 바꿈 (직접 고침, 제안 승인이 아님). version 이 오른다."""
         it = next(i for i in self.plans[plan_id]["items"] if i["place_id"] == place_id)
         it["stay"] = stay
         self.plans[plan_id]["version"] += 1
+
+    def accept(self, plan_id: int, proposal_id: int, stays: dict[str, int] | None = None) -> None:
+        """사용자가 제안(proposal_id)을 승인함: 체류 변경(stays: place_id -> 분)을 반영하고 version 을 올린다."""
+        base = self.plans[plan_id]["version"]
+        for place_id, stay in (stays or {}).items():
+            next(i for i in self.plans[plan_id]["items"] if i["place_id"] == place_id)["stay"] = stay
+        self.plans[plan_id]["version"] += 1
+        self.proposals.setdefault(plan_id, []).append({"id": proposal_id, "plan_id": plan_id, "status": "accepted",
+                                                        "base_version": base})
 
     def add_alert(self, plan_id: int, kind: str, changes: list[tuple[int, str, str]]) -> dict:
         """changes: (item_id, from_risk, to_risk)."""
@@ -289,6 +299,11 @@ class FakePlanner:
     def safety_alerts(self, plan_id, auth):
         self._plan(plan_id)
         return [a for a in reversed(self.alerts.get(plan_id, [])) if a["status"] == "new"]
+
+    def accepted_proposals(self, plan_id, auth):
+        self._plan(plan_id)
+        self.calls.append(("proposals", plan_id))
+        return [p for p in reversed(self.proposals.get(plan_id, [])) if p["status"] == "accepted"]
 
     def alert_seen(self, plan_id, alert_id, auth):
         self.calls.append(("seen", alert_id))
