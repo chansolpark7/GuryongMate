@@ -265,3 +265,57 @@ def test_projection_defaults_and_errors(client, fixed_now):
     err(project(client, pid, position={"state": "visiting", "item_id": ids["p-food"]}), 422, "invalid_position")
     err(project(client, pid, position={"state": "visiting", "item_id": 999999}), 404, "item_not_found")
     err(project(client, pid, position={"state": "flying"}), 422, "invalid_request")
+
+
+# ---------- 여행 중 계획 응답의 위반 (§8.5) ----------
+
+@pytest.fixture
+def at(request):
+    saved = clock._clock
+    h, m = request.param
+    clock._clock = FixedClock(datetime(2026, 10, 10, h, m, tzinfo=KST))
+    yield
+    clock._clock = saved
+
+
+def keys(vs: list[dict]) -> list[tuple]:
+    return sorted((v["code"], v["day"], v["item_id"]) for v in vs)
+
+
+@pytest.mark.parametrize("at", [(12, 52)], indirect=True)
+def test_plan_violations_follow_live_progress(client, at):
+    """계획 기준으로는 물회집(13:00 고정)을 놓치지만 가옥거리를 일찍 끝내 실제로는 문제없다.
+    계획 응답의 위반은 지금 기준(Agent 의 projection 과 같음) -> 1일차 경고는 사라지고, 아직 안 간 2일차 경고는 남는다.
+    시각과 GET /validate 는 계획 기준 그대로."""
+    pid = new_plan(client, end_date="2026-10-11")["id"]
+    for day in (1, 2):
+        add(client, pid, "p-house", day=day, stay_minutes=120)
+        plan = add(client, pid, "p-food", day=day, start_time="13:00")
+    house, food1, food2 = item_id(plan, "p-house"), item_id(plan, "p-food"), item_id(plan, "p-food", day=2)
+    planned = [("fixed_time_missed", 1, food1), ("fixed_time_missed", 2, food2)]
+    assert keys(plan["violations"]) == planned
+
+    ok(progress(client, pid, house, "visiting", "12:30"))
+    r = ok(progress(client, pid, house, "done", "12:50"))
+    assert keys(r["violations"]) == [("fixed_time_missed", 2, food2)]
+    plan = get_plan(client, pid)
+    assert keys(plan["violations"]) == [("fixed_time_missed", 2, food2)]
+    assert keys(plan["violations"]) == keys(ok(project(client, pid))["plan"]["violations"])  # Agent 검토와 같은 기준
+    assert view(plan, house)["end_at"] == "14:30"  # 시각은 계획 기준
+    assert keys(ok(client.get(f"/planner/plans/{pid}/validate", headers=H))["violations"]) == planned
+    # 편집 응답도 같은 기준
+    r = ok(client.patch(f"/planner/plans/{pid}/items/{food2}", json={"memo": "2일차"}, headers=H))
+    assert keys(r["violations"]) == [("fixed_time_missed", 2, food2)]
+
+
+@pytest.mark.parametrize("at", [(13, 25)], indirect=True)
+def test_plan_violations_show_live_only_violation(client, at):
+    """반대로 계획 기준엔 없지만 늦어서 생긴 위반은 보인다. 진행 기록이 없으면(첫 도착 전) 계획 기준."""
+    pid = new_plan(client)["id"]
+    add(client, pid, "p-house", stay_minutes=20)
+    plan = add(client, pid, "p-food", start_time="13:00")
+    house, food = item_id(plan, "p-house"), item_id(plan, "p-food")
+    assert get_plan(client, pid)["violations"] == []
+    ok(progress(client, pid, house, "visiting", "12:40"))
+    ok(progress(client, pid, house, "done", "13:20"))
+    assert keys(get_plan(client, pid)["violations"]) == [("fixed_time_missed", 1, food)]

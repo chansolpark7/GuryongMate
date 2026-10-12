@@ -104,7 +104,12 @@ def _apply(db: Session, plan: PlannerPlan, ops: list, places: PlaceLookup, with_
         db.rollback()
         raise
     db.commit()
-    return engine.detail(plan, places)
+    return _shown(plan, places)
+
+
+def _shown(plan: PlannerPlan, places: PlaceLookup) -> PlanDetail:
+    """응답용 계획: 여행 중인 날의 위반은 지금 기준 (engine.shown, §8.5)."""
+    return engine.shown(plan, places, get_clock().now())
 
 
 # ---------- 계획 ----------
@@ -131,7 +136,7 @@ def create_plan(body: PlanCreate, db: DbSession, user_id: UserId, places: Places
 
 @router.get("/plans/{plan_id}", response_model=PlanDetail)
 def get_plan(plan_id: int, db: DbSession, user_id: UserId, places: Places) -> PlanDetail:
-    return engine.detail(_get_plan(db, user_id, plan_id), places)
+    return _shown(_get_plan(db, user_id, plan_id), places)
 
 
 @router.patch("/plans/{plan_id}", response_model=PlanDetail)
@@ -193,7 +198,7 @@ def update_progress(plan_id: int, item_id: int, body: ProgressUpdate, db: DbSess
     engine.set_status(item, body.status, None if body.status == "planned" else at)
     plan.progress_version += 1
     db.commit()
-    return engine.detail(plan, places)
+    return engine.shown(plan, places, clock.now())
 
 
 @router.post("/plans/{plan_id}/projection", response_model=ProjectionResult)
@@ -355,7 +360,7 @@ def accept_proposal(plan_id: int, proposal_id: int, db: DbSession, user_id: User
         decision = "overwritten"
     _decide(prop, "accepted", decision)
     db.commit()
-    return AcceptResult(proposal=_proposal_detail(prop, plan), plan=engine.detail(plan, places))
+    return AcceptResult(proposal=_proposal_detail(prop, plan), plan=engine.shown(plan, places, clock.now()))
 
 
 @router.post("/plans/{plan_id}/proposals/{proposal_id}/reject", response_model=ProposalDetail)
@@ -424,7 +429,7 @@ def get_recommendation(plan_id: int, recommendation_id: int, db: DbSession, user
 @router.post("/plans/{plan_id}/recommendations/{recommendation_id}/candidates/{candidate_id}/add",
              response_model=RecommendationActionResult)
 def add_candidate(plan_id: int, recommendation_id: int, candidate_id: int, db: DbSession, user_id: UserId,
-                  places: Places) -> RecommendationActionResult:
+                  places: Places, clock: Now) -> RecommendationActionResult:
     plan = _get_plan(db, user_id, plan_id, lock=True)
     rec = _get_recommendation(db, plan, recommendation_id)
     cand = _get_candidate(rec, candidate_id)
@@ -433,7 +438,7 @@ def add_candidate(plan_id: int, recommendation_id: int, candidate_id: int, db: D
     matched = recommend.match_item(detail, cand)
     if matched:
         raise PlannerError(409, "already_in_plan", f"{cand.day}일차 일정에 이미 있습니다.", item_id=matched.id)
-    order = recommend.best_order(plan, detail, cand, places)
+    order = recommend.best_order(plan, detail, cand, places, clock.now())
     detail = _apply(db, plan, [recommend.add_op(cand, order)], places)
     return RecommendationActionResult(recommendation=recommend.recommendation_view(detail, rec, places), plan=detail)
 
