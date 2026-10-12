@@ -1,6 +1,6 @@
 """외부 응답 파싱. fixtures 는 2026-10-04 실제 API 응답이다."""
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -113,3 +113,65 @@ def test_cache_returns_error_as_value():
     first = cache.get(("x",), ttl=60, err_ttl=60, load=boom)
     second = cache.get(("x",), ttl=60, err_ttl=60, load=boom)
     assert not first.ok and "down" in first.error and second is first and len(calls) == 1
+
+
+# ---------- 단기예보 받기 (LiveSources, HTTP 가짜) ----------
+
+def _kma(base: datetime, hours: int, wind: dict[int, float] | None = None, code: str = "00") -> dict:
+    """base 발표의 단기예보 응답 (base+1 시부터 hours 시간, 풍속만). wind: {시각(시): 풍속}."""
+    items = []
+    for k in range(1, hours + 1):
+        t = base + timedelta(hours=k)
+        items.append({"category": "WSD", "fcstDate": f"{t:%Y%m%d}", "fcstTime": f"{t:%H}00",
+                      "fcstValue": str((wind or {}).get(t.hour, 3.0) if t.date() == base.date() else 3.0)})
+    if code != "00":
+        return {"response": {"header": {"resultCode": code, "resultMsg": "NODATA_ERROR"}}}
+    return {"response": {"header": {"resultCode": "00"}, "body": {"items": {"item": items}}}}
+
+
+def _live(responses: dict[str, dict]) -> tuple[s.LiveSources, list[str]]:
+    """base_time(HHMM) -> 응답. 부른 base_time 목록을 함께 돌려준다."""
+    import httpx
+    from app.safety.config import SafetySettings
+    asked: list[str] = []
+
+    def handle(req: httpx.Request) -> httpx.Response:
+        bt = req.url.params["base_time"]
+        asked.append(bt)
+        return httpx.Response(200, json=responses[bt])
+
+    cfg = SafetySettings(data_go_kr_service_key="k", dt_service_key="k")
+    return s.LiveSources(cfg, httpx.Client(transport=httpx.MockTransport(handle))), asked
+
+
+def test_forecast_fills_current_hour_from_previous_issue():
+    """14:20 에는 14시 발표(15시부터)가 최신이라 14시 예보가 빈다 -> 11시 발표의 14시 예보로 채운다 (S1)."""
+    b14, b11 = datetime(2026, 10, 4, 14, tzinfo=KST), datetime(2026, 10, 4, 11, tzinfo=KST)
+    src, asked = _live({"1400": _kma(b14, 60), "1100": _kma(b11, 60, {14: 16.0})})
+    f = src.forecast(datetime(2026, 10, 4, 14, 20, tzinfo=KST))
+    assert f.ok and f.value.first_hour == b14 and f.value.hours[b14].wsd == 16.0
+    assert f.value.base == b14 and f.value.hours[b14 + timedelta(hours=1)].wsd == 3.0  # 15시는 최신 발표
+    assert asked == ["1400", "1100"]
+    # 15시가 지나면 최신 발표만으로 충분하다
+    asked.clear()
+    assert src.forecast(datetime(2026, 10, 4, 15, 10, tzinfo=KST)).value.first_hour == b14 + timedelta(hours=1)
+    assert asked == []  # 캐시
+
+
+def test_forecast_gap_stays_when_previous_issue_fails():
+    b14, b11 = datetime(2026, 10, 4, 14, tzinfo=KST), datetime(2026, 10, 4, 11, tzinfo=KST)
+    src, _ = _live({"1400": _kma(b14, 60), "1100": _kma(b11, 60, code="03")})
+    f = src.forecast(datetime(2026, 10, 4, 14, 20, tzinfo=KST))
+    assert f.ok and f.value.first_hour > datetime(2026, 10, 4, 14, 20, tzinfo=KST)
+
+
+def test_forecast_nodata_or_short_is_failure():
+    """NODATA(03)·너무 짧은 예보는 실패로 본다 (S4). 빈 예보를 정상으로 받으면 지도는 안전, 일정은 예보 범위 밖이 된다."""
+    b14 = datetime(2026, 10, 4, 14, tzinfo=KST)
+    now = datetime(2026, 10, 4, 15, 10, tzinfo=KST)
+    src, _ = _live({"1400": _kma(b14, 60, code="03")})
+    f = src.forecast(now)
+    assert not f.ok and "NODATA" in f.error
+    src, _ = _live({"1400": _kma(b14, 6)})
+    f = src.forecast(now)
+    assert not f.ok and "짧음" in f.error

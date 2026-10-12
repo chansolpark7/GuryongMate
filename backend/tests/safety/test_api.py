@@ -626,3 +626,83 @@ def test_car_path_through_flood_zone_in_heavy_rain(use):
 def test_path_validation(use, bad):
     body = {"visits": [{"date": "2026-10-05", "start": "14:00"} | bad]}
     assert use(CountingMock()).post("/safety/assess", json=body).status_code == 422
+
+
+# ---------- 발표 직후 지금 시각 예보 (S1) · 피할 구역 변화 (S3) ----------
+
+def _sim(now: datetime, kind: str, start: datetime, end: datetime) -> MockSources:
+    from app.safety.sources import SimSegment
+    src = MockSources(clock=lambda: now)
+    src.set(timeline=(SimSegment(kind, start, end),))
+    return src
+
+
+def test_visit_in_hour_after_issue_uses_forecast_of_that_hour(use):
+    """05:20 에는 5시 발표(6시부터)가 최신이라 5시 예보가 빈다. 5시 방문을 안전으로 보지 않고 직전 발표로 판단한다 (S1)."""
+    day = datetime(2026, 10, 4, 0, tzinfo=KST)
+    now = day.replace(hour=5, minute=20)
+    client = use(_sim(now, "wind", day, day.replace(hour=12)))
+    v = assess(client, visit("p-breakwater", "2026-10-04", "05:30", "06:00"), now=now)["visits"][0]
+    assert (v["horizon"], v["forecast_available"], v["risk"]) == ("now", True, "danger")
+
+
+def test_wind_ending_at_next_issue_is_not_cleared_early(use):
+    """바람 14~15시, 14:40~15:00 방문을 14:20 에 평가: 15시부터인 14시 발표만 보면 안전(잘못된 해제)이 된다 (S1)."""
+    day = datetime(2026, 10, 4, 0, tzinfo=KST)
+    now = day.replace(hour=14, minute=20)
+    client = use(_sim(now, "wind", day.replace(hour=14), day.replace(hour=15)))
+    v = assess(client, visit("p-breakwater", "2026-10-04", "14:40", "15:00"), now=now)["visits"][0]
+    assert v["risk"] == "danger"
+    sit = situation(client, now)
+    assert sit["hours"][0]["time"].startswith("2026-10-04T14:00") and sit["hours"][0]["levels"]["breakwater"] == "danger"
+
+
+class GapMock(CountingMock):
+    """직전 발표도 받지 못해 지금 시각 예보가 빈 채인 단기예보."""
+
+    def forecast(self, now):
+        f = super().forecast(now)
+        hour = now.replace(minute=0, second=0, microsecond=0)
+        f.value.hours = {t: h for t, h in f.value.hours.items() if t > hour}
+        return f
+
+
+def test_missing_current_hour_is_not_judged_safe(use):
+    """지금 시각 예보가 비면 지금 방문·지금 구역 단계는 판단하지 않는다 (risk=null -> planner·trip 이 해제로 읽지 않는다)."""
+    client = use(GapMock())
+    v = assess(client, visit("p-breakwater", "2026-10-04", "10:10", "10:50"))["visits"][0]
+    assert v["risk"] is None and v["unassessed_reason"] == "data_missing"
+    st = ok(client.get("/safety/status", params={"now": NOW.isoformat()}))
+    assert {z["risk"] for z in st["zones"]} == {None}
+    later = assess(client, visit("p-breakwater", "2026-10-04", "12:00", "13:00"))["visits"][0]
+    assert later["risk"] == "safe"  # 다음 시각부터는 예보가 있다
+
+
+class SensorMock(MockSources):
+    """폭풍(호우주의보로 침수 구역 모두 주의) 중 해양경찰서 지표면 수위계(9) 등급만 바꾼다."""
+
+    def __init__(self):
+        super().__init__("storm", clock=lambda: NOW)
+        self.level9, self.value9 = 1, 0.0
+
+    def sensors(self):
+        f = super().sensors()
+        for r in f.value:
+            if r.id == 9:
+                r.level, r.value = self.level9, self.value9
+        return f
+
+
+def test_sensor_level_change_changes_fingerprint_even_if_zone_level_same(use):
+    """구역 단계(센서·특보·예보 중 최고)가 같아도 길찾기에서 피할 센서가 바뀌면 fingerprint 가 바뀐다 (S3).
+    trip 은 fingerprint 가 바뀔 때만 /avoid 를 다시 받는다. 등급이 그대로인 수위 값 변화로는 바뀌지 않는다."""
+    src = SensorMock()
+    client = use(src)
+    before = situation(client)
+    assert before["zones"]["flood_9"] == "caution"
+    src.value9 = 3.0  # 등급 1 그대로 (참고)
+    assert situation(client)["fingerprint"] == before["fingerprint"]
+    src.level9 = 2
+    after = situation(client)
+    assert after["zones"]["flood_9"] == "caution" and after["fingerprint"] != before["fingerprint"]
+    assert "flood_9" in [z["id"] for z in ok(client.get("/safety/avoid", params={"now": NOW.isoformat()}))["zones"]]
