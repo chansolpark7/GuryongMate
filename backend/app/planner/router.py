@@ -16,12 +16,13 @@ from pydantic import TypeAdapter
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.core.auth import AdminRequest, CurrentUser
+from app.core.auth import AdminRequest, CurrentUser, ForwardAuth
 from app.core.config import settings as core_settings
 from app.db import get_db
 from app.planner import ops as engine
 from app.planner import recommend
 from app.planner import safety as safety_check
+from app.planner.cleanup import PlanCleaner, get_plan_cleaner
 from app.planner.clock import Clock, get_clock
 from app.planner.errors import PlannerError, PlannerRoute, not_found
 from app.planner.models import (
@@ -148,9 +149,12 @@ def update_plan(plan_id: int, body: PlanUpdate, db: DbSession, user_id: UserId, 
 
 
 @router.delete("/plans/{plan_id}", status_code=204)
-def delete_plan(plan_id: int, db: DbSession, user_id: UserId) -> Response:
+def delete_plan(plan_id: int, db: DbSession, user_id: UserId, auth: ForwardAuth,
+                cleaner: Annotated[PlanCleaner, Depends(get_plan_cleaner)]) -> Response:
     db.delete(_get_plan(db, user_id, plan_id, lock=True))  # 제안·추천은 DB 의 ON DELETE CASCADE 로 함께 삭제
     db.commit()
+    # 다른 서비스의 그 계획 데이터 (agent 대화·가이드 준비 작업, docent 노트·이번 여행 메모리). 실패해도 삭제는 유지 (로그)
+    cleaner.after_delete(plan_id, auth)
     return Response(status_code=204)
 
 

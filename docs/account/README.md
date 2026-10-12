@@ -110,7 +110,7 @@ refresh 토큰은 **한 번만** 쓸 수 있다. 쓸 때마다 새 refresh 토�
 | DELETE | `/users/me` | | 204 | 401, 503 `upstream_unavailable` |
 
 - **비밀번호 변경**: 그 계정의 모든 refresh 토큰을 폐기한다(다른 기기 로그아웃). 지금 기기용 새 토큰 쌍을 응답으로 준다.
-- **탈퇴**: 사용자의 **모든 데이터**를 지운다. account가 같은 토큰으로 `DELETE /planner/me`, `DELETE /agent/me`를 먼저 부른 뒤 계정과 토큰을 지운다. 다른 서비스 삭제가 실패하면 계정을 지우지 않고 503 `upstream_unavailable`을 돌려준다(다시 시도하면 된다).
+- **탈퇴**: 사용자의 **모든 데이터**를 지운다. account가 같은 토큰으로 `DELETE /planner/me`(계획·일정·제안), `DELETE /trip/me`(여행 기록·이벤트), `DELETE /docent/me`(메모리·가이드 노트), `DELETE /agent/me`(대화)를 이 순서로 먼저 부른 뒤(관제 콘솔 계정 초기화와 같은 순서) 계정과 토큰을 지운다. 다른 서비스 삭제가 실패하면 계정을 지우지 않고 503 `upstream_unavailable`을 돌려준다(다시 시도하면 된다).
 
 ---
 

@@ -70,6 +70,16 @@ def test_build_place():
     assert "contentid" not in p["intro"]
 
 
+def test_parking_fee_goes_to_parking_not_fee():
+    """주차요금(parkingfee)은 이용요금(fee)에 섞지 않고 주차(parking) 끝에 "주차요금: …" 으로 붙인다 (예: 문화시설)."""
+    culture = {"contentid": "1", "contenttypeid": "14", "usefee": "공연별 상이", "parkingculture": "가능", "parkingfee": "무료"}
+    p = build_place(LISTING, COMMON, culture, [], [], NAMES)
+    assert p["fee"] == "공연별 상이" and p["parking"] == "가능\n주차요금: 무료"
+    only_fee = build_place(LISTING, COMMON, {"parkingfee": "1시간 1,000원"}, [], [], NAMES)
+    assert only_fee["fee"] == "" and only_fee["parking"] == "주차요금: 1시간 1,000원"
+    assert build_place(LISTING, COMMON, INTRO, [], [], NAMES)["parking"] == "가능"  # 주차요금이 없으면 그대로
+
+
 def test_build_place_without_details():
     p = build_place(LISTING, None, None, [], [], {})
     assert p["title"] == "구룡포 일본인가옥거리"

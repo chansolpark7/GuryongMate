@@ -3,6 +3,9 @@ import os
 
 os.environ["SERVICE"] = "all"
 os.environ["PLANNER_SAFETY_WATCH_SEC"] = "0"  # 백그라운드 주기 점검은 끈다 (테스트가 직접 tick 을 부른다)
+# 계획 삭제 뒤 agent·docent 정리 호출이 compose 의 게이트웨이(실행 중인 스택)로 가지 않게 닫힌 포트로 (바로 실패 -> 로그만).
+# 정리까지 보는 테스트는 get_plan_cleaner 를 같은 앱으로 바꾼다 (tests/planner/test_plans.py)
+os.environ["PLANNER_SERVICES_BASE_URL"] = "http://127.0.0.1:9"
 os.environ["TRIP_TICK_SEC"] = "0"  # trip 백그라운드 틱도 끈다 (compose 의 trip 컨테이너에서 테스트를 돌려도)
 for _kind in ("CHAT", "EVENT", "GUIDE"):  # 운영 설정(backend.env)의 LLM 호출 수 제한은 끈다 (test_limits 가 직접 켠다)
     for _win in ("HOUR", "DAY"):
