@@ -48,7 +48,7 @@ List<ChangeRow> buildChangeRows(ProposalDetail p) {
         pairedRemoved.add(r.itemId!);
         rows.add(ChangeRow(
           badge: '교체',
-          title: '${b.startAt ?? ''} ${b.title}'.trim(),
+          title: '${ai.startAt ?? b.startAt ?? ''} ${ai.title}'.trim(), // 바뀐 뒤 시각·장소 (이전 장소는 아래 줄 '이전 → 새')
           fromText: b.title,
           toText: ai.title,
           reason: ai.memo.isNotEmpty ? ai.memo : '${ai.place?.contentType ?? ''} · ${ai.stayMinutes}분',
