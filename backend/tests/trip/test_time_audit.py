@@ -43,16 +43,31 @@ def test_extend_stay_absorbs_late_arrival():
     assert sg["stay_minutes"] == 120  # 13:36 ~ 15:35 (15:20 + 15) -> 5분 올림. 승인 뒤 재계산 종료 = 계획 시작 + 120 = 15:36
 
 
-def test_extend_stay_after_early_arrival_counts_from_actual_start():
-    """구룡포항에 일찍(13:20, 계획 13:36) 와서 14:40 까지 머묾 -> 재계산 13:20~14:40(지금). 일찍 온 곳은 실제 시작 + 체류에
-    끝나므로 체류는 실제 시작부터 센다: 13:20 ~ 14:55 (지금 + 15) -> 95분. (계획 시작 기준 80분이면 승인해도 14:40 에 끝나 그대로 늦다)"""
+def test_extend_stay_after_early_arrival_counts_from_planned_start():
+    """구룡포항에 일찍(13:20, 계획 13:36) 와서 14:40 까지 머묾 -> 재계산 13:20~14:40(지금). 기준 일정은 계획 시작 + 체류에 끝나므로
+    체류는 계획 시작부터 센다: 13:36 ~ 14:55 (지금 + 15) -> 80분 (logic-bugs-2026-10-12 T4).
+    실제 도착부터 세면(95분) 기준 일정이 15:11 에 끝나 일찍 온 16분만큼 남은 일정이 더 밀린다.
+    승인 뒤 재계산은 실제 시작 + 80 = 14:40 이 이미 지나 지금에 끝나므로 늦지 않다."""
     proj = {"new_violations": [], "delay_minutes": 10,
             "next": {"item_id": 3, "planned_start": "14:42", "eta": "14:46", "start_at": "14:46"},
             "plan": {"days": [{"day": 1, "items": [_item(2, "구룡포항", "13:20", "14:40", 60, "visiting"),
                                                    _item(3, "과메기문화관", "14:46", "15:46", 60)]}]}}
     d = judge.judge_delay(proj, t("14:40"), behind_min=5, plan=BASE, day=1,
                           track=judge.Track(state="visiting", item_id=2, since=t("13:20")))
-    assert d.payload["suggest"]["stay_minutes"] == 95
+    assert d.payload["suggest"]["stay_minutes"] == 80
+
+
+def test_extend_stay_early_arrival_t4():
+    """재현 (T4): 계획 10:30·60분인 곳에 10:00 도착, 11:45 에 15분 밀림 -> 12:00 에 떠나는 안 = 계획 시작 기준 90분 (전에는 120)."""
+    plan = {"version": 3, "days": [{"day": 1, "items": [_item(1, "A", "10:30", "11:30", 60, "visiting"),
+                                                        _item(2, "B", "11:36", "12:36", 60)]}]}
+    proj = {"new_violations": [], "delay_minutes": 15,
+            "next": {"item_id": 2, "planned_start": "11:36", "eta": "11:51", "start_at": "11:51"},
+            "plan": {"days": [{"day": 1, "items": [_item(1, "A", "10:00", "11:45", 60, "visiting"),
+                                                   _item(2, "B", "11:51", "12:51", 60)]}]}}
+    d = judge.judge_delay(proj, t("11:45"), behind_min=15, plan=plan, day=1,
+                          track=judge.Track(state="visiting", item_id=1, since=t("10:00")))
+    assert d.payload["suggest"]["kind"] == "extend_stay" and d.payload["suggest"]["stay_minutes"] == 90
 
 
 def test_extend_stay_overstay_and_shift_next_not_in_past():

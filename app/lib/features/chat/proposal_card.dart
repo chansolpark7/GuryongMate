@@ -38,7 +38,31 @@ List<ChangeRow> buildChangeRows(ProposalDetail p) {
   final added = p.changes.where((c) => c.kind == 'added').toList();
   final pairedAdded = <int>{};
   final pairedRemoved = <int>{};
+  // 같은 장소를 지웠다 다시 넣음 = 그 장소의 '이동' 한 줄 (이전 시각 → 새 시각, audit-2026-10-12 F10). 자리 교체보다 먼저 묶는다.
   for (final r in removed) {
+    final b = before?.item(r.itemId!);
+    if (b == null) continue;
+    for (final a in added) {
+      final ai = after?.item(a.itemId!);
+      if (ai != null && !pairedAdded.contains(a.itemId) && ai.placeId == b.placeId) {
+        pairedAdded.add(a.itemId!);
+        pairedRemoved.add(r.itemId!);
+        rows.add(ChangeRow(
+          badge: '이동',
+          title: ai.title,
+          fromText: b.day == ai.day ? b.startAt : '${b.day}일차 ${b.startAt ?? ''}'.trim(),
+          toText: b.day == ai.day ? ai.startAt : '${ai.day}일차 ${ai.startAt ?? ''}'.trim(),
+          reason: ai.memo,
+          itemId: ai.id,
+          day: ai.day,
+          at: ai.startAt ?? b.startAt,
+        ));
+        break;
+      }
+    }
+  }
+  for (final r in removed) {
+    if (pairedRemoved.contains(r.itemId)) continue;
     final b = before?.item(r.itemId!);
     if (b == null) continue;
     for (final a in added) {

@@ -94,10 +94,10 @@ class _OutlookSheetState extends State<OutlookSheet> {
   List<Widget> _body(Outlook o, Situation? s) {
     final d = widget.date;
     final hours = (s?.hours ?? const <SituationHour>[]).where((h) {
-      final t = h.time.toLocal();
+      final t = kst(h.time);
       return t.year == d.year && t.month == d.month && t.day == d.day && t.hour >= 9 && t.hour <= 18;
     }).toList();
-    final byHour = {for (final h in hours) h.time.toLocal().hour: h};
+    final byHour = {for (final h in hours) kst(h.time).hour: h};
     final far = hours.isEmpty && o.safeWindows.isEmpty;
     final highs = o.tides.where((t) => t.kind == 'high').map((t) => hhmm(t.time)).toList();
     return [
@@ -140,7 +140,7 @@ class _OutlookSheetState extends State<OutlookSheet> {
       _Row(icon: Icons.info_outline, title: o.warnings.isEmpty ? '발효 중인 특보 없음' : o.warnings.join('\n')),
       for (final n in far ? o.seasonalNotes : const <String>[]) ...[const SizedBox(height: 8), _Row(icon: Icons.eco_outlined, title: n)],
       const SizedBox(height: 14),
-      Text('기상청 단기예보 · 국립해양조사원${s?.now == null ? '' : ' · ${s!.now!.toLocal().month}/${two(s.now!.toLocal().day)} ${hhmm(s.now!)} 기준'}', style: AppText.caption),
+      Text('기상청 단기예보 · 국립해양조사원${s?.now == null ? '' : ' · ${kst(s!.now!).month}/${two(kst(s.now!).day)} ${hhmm(s.now!)} 기준'}', style: AppText.caption),
     ];
   }
 
@@ -149,7 +149,7 @@ class _OutlookSheetState extends State<OutlookSheet> {
     if (far) return '날씨·바다 판단은 예보가 나오면 해요.';
     final parts = <String>[];
     for (final (k, name) in _kinds.take(3)) {
-      int? first(String level) => hours.where((h) => h.levels[k] == level).map((h) => h.time.toLocal().hour).firstOrNull;
+      int? first(String level) => hours.where((h) => h.levels[k] == level).map((h) => kst(h.time).hour).firstOrNull;
       final c = first('caution'), d = first('danger');
       if (c == null && d == null) continue;
       final seg = [if (c != null && (d == null || c < d)) '$c시부터 주의', if (d != null) '$d시부터 위험'];

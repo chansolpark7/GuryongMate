@@ -196,6 +196,15 @@ class OpsRequest(Strict):
     ops: list[PlanOp] = Field(min_length=1, max_length=MAX_OPS)
 
 
+LIVE_DESC = ("여행을 오늘 시작했으면(동행 중) true: 오늘 진행 기록(visiting·done)이 없어도 오늘을 지금 기준으로 계산한다 "
+             "(projection 과 같음, 남은 첫 항목 지금 출발). 생략·false 면 진행 기록이 있을 때만 (§8.4)")
+
+
+class LiveOpsRequest(OpsRequest):
+    """미리보기·안전 미리보기·제안 생성. 여행 중이면 실제 진행 + 지금 기준으로 계산한다 (§8.4)."""
+    live: bool = Field(False, description=LIVE_DESC)
+
+
 # ---------- 응답: 계획 ----------
 
 class PlaceInfo(BaseModel):
@@ -362,7 +371,7 @@ class PreviewResult(BaseModel):
 ProposalStatus = Literal["pending", "accepted", "rejected", "superseded"]
 
 
-class ProposalCreate(OpsRequest):
+class ProposalCreate(LiveOpsRequest):
     summary: str = Field("", max_length=2000, description="카드 설명")
     request: str = Field("", max_length=4000, description="이 제안을 만든 사용자 요청 원문")
     source: Source = "llm"
@@ -401,7 +410,8 @@ class ProposalDetail(ProposalSummary):
     base_changed: bool = Field(description="제안 이후 일정이 바뀌었는지 (current_version != base_version)")
     progress_changed: list[int] = Field(
         default_factory=list,
-        description="제안 이후 다녀온(done) 항목 중 이 제안이 바꾸거나 지우는 항목 id. 있으면 승인은 409 progress_changed")
+        description="제안 이후 다녀온(done) 항목 중 이 제안이 바꾸거나 지우는 항목, 도착한(visiting) 항목 중 지우거나 옮기는 항목 id. "
+                    "있으면 승인은 409 progress_changed")
 
     @field_serializer("ops")
     def _ops_as_sent(self, ops: list) -> list[dict]:

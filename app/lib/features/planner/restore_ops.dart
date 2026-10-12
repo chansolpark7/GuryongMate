@@ -49,6 +49,7 @@ List<Map<String, dynamic>> buildRestoreOps(PlanDetail before, PlanDetail current
       'stay_minutes': i.stayMinutes,
       'start_time': i.startTime,
       'memo': i.memo,
+      'travel_mode': i.travelMode, // 오는 수단 (null = 계획 기본, update_item 은 null 로 기본으로 되돌린다, F9)
     };
     if (currentIds.contains(i.id)) {
       ops.add({'op': 'update_item', 'item_id': i.id, ...fields, 'status': i.status});

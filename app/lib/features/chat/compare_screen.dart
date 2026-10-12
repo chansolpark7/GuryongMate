@@ -122,6 +122,15 @@ class _CompareScreenState extends State<CompareScreen> {
     return out;
   }
 
+  /// 수정안 항목의 안전 판정. 승인한 뒤에는 수정안 = 지금 일정이라 새로 들어간 항목(임시 음수 id)을
+  /// 지금 일정에서 같은 날·같은 장소로 찾아 맞춘다 (audit-2026-10-12 F11).
+  SafetyItem? _afterVisit(PlanItem a) {
+    final s = _afterSafety;
+    if (s == null) return null;
+    return s.visit(a.id) ??
+        (widget.entry.state == ProposalState.pending ? null : s.visit(appliedItemId(a, context.read<PlanController>().plan) ?? a.id));
+  }
+
   Future<void> _accept() async {
     final chat = context.read<ChatController>();
     final nav = Navigator.of(context);
@@ -208,6 +217,7 @@ class _CompareScreenState extends State<CompareScreen> {
                 pair: r,
                 beforeSafety: _beforeSafety,
                 afterSafety: _afterSafety,
+                afterVisit: _afterVisit,
                 safetyFailed: _safetyFailed,
                 highlight: _highlight,
                 proposal: p,
@@ -226,6 +236,13 @@ class _CompareScreenState extends State<CompareScreen> {
       ]),
     );
   }
+}
+
+/// 승인한 제안의 수정안 항목 [a] 가 지금 일정 [current] 에서 가진 id. 새로 들어간 항목은 수정안에서 임시 음수 id 라
+/// 같은 날·같은 장소로 찾는다 (없으면 null). 이미 있던 항목(양수 id)은 그대로.
+int? appliedItemId(PlanItem a, PlanDetail? current) {
+  if (a.id >= 0) return a.id;
+  return current?.dayOf(a.day)?.items.where((i) => i.placeId == a.placeId).firstOrNull?.id;
 }
 
 class _Pair {
@@ -473,10 +490,11 @@ class _MetricBox extends StatelessWidget {
 }
 
 class _CompareRow extends StatelessWidget {
-  const _CompareRow({required this.pair, required this.beforeSafety, required this.afterSafety, required this.safetyFailed, required this.highlight, required this.proposal, required this.onTap});
+  const _CompareRow({required this.pair, required this.beforeSafety, required this.afterSafety, required this.afterVisit, required this.safetyFailed, required this.highlight, required this.proposal, required this.onTap});
   final _Pair pair;
   final SafetyCheck? beforeSafety;
   final SafetyCheck? afterSafety;
+  final SafetyItem? Function(PlanItem a) afterVisit;
   final bool safetyFailed;
   final int? highlight;
   final ProposalDetail proposal;
@@ -486,7 +504,7 @@ class _CompareRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final b = pair.before, a = pair.after;
     final bs = b == null ? null : beforeSafety?.visit(b.id);
-    final as = a == null ? null : afterSafety?.visit(a.id);
+    final as = a == null ? null : afterVisit(a);
     final changed = pair.changed;
     final hazard = bs?.topHazard;
     return Padding(

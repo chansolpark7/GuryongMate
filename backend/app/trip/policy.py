@@ -4,7 +4,7 @@
 - 중복 억제: 같은 원인 키로는 다시 알리지 않는다. 원인이 여럿('|')이면 하나라도 새것일 때만 알린다
   -> 제안을 거절해도 같은 상황이면 조용하고, 더 나빠지면(새 위반·새 경고) 다시 알린다.
   알린 위반이 해소(TRIP_RESOLVE_MIN 이어서 사라짐)된 뒤 다시 생기면 또 알린다 (active_causes). 큐에서 빠진(suppressed) delay 는 알린 것이 아니다.
-- 단계 3은 한 번에 하나 (큐). 같은 원인 묶음의 오래된 것은 suppressed. 쿨다운 안에는 보내지 않는다 (safety_raised 는 무시).
+- 단계 3은 한 번에 하나 (큐). 같은 원인 묶음의 오래된 것은 suppressed. 쿨다운 안에는 보내지 않는다 (safety_raised 는 무시, 시각을 크게 되돌렸으면 쿨다운 아님).
 - 앱 활동이 없으면 단계 3 은 보류(queued). 활동이 돌아오면 지금도 유효한 것 중 하나만 보낸다 (pick_resume).
 """
 from dataclasses import dataclass
@@ -80,7 +80,9 @@ def pick_next(queued: list[Queued], last_delivered_at: datetime | None, now: dat
     if not order:
         return None, suppress
     first = order[0]
-    cooling = last_delivered_at is not None and now - last_delivered_at < cooldown
+    # 마지막 전송이 지금보다 쿨다운 이상 늦으면 같은 날 가상 시각을 되돌린 것 -> 쿨다운으로 보지 않는다
+    # (조금 늦은 것은 시계 캐시 차이일 수 있어 쿨다운 안으로 본다)
+    cooling = last_delivered_at is not None and abs(now - last_delivered_at) < cooldown
     if cooling and first.type not in COOLDOWN_EXEMPT:
         return None, suppress
     return first, suppress

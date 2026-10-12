@@ -171,6 +171,7 @@ class TripEvent {
     this.agent,
     this.card,
     this.seenAt,
+    this.createdAt,
   });
 
   final int id;
@@ -187,6 +188,9 @@ class TripEvent {
   final EventAgent? agent;
   final EventCard? card;
   final DateTime? seenAt;
+
+  /// 서버에 기록된 실제 시각 (가상 시각 아님, 시간대 있는 순간). 여행일을 실제로 시작한 때(day_started)를 알 때 쓴다.
+  final DateTime? createdAt;
 
   bool get proactive => type == 'delay' || type == 'safety_raised';
   bool get suppressed => status == 'suppressed';
@@ -221,6 +225,7 @@ class TripEvent {
         agent: j['agent'] is Map ? EventAgent.fromJson(Map<String, dynamic>.from(j['agent'] as Map)) : null,
         card: j['card'] is Map ? EventCard.fromJson(Map<String, dynamic>.from(j['card'] as Map)) : null,
         seenAt: wallClock(j['seen_at']),
+        createdAt: j['created_at'] is String ? DateTime.tryParse(j['created_at'] as String) : null,
       );
 }
 

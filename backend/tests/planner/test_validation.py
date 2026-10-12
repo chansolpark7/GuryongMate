@@ -247,3 +247,63 @@ def test_progress_waits_for_opening_and_break_end():
     # 준비시간 전에 도착해도 머무는 동안 준비시간에 걸리면 위반 (기다려서 풀리는 것이 아니다)
     days, v = build_schedule(plan, RPLACES, actual=Actual(1, 13 * 60 + 55, anchor_id=2, anchor_arrive=14 * 60, moving=True))
     assert days[0].items[1].start_at == "14:00" and "outside_open_hours" in codes(v)
+
+
+# ---------- 로직 버그 점검 2026-10-12 (docs/audit/logic-bugs-2026-10-12.md) ----------
+
+MON, FRI, AUG_SAT, JUL_TUE = date(2026, 10, 12), date(2026, 10, 16), date(2026, 8, 22), date(2026, 7, 14)
+
+
+def test_closed_weekdays_range_without_first_yoil():
+    """P2: 앞쪽 '요일' 을 생략한 범위 (피어라계단 미디어아트 `매주 월~목요일`). 숫자 뒤 '월'(달)은 요일이 아니다."""
+    assert closed_weekdays("매주 월~목요일") == {0, 1, 2, 3}
+    assert closed_weekdays("매주 토~일요일") == {5, 6}
+    assert closed_weekdays("1월~2월 일요일") == {6}  # '1월' 은 달
+
+
+def test_closed_weekdays_monthly_comma_list():
+    """P3: `매월 셋째 토요일, 일요일` 의 일요일도 매월 조건 (THE 신촌s 덮죽). '매주' 가 다시 나오면 매주 휴무."""
+    assert closed_weekdays("매주 월요일 / 매월 셋째 토요일, 일요일") == {0}
+    assert closed_weekdays("매주 월요일, 매월 셋째 화요일") == {0}
+    assert closed_weekdays("매월 둘째 화요일, 매주 수요일") == {2}
+    assert closed_weekdays("매주 토요일, 일요일") == {5, 6}
+
+
+def test_open_hours_note_with_period_or_season():
+    """P4: ※ 문구가 운영 기간·계절 변경을 말하면 판단 보류. '폐장 30분 전'·요일 운영일·'주말 준비시간 없이' 는 아니다."""
+    market = "금요일~일요일 18:00~22:00\n※ 매년 8월 중순~9월 말까지 개장"  # 영일만친구야시장
+    assert oh(market, SAT) is None and oh(market, AUG_SAT) is None
+    assert oh("09:00~18:00\n※ 하절기 (6~8월)는 20:00 까지\n※ 태풍 등 기상특보 시 운영 중단", JUL_TUE) is None  # 이가리 닻 전망대
+    assert oh("10:00~18:00\n※ 7~8월에만 운영") is None
+    # 판단하던 것은 그대로
+    assert oh("- 하절기(3월~10월) 10:00~17:00\n- 동절기(11월~2월) 10:00~16:00\n※ 입장은 폐장 30분 전까지 가능") == (
+        "10:00", "17:00", [])
+    assert oh("19:00 -  20:50\n※ 매주 금요일~일요일에만 운영\n내부 사정에 따라 시간이 변경될 수 있음", FRI) == (
+        "19:00", "20:50", [])  # 피어라계단: 운영 요일은 휴무(closed_weekdays)가 본다
+    text = "- 11:00~21:00\n- 준비시간 15:00~17:00\n- 마지막 주문 20:40\n※ 주말은 준비시간 없이 영업"
+    assert oh(text, TUE) == ("11:00", "21:00", [("15:00", "17:00", "준비시간")]) and oh(text, SAT)[2] == []
+
+
+def test_open_hours_day_off_token_is_not_condition():
+    """P8: `(월요일 휴무)` 의 월요일은 뒤 범위(쉬는 구간)의 조건이 아니다 — 모든 날에 쉬는 구간을 지킨다."""
+    text = "11:00~21:00 (월요일 휴무)\n브레이크타임 15:00~17:00"
+    assert oh(text, TUE) == ("11:00", "21:00", [("15:00", "17:00", "브레이크타임")])
+    assert oh(text, MON) == ("11:00", "21:00", [("15:00", "17:00", "브레이크타임")])  # 휴무는 closed_weekdays 가 본다
+    assert oh("월~금 09:00~18:00 (토요일 휴관)", TUE) == ("09:00", "18:00", [])
+
+
+def test_first_item_fixed_before_day_start():
+    """P7: 그날 첫 항목의 고정 시각이 하루 시작(12:30)보다 이르면 그때 시작한다 (앞 일정이 없다)."""
+    days, v = build_schedule(make_plan({"place_id": "a", "start_time": time(10, 0)}, {"place_id": "c"}), PLACES)
+    assert days[0].items[0].start_at == "10:00" and "fixed_time_missed" not in codes(v)
+    # 두 번째 항목이 앞 일정 때문에 늦는 것은 그대로
+    plan = make_plan({"place_id": "a", "stay_minutes": 120}, {"place_id": "c", "start_time": time(13, 0)})
+    _, v = build_schedule(plan, PLACES)
+    assert codes(v) == ["fixed_time_missed"] and "앞 일정 때문에" in v[0].message
+    # 지금 기준(시작 전): 지금보다 이르게는 시작하지 않는다
+    plan = make_plan({"place_id": "a", "start_time": time(10, 0)}, {"place_id": "c"})
+    days, v = build_schedule(plan, PLACES, actual=Actual(1, 9 * 60))
+    assert days[0].items[0].start_at == "10:00" and "fixed_time_missed" not in codes(v)
+    _, v = build_schedule(plan, PLACES, actual=Actual(1, 11 * 60))
+    assert [x.message for x in v if x.code == "fixed_time_missed"] == [
+        "'가옥거리' 는 10:00 시작으로 고정돼 있지만 지금 기준으로 11:00 에 도착합니다 (60분 늦음)."]
