@@ -237,8 +237,10 @@ def _delay_text(minutes) -> str:
     return f"{round(minutes)}분 늦음" if minutes > 0 else f"{-round(minutes)}분 여유"
 
 
-def situation(trip: dict, plan: dict | None, now: datetime, simulated: bool) -> str:
-    """동행 모드의 '현재 상황' 블록 (docs/trip/README.md §4.4). plan: 현재 일정 (PlanDetail, 제목·진행 상태용)."""
+def situation(trip: dict, plan: dict | None, now: datetime, simulated: bool, pending: bool = False) -> str:
+    """동행 모드의 '현재 상황' 블록 (docs/trip/README.md §4.4). plan: 현재 일정 (PlanDetail, 제목·진행 상태용).
+    pending: plan 이 승인 대기 제안을 적용한 일정이다. '다음'의 예정 시각·늦음은 trip 이 승인된 계획으로 계산한 값이라
+    그렇게 밝히고, 현재 일정(제안 적용)의 시각이 다르면 함께 적는다 (두 시각이 서로 다른 말을 하지 않게)."""
     items = _item_index(plan)
     day = trip.get("day")
     lines = [f"- {day}일차 {now:%Y-%m-%d %H:%M}" + (" (시뮬레이션 시각)" if simulated else "")]
@@ -257,13 +259,23 @@ def situation(trip: dict, plan: dict | None, now: datetime, simulated: bool) -> 
     if nxt:
         title = nxt.get("title") or _title(items.get(nxt.get("item_id")), "다음 장소")
         eta = f", 예상 도착 {nxt['eta']}" if nxt.get("eta") else ""
-        lines.append(f"- 다음: {title} {nxt.get('planned_start') or ''} 예정{eta} ({_delay_text(trip.get('delay_minutes'))})")
+        line = f"- 다음: {title} {nxt.get('planned_start') or ''} 예정{eta} ({_delay_text(trip.get('delay_minutes'))})"
+        if pending:
+            shown = items.get(nxt.get("item_id"))
+            line += " — 승인된 계획 기준"
+            if shown is None or shown.get("status") == "skipped":
+                line += ". 승인 대기 제안을 적용한 현재 일정에서는 이 장소가 빠진다"
+            elif shown.get("start_at") and shown["start_at"] != nxt.get("planned_start"):
+                line += f". 승인 대기 제안을 적용한 현재 일정에서는 {shown['start_at']} 시작"
+        lines.append(line)
     else:
         lines.append("- 다음: 오늘 남은 일정 없음")
     today = [i for i in items.values() if i["day"] == day and i["status"] != "skipped"]
     if today:
         done = sum(1 for i in today if i["status"] == "done")
-        lines.append(f"- 오늘 남은 일정: {len(today) - done}곳 / 완료 {done}곳")
+        here = sum(1 for i in today if i["status"] == "visiting")
+        lines.append(f"- 오늘 남은 일정: {len(today) - done - here}곳" + (f" / 머무는 중 {here}곳" if here else "")
+                     + f" / 완료 {done}곳")
     lines.append("- 바꿀 수 없는 것: 완료한 항목, 지난 시각")
     return "## 현재 상황 (여행 중)\n" + "\n".join(lines)
 
@@ -305,7 +317,7 @@ def _sections(plan_view: dict, pending: dict | None, dropped: dict | None, repro
     clock = f"{now:%Y-%m-%d %H:%M} (KST, {'월화수목금토일'[now.weekday()]}요일" + (", 시뮬레이션 시각)" if simulated else ")")
     parts = [(True, system)]
     if trip:
-        parts += [(True, GUIDE), (False, situation(trip, plan, now, simulated))]
+        parts += [(True, GUIDE), (False, situation(trip, plan, now, simulated, pending=bool(pending)))]
     if docent:  # 동행 모드 대화, 또는 장소 맥락 질문 (여행 전에도)
         parts.append((True, GUIDE_DOCENT.replace(
             "<<WEB>>", GUIDE_WEB.format(n=web_searches) if web_searches else GUIDE_NO_WEB)))

@@ -54,6 +54,26 @@ def test_meal_without_restaurant_and_duplicates_and_spare_time():
     assert summarize(review(p)) == "문제 2건"  # info 는 세지 않는다
 
 
+def test_trip_skips_what_already_passed():
+    """A5: 여행 중(15:00) 오전 관광지 두 곳을 다녀왔으면 지난 점심 시간대는 검토하지 않는다 (고칠 수 없는 should).
+    다녀온 곳까지의 차량 구간·다녀온 곳끼리의 중복도 빼고, 다녀온 곳과 앞으로의 중복은 앞으로의 항목을 가리킨다."""
+    items = [item(1, "a", "10:00", "11:30", status="done"), item(2, "b", "12:30", "14:30", 55, status="done"),
+             item(3, "a", "15:00", "16:00", 5, status="visiting"), item(4, "b", "16:05", "18:30", 5)]
+    p = plan(items, day_end="19:00", mode="car")
+    trip = {"day": 1, "now": "15:00"}
+    before = {i["message"] for i in review(p)}
+    assert any("점심" in m for m in before) and any("차량 이동 55분" in m for m in before)
+    issues = review(p, trip)
+    assert not any("점심" in i["message"] or "차량 이동" in i["message"] for i in issues)
+    dups = [i for i in issues if "두 번" in i["message"]]
+    assert [i["item_id"] for i in dups] == [4]  # a(다녀옴)·a(머무는 중) 중복은 빼고, b 는 앞으로의 항목(4)
+
+    # 점심 시간대가 아직이면(11:00) 그대로 본다. 지난 날은 통째로 보지 않는다
+    assert any("점심" in i["message"] for i in review(plan([item(1, "a", "10:00", "11:00", status="done"),
+                                                          item(2, "b", "11:05", "15:00", 5)]), {"day": 1, "now": "11:00"}))
+    assert review(plan([item(1, "a", "11:00", "15:00")], day_end="15:00"), {"day": 2, "now": "10:00"}) == []
+
+
 def test_meal_only_checked_when_schedule_covers_window():
     p = plan([item(1, "a", "14:00", "16:00")], day_end="16:30")  # 점심 시간대 이후 시작
     assert not any("점심" in i["message"] for i in review(p))

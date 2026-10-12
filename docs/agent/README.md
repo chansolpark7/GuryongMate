@@ -187,6 +187,8 @@ LLM은 일정을 직접 바꾸지 않는다. 결과는 두 종류의 **카드**�
 ### 4.2 다시 제안 (`repropose`)
 - 그 제안을 만든 요청(`request`)을 **지금 일정 기준으로** LLM에 다시 보낸다. 대화에는 사용자 메시지 `이전 제안을 현재 일정에 맞춰 다시 만들어줘.`가 남는다.
 - 새 제안이 만들어지면 원래 제안은 `superseded`가 된다. 원래 제안이 이미 대기 상태가 아니면 409 `proposal_not_pending`이다.
+- 새 변경 없이 끝나면(원래 문제가 지금은 없는 등) 그대로는 승인할 수 없는 원래 제안(`base_changed`·`progress_changed`)을 `rejected`로 정리한다
+  (승인 불가인 채 '승인 대기'로 남지 않게). 승인할 수 있는 원래 제안은 그대로 둔다.
 - 동행 모드에서는 원래 요청(이벤트 메시지 등)의 시각·문제는 그때 기준이라고 알리고, 지금 일정(실제 진행 기준)의 문제로만 판단하게 한다.
   원래 문제가 지금은 없으면 변경 없이 그렇다고 답한다. 원래 제안이 `progress_changed` 였으면 다녀온 곳은 바꾸지 않는다고 함께 알린다.
 
@@ -205,17 +207,17 @@ LLM은 일정을 직접 바꾸지 않는다. 결과는 두 종류의 **카드**�
 
 | 도구 | 동작 | 단계 kind |
 |---|---|---|
-| `search_places` | places `GET /places?mode=hybrid` (키워드 + 의미). `near_place_id`로 주변 검색(결과에 직선거리). 이름이 일치하는 결과에 `name_match`, 지역·종류·반경 조건 때문에 같은 이름 장소가 빠지면 조건 없이 다시 찾아 `name_matches_outside_filter`로 함께 준다 | `search` |
+| `search_places` | places `GET /places?mode=hybrid` (키워드 + 의미). `near_place_id`로 주변 검색(결과에 직선거리): 검색어가 있으면 hybrid 대신 `mode=keyword`(글자가 맞는 곳만)를 **가까운 순**으로 준다 — hybrid 는 반경 안 모든 장소에 의미 점수가 붙어 무관한 곳으로 채워진다. 글자가 맞는 곳이 없을 때만 뜻이 가까운 3곳을 가까운 순으로 주고 관련 없을 수 있다고 `hint`로 알린다. 이름이 일치하는 결과에 `name_match`, 지역·종류·반경 조건 때문에 같은 이름 장소가 빠지면 조건 없이 다시 찾아 `name_matches_outside_filter`로 함께 준다 | `search` |
 | `get_place` | 장소 상세 | `place` |
 | `view_plan` | 현재 일정 (초안 적용 상태) | `plan` |
-| `add_item` / `update_item` / `remove_item` / `update_plan` | 일정 변경 → **초안** | `edit` |
+| `add_item` / `update_item` / `remove_item` / `update_plan` | 일정 변경 → **초안**. `item_id`·`day`·`order`는 정수로 맞춘다(`"88"`도 88, 채움값 `"none"`은 생략). `add_item`의 `day`를 생략하면 여행 중에는 오늘, 아니면 1일차. `update_item`은 지금 값과 같은 인자(이미 없는 `start_time`의 `"none"` 등 채움값)를 빼고 검사·적용하고, 고정 시각을 실제로 풀면 결과에 알린다 | `edit` |
 | `add_rule` / `remove_rule` | 조건(규칙) → 초안 | `rule` |
 | `discard_changes` | 초안 비우기 | `edit` |
 | `review_plan` | 초안 일정을 검토해 문제 목록을 돌려준다 (일정 규칙 + 안전). `AGENT_REVIEW_ROUNDS` > 0 일 때만 | `review` |
 | `travel_time` | 장소 사이 실제 길 기준 도보·차량 시간 (일정 밖 장소끼리도). routing `POST /routing/matrix`. 차량은 주차·승하차 5분 포함, 직선거리 추정이면 `approx`. `check_hazards`면 도착 3곳까지 '지금 출발' 기준 안전: 경로선(`POST /routing/route`)과 도착지를 safety `POST /safety/assess`로 평가한 `safety_now`(경로·도착지 위험 단계, 예보·특보·센서) + 길찾기가 지금 막는 구역·우회 시간 `route_zones` | `route` |
 | `check_safety` | 초안 일정(방문 + 이동 구간)의 안전 단계. planner `POST /plans/{id}/safety/preview` (초안 없으면 `GET /safety`) | `safety` |
 | `safety_outlook` | 날짜별 날씨·바다 전망 (`date`). safety `GET /safety/outlook` | `safety` |
-| `recommend_places` | 추천 카드를 **바로** 만든다 (planner `POST /recommendations`) | `recommend` |
+| `recommend_places` | 추천 카드를 **바로** 만든다 (planner `POST /recommendations`). 후보의 `day`를 생략하면 여행 중에는 오늘, 아니면 1일차 | `recommend` |
 | `remember` | 메모리 저장 `{category, text, scope?, replace_id?}`. docent `POST /docent/memory` (근거 `source` = `chat:{session_id}`), `replace_id` 면 `PATCH`. 저장 뒤 같은 분류의 기존 항목을 `same_category` 로 돌려줘 충돌(짧게 vs 자세히)을 정리하게 한다 | `memory` |
 | `forget` | 메모리 항목 삭제 (docent `DELETE /docent/memory/{id}`) | `forget` |
 | `view_memory` | 메모리 전체 (id 포함, docent `GET /docent/memory?plan_id=`) | `recall` |
@@ -250,6 +252,9 @@ LLM은 일정을 직접 바꾸지 않는다. 결과는 두 종류의 **카드**�
     **안전 위험(danger) 방문·이동** (시간대 이동·실내 대체·수단 변경, 못 바꾸면 이유 설명)
   - `info`: 하루가 2시간 이상 일찍 끝남, **안전 주의(caution)** (사용자에게 알림), 안전 정보를 확인하지 못함
   - 넣지 않는 것: 직선거리 근사 경고(`travel_estimated`), 장소 정보 없음, 판단하지 않은 안전 항목(먼 날짜·데이터 장애 — 안전을 이유로 바꾸지 않는다)
+  - 동행 모드(§11)에서는 고칠 수 없는 지난 일을 검토하지 않는다: 지난 날 전체, 오늘 다녀온(`done`)·머무는(`visiting`) 곳까지의 차량 구간,
+    다녀온·머무는 곳끼리의 중복(앞으로의 항목과 겹치면 그 항목을 가리킨다), 이미 지났거나 남은 일정으로 닿지 않는 식사 시간대.
+    planner 위반(`violations`)은 그대로 옮긴다
   - 안전은 planner 안전 점검(`docs/planner/README.md` §7)을 그대로 쓴다. safety 에 접근할 수 없으면 검토는 계속하고 `info` 로 알린다.
 - 프롬프트는 "조사 → 초안 → `review_plan` → 수정 → 재검토 → 답변" 순서를 지키게 한다.
 - **검토 관문**: 일정을 고치는 턴에서 LLM이 답을 끝내려 하면 하네스가 직접 검토한다(`review` 단계).
@@ -598,9 +603,12 @@ trip 이 단계 3 이벤트(`delay`, `safety_raised`)에서 부른다. 앱은 �
 - 1일차 2026-10-10 14:20 (시뮬레이션 시각)
 - 위치: 물회집 (도착 13:40, 머무는 중)          // moving: "이동 중 (…에서 13:40 출발)", 위치 없음: "아직 받지 못함"
 - 다음: 카페 15:00 예정, 예상 도착 15:12 (12분 늦음)   // delay_minutes 음수면 "N분 여유", 없으면 "오늘 남은 일정 없음"
-- 오늘 남은 일정: 2곳 / 완료 1곳                 // 그날 항목의 진행 상태 (건너뜀 제외)
+- 오늘 남은 일정: 1곳 / 머무는 중 1곳 / 완료 1곳   // 그날 항목의 진행 상태 (건너뜀 제외, 머무는 곳은 따로)
 - 바꿀 수 없는 것: 완료한 항목, 지난 시각
 ```
+- '다음'의 예정 시각·늦음은 trip 이 **승인된 계획**으로 계산한 값이다. 승인 대기 제안이 있으면(현재 일정은 제안 적용 상태)
+  `— 승인된 계획 기준`을 붙이고, 현재 일정에서 그 장소 시작 시각이 다르면 `승인 대기 제안을 적용한 현재 일정에서는 15:40 시작`
+  (빠지면 `… 이 장소가 빠진다`)을 덧붙인다. 두 시각이 서로 다른 말을 하지 않게.
 - 동행 섹션: 답변은 **1~3문장**(현장에서 힐끗 본다), 2문단까지, 핵심 한두 단어만 굵게, 목록·표·제목 없이 (선제 턴은 §11.2 의 세 문단). 모든 도구 사용 가능, 기본 대상은 오늘 남은 일정, 원하면 다른 날도.
   "지금 가도 돼?"는 `travel_time`(`check_hazards`), 늦어지면 체류 줄이기·순서·빼기로 조정. 변경안은 하나, 다른 선택지는 말로 한 줄.
   사용자가 대기 중인 제안에 조건을 붙이면 `add_rule`로 등록하고 그 제안 위에서 고쳐 다시 제안한다.
@@ -608,9 +616,13 @@ trip 이 단계 3 이벤트(`delay`, `safety_raised`)에서 부른다. 앱은 �
   planner §8.4). 그래서 LLM 이 보는 시각·위반과 제안 카드의 전후 비교(`day_end` 등)가 현실과 맞는다. projection 이 실패하면(오늘이 기간 밖 등) 계획 기준.
 - 하네스가 변경 도구에서 **직접 거부**한다 (도구 오류 `not_allowed_during_trip`, LLM 이 이유를 받고 다른 방법을 찾는다):
   - 완료(`done`) 항목의 수정·삭제
+  - 지난 날 항목의 수정, 지난 날로 넣거나 옮기기 (`add_item`·`update_item`의 `day` < 오늘)
+  - 오늘 다녀온·머무는 곳보다 앞 순서로 넣거나 옮기기 (`order` ≤ 마지막 `done`·`visiting`의 자리. 생략하면 맨 뒤라 괜찮다)
   - 오늘 항목을 지금보다 이른 `start_time`으로 고정
   - 지금 머무는(`visiting`) 항목의 체류 시간·메모 외 변경
   - 진행 상태를 `visiting`·`done`으로 바꾸기 (진행 상태는 trip 이 위치로 기록한다. `skipped`는 일정 변경이라 허용)
+  - `item_id`·`day`·`order`는 정수로 맞춘 뒤 검사한다 (문자열 `"88"`로 우회되지 않게). `update_item`은 지금 값과 같은 인자를 뺀 뒤 검사한다
+    (채움값 `start_time: "none"` 때문에 머무는 곳의 체류 변경이 거부되지 않게)
 - 계획 모드에서는 위 제한이 없다.
 
 ### 11.3.1 현장 해설 (동행 모드 대화, 선제 턴 제외)

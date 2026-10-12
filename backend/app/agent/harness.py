@@ -504,6 +504,12 @@ async def run_turn(session_id: str, plan_id: int, user_text: str, llm: LLMProvid
                 await api.reject_proposal(plan_id, draft.base_proposal_id)
             except ApiError as e:
                 log.warning("session=%s 이어받은 제안 거절 실패: %s", sid, e)
+        elif repropose and (repropose.get("base_changed") or repropose.get("progress_changed")):
+            # 다시 제안했지만 새 변경이 없음 (원래 문제가 지금은 없는 등) -> 원래 제안은 승인할 수 없는 채 대기로 남지 않게 정리
+            try:
+                await api.reject_proposal(plan_id, repropose["id"])
+            except ApiError as e:
+                log.warning("session=%s 다시 제안 턴의 원래 제안 정리 실패: %s", sid, e)
 
         if not full_text:
             # 모델이 생각·도구 호출만 하고 답변 없이 끝난 경우에도 사용자에게는 항상 한마디 남긴다

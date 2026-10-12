@@ -21,6 +21,7 @@ from app.agent.review import LEVEL, review, safety_issues, safety_what, summariz
 
 MAX_TRAVEL_TARGETS = 10
 MAX_HAZARD_ROUTES = 3
+NEAR_FALLBACK = 3  # 근처 검색에서 글자가 맞는 곳이 없을 때 뜻으로 고를 수
 CAR_OVERHEAD_MIN = 5  # 주차·승하차 (planner 일정 계산과 같은 값)
 CONTENT_TYPES = ["관광지", "음식점", "문화시설", "쇼핑", "레포츠", "숙박", "축제공연행사"]
 RULE_TYPES = ["must_include", "exclude", "end_before", "max_travel_minutes", "max_walk_minutes",
@@ -81,7 +82,7 @@ TOOL_SPECS = [
     _fn("add_item", "일정에 장소를 추가한다 (변경 제안에 포함, 사용자 승인 후 반영). "
                     "시각은 앞 일정에 이어 자동 계산된다. 시각 고정이 꼭 필요하면 추가 후 update_item 으로.", {
         "place_id": {"type": "string", "description": "search_places 로 찾은 id"},
-        "day": {"type": "integer", "description": "n일차 (1부터, 기본 1)"},
+        "day": {"type": "integer", "description": "n일차 (1부터). 생략하면 여행 중에는 오늘, 아니면 1일차"},
         "order": {"type": "integer", "description": "그날 몇 번째 (1부터). 생략하면 맨 뒤"},
         "stay_minutes": {"type": "integer", "description": "체류 시간(분), 기본 60"},
         "memo": {"type": "string", "description": "추천 이유 등 짧은 메모"},
@@ -129,7 +130,7 @@ TOOL_SPECS = [
         "title": {"type": "string", "description": "카드 제목 (예: 비 올 때 갈 만한 실내 장소)"},
         "candidates": {"type": "array", "description": "1~10개", "items": {"type": "object", "properties": {
             "place_id": {"type": "string", "description": "search_places 로 찾은 id"},
-            "day": {"type": "integer", "description": "넣을 n일차 (기본 1)"},
+            "day": {"type": "integer", "description": "넣을 n일차. 생략하면 여행 중에는 오늘, 아니면 1일차"},
             "time_hint": {"type": "string", "description": "이 시각 무렵에 넣으면 좋음 HH:MM (선택)"},
             "stay_minutes": {"type": "integer", "description": "체류 시간(분), 기본 60"},
             "reason": {"type": "string", "description": "추천 이유 한 줄"},
@@ -394,11 +395,18 @@ class Toolbox:
                                "확인하지 못한 것은 모른다고 말한다.")
         self.web_used += 1
 
+    def _find_item(self, item_id) -> dict | None:
+        if not self.last_plan:
+            return None
+        return next((i for d in self.last_plan["days"] for i in d["items"] if i["id"] == item_id), None)
+
     def _guard(self, op: dict) -> None:
-        """동행 모드: 완료 항목·지난 시각·진행 상태는 바꾸지 않는다 (docs/agent/README.md §11.3)."""
-        if not self.trip or not self.last_plan or op["op"] not in ("update_item", "remove_item"):
+        """동행 모드: 완료 항목·지난 시각·지난 날·지난 순서·진행 상태는 바꾸지 않는다 (docs/agent/README.md §11.3).
+        id·day·order 는 call() 에서 정수로 맞춘 뒤 온다 ("88" 로 우회되지 않게)."""
+        if not self.trip or not self.last_plan or op["op"] not in ("add_item", "update_item", "remove_item"):
             return
-        item = next((i for d in self.last_plan["days"] for i in d["items"] if i["id"] == op["item_id"]), None)
+        today = self.trip["day"]
+        item = self._find_item(op["item_id"]) if "item_id" in op else None
         if item and item["status"] == "done":
             raise Refused("이미 다녀온(완료) 항목은 바꾸거나 지울 수 없습니다.")
         if op["op"] == "remove_item":
@@ -407,10 +415,32 @@ class Toolbox:
             raise Refused("진행 상태(visiting·done)는 앱이 위치로 기록합니다. 직접 바꾸지 마세요.")
         if item and item["status"] == "visiting" and set(op) - {"op", "item_id", "stay_minutes", "memo"}:
             raise Refused("지금 머무는 곳은 체류 시간(stay_minutes)과 메모만 바꿀 수 있습니다.")
+        if isinstance(today, int):
+            if item and item["day"] < today:
+                raise Refused(f"지난 날({item['day']}일차) 일정은 바꿀 수 없습니다. 오늘은 {today}일차입니다.")
+            if op.get("day") is not None and op["day"] < today:
+                raise Refused(f"지난 날({op['day']}일차)에는 넣거나 옮길 수 없습니다. 오늘은 {today}일차 이후로 하세요.")
         day = op.get("day") or (item["day"] if item else None)
         start = op.get("start_time")
-        if start and day == self.trip["day"] and start < self.trip["now"]:
+        if start and day == today and start < self.trip["now"]:
             raise Refused(f"지난 시각({start})으로 고정할 수 없습니다. 지금은 {self.trip['now']}입니다.")
+        if day == today and (op["op"] == "add_item" or op.get("order") is not None or op.get("day") is not None):
+            self._guard_order(op, item, day)
+
+    def _guard_order(self, op: dict, item: dict | None, day: int) -> None:
+        """오늘 넣거나 옮기는 자리가 다녀온·머무는 곳보다 앞이면 거부한다 (지난 시간대에 끼어들게 된다).
+        order 생략은 맨 뒤라 괜찮다. planner 의 _insert 처럼 옮기는 항목 자신을 뺀 그날 목록에서 센다."""
+        if op.get("order") is None:
+            return
+        days = [d for d in self.last_plan["days"] if d["day"] == day]
+        others = sorted((i for d in days for i in d["items"] if not (item and i["id"] == item["id"])),
+                        key=lambda i: i["order"])
+        passed = max((n for n, i in enumerate(others, start=1) if i["status"] in ("done", "visiting")), default=0)
+        if op["order"] <= passed:
+            last = others[passed - 1]
+            title = last["place"]["title"] if last.get("place") else last["place_id"]
+            raise Refused(f"오늘 {op['order']}번째 자리는 이미 지난 일정 사이입니다. 다녀온·머무는 곳('{title}') 뒤인 "
+                          f"{passed + 1}번째 이후로 넣거나 order 를 생략하세요.")
 
     async def current_view(self) -> dict:
         """초안이 있으면 초안 적용 결과, 없으면 확정 일정 (LLM 용 압축 표현). last_plan 도 갱신한다.
@@ -444,6 +474,17 @@ class Toolbox:
         if handler is None:
             return ToolOutcome(False, _dump({"error": f"알 수 없는 도구: {name}"}), "알 수 없는 도구")
         try:
+            if name in ("add_item", "update_item", "remove_item"):
+                # planner 는 "88" 도 숫자로 받는다. 동행 모드 거부 규칙이 같은 값으로 비교하게 정수로 맞춘다
+                for k in ("item_id", "day", "order"):
+                    if k not in args:
+                        continue
+                    if k != "item_id" and _blank(args[k]):
+                        del args[k]  # 채움값 "none" 등은 생략과 같다
+                    elif isinstance(args[k], bool) or not isinstance(args[k], int | float | str):
+                        raise ValueError(f"{k} 는 정수여야 합니다")
+                    else:
+                        args[k] = int(args[k])
             return await handler(**args)
         except (TypeError, ValueError, KeyError) as e:
             return ToolOutcome(False, _dump({"error": f"인자가 잘못됐습니다: {e}"}), "인자 오류")
@@ -457,13 +498,17 @@ class Toolbox:
     # ----- 조회 -----
     async def _t_search_places(self, query: str = "", content_type: str = "", area: str = "", near_place_id: str = "",
                                radius_m: int = 1500, limit: int = 8) -> ToolOutcome:
-        params = {"q": query, "content_type": content_type, "area": area, "limit": max(1, min(int(limit), 15))}
+        limit = max(1, min(int(limit), 15))
+        params = {"q": query, "content_type": content_type, "area": area, "limit": limit}
         if query.strip():
             params["mode"] = "hybrid"  # 이름 일치(키워드) + 뜻(임베딩)을 함께 반영
         if near_place_id:
             center = await self.api.get_place(near_place_id)
             params |= {"lat": center["lat"], "lng": center["lng"], "radius_m": radius_m}
-        r = await self.api.search_places(**params)
+        if near_place_id and query.strip():
+            r = await self._search_near(params, limit)
+        else:
+            r = await self.api.search_places(**params)
         q = _norm(query)
 
         def view(p: dict) -> dict:
@@ -487,7 +532,9 @@ class Toolbox:
             out["hint"] = (f"'{query}' 와 이름이 같은 장소는 검색 조건({cond}) 밖에 있다 (name_matches_outside_filter). "
                            "사용자가 말한 곳이 이것이면 이 place_id 를 쓴다. items 는 조건 안의 다른 장소다.")
         elif q and items and not any(i.get("name_match") for i in items):
-            out["hint"] = ("이름이 일치하는 장소는 없다. items 는 뜻이 비슷한 장소다. 사용자가 특정 가게 이름을 말했다면 "
+            what = ("반경 안에서 검색어가 소개·태그에 들어간 장소(가까운 순)" if near_place_id and not r.get("near_fallback")
+                    else "뜻이 비슷한 장소")
+            out["hint"] = (f"이름이 일치하는 장소는 없다. items 는 {what}다. 사용자가 특정 가게 이름을 말했다면 "
                            "조건(area 등) 없이 이름만으로 다시 찾아보고, 그래도 없으면 데이터에 없다고 말한다.")
         if not items and not outside:
             out["hint"] = "결과가 없습니다. 다른 표현이나 content_type/area 만으로 다시 찾아보세요."
@@ -495,11 +542,26 @@ class Toolbox:
         if outside:
             o = outside[0]
             return ToolOutcome(True, _dump(out), f"{o['title']} ({o['area']}, 조건 밖)")
+        if r.get("near_fallback"):
+            out["hint"] = ("주변 반경에서 검색어가 글자로 맞는 곳이 없어, 뜻이 가까운 몇 곳을 가까운 순으로 골랐다. "
+                           "검색어와 관련 없는 곳일 수 있으니 이름·종류를 보고 고르고, 필요하면 get_place 로 확인한다.")
         first = next((i for i in items if i.get("name_match")), items[0])
         detail = first["title"] + (f" 외 {len(items) - 1}곳" if len(items) > 1 else "")
         return ToolOutcome(True, _dump(out), detail)
 
-    async def _t_get_place(self, place_id: str) -> ToolOutcome:
+    async def _search_near(self, params: dict, limit: int) -> dict:
+        """근처 검색 (near_place_id + query): 글자가 맞는 곳(keyword)만 가까운 순으로. hybrid 는 반경 안 모든 장소에
+        의미 점수가 붙어 limit 까지 무관한 곳으로 채워지므로 쓰지 않는다. 글자가 맞는 곳이 하나도 없을 때만 뜻이 가까운
+        상위 몇 곳(NEAR_FALLBACK)을 가까운 순으로 준다 (fallback 표시)."""
+        r = await self.api.search_places(**{**params, "mode": "keyword"})
+        items = r["items"]
+        fallback = False
+        if not items:
+            r = await self.api.search_places(**{**params, "limit": min(limit, NEAR_FALLBACK)})
+            items, fallback = r["items"], bool(r["items"])
+        far = float("inf")
+        items = sorted(items, key=lambda p: far if p.get("distance_m") is None else p["distance_m"])
+        return {"items": items, "near_fallback": fallback}
         p = await self.api.get_place(place_id)
         keys = ["title", "content_type", "area", "addr", "open_hours", "rest_date", "fee", "menu"]
         out = {"place_id": p["id"], **{k: p[k].strip() if isinstance(p[k], str) else p[k] for k in keys if p.get(k)}}
@@ -734,7 +796,7 @@ class Toolbox:
         """지금 초안을 검토 (하네스의 검토 관문도 이걸 쓴다). 일정 규칙 검토 + 안전 점검(위험·주의)."""
         await self.current_view()
         self.reviewed_rev = self.rev
-        issues = review(self.last_plan)
+        issues = review(self.last_plan, self.trip)
         try:
             issues += safety_issues(await self.api.check_safety(self.plan_id, self.draft.ops))
         except ApiError:
@@ -767,9 +829,16 @@ class Toolbox:
         detail = label + (f" · 총 이동 {delta:+d}분" if delta else "")
         return ToolOutcome(True, _dump({"result": note, "plan_after": view}), detail, history=_dump(short))
 
-    async def _t_add_item(self, place_id: str, day: int = 1, order: int | None = None, stay_minutes: int = 60,
+    def _default_day(self) -> int:
+        """day 를 생략했을 때: 동행 모드면 오늘, 아니면 1일차."""
+        day = (self.trip or {}).get("day")
+        return day if isinstance(day, int) and day >= 1 else 1
+
+    async def _t_add_item(self, place_id: str, day: int | None = None, order: int | None = None, stay_minutes: int = 60,
                           memo: str = "", travel_mode: str | None = None, **ignored) -> ToolOutcome:
         # 모델이 없는 인자(start_time, near_place_id 등)를 붙여도 실패시키지 않되, 무시했다고 알려준다
+        if day is None:
+            day = self._default_day()
         op = {"op": "add_item", "place_id": place_id, "day": day, "order": order, "stay_minutes": stay_minutes,
               "memo": memo}
         if travel_mode and not _blank(travel_mode) and travel_mode != "default":
@@ -798,7 +867,20 @@ class Toolbox:
             changes["start_time"] = None
         if "travel_mode" in changes and (changes["travel_mode"] == "default" or _blank(changes["travel_mode"])):
             changes["travel_mode"] = None
-        outcome = await self._stage({"op": "update_item", "item_id": item_id, **changes}, "")
+        notice = ""
+        item = self._find_item(item_id)
+        if item:
+            # 지금 값과 같은 인자(모델이 채움값으로 붙인 start_time "none" 등)는 빼고 검사·적용한다.
+            # 그래야 머무는 곳의 체류 변경이 채움값 때문에 거부되지 않는다 (docs/agent/README.md §11.3)
+            moved = "day" in changes and changes["day"] != item.get("day")
+            changes = {k: v for k, v in changes.items() if item.get(k) != v or (k == "order" and moved)}
+            if not changes:
+                out = {"result": "바뀌는 값이 없어 초안을 바꾸지 않았다 (이미 그 값이다).", "item_id": item_id}
+                return ToolOutcome(True, _dump(out), f"{_item_title(self.last_plan, item_id)} 그대로")
+            if "start_time" in changes and changes["start_time"] is None:
+                notice = (f". 주의: 고정 시각 {item['start_time']} 을 해제했다 (앞 일정에 이어 자동 계산). "
+                          "의도가 아니면 update_item 으로 다시 고정한다")
+        outcome = await self._stage({"op": "update_item", "item_id": item_id, **changes}, "", notice)
         outcome.detail = f"{_item_title(self.last_plan, item_id)} 수정" + outcome.detail
         return outcome
 
@@ -848,7 +930,7 @@ class Toolbox:
                 raise ValueError("각 후보는 place_id 가 있는 객체여야 합니다")
             keep = {k: c[k] for k in ("place_id", "day", "time_hint", "stay_minutes", "reason")
                     if not _blank(c.get(k))}
-            keep.setdefault("day", 1)
+            keep.setdefault("day", self._default_day())
             cleaned.append(keep)
         rec = await self.api.create_recommendation(self.plan_id, str(title)[:100] or "추천", cleaned, self.session_id)
         # place_id 까지 남겨야 다음 턴에 "이렇게 코스 짜줘"를 다시 검색하지 않고 바로 처리할 수 있다

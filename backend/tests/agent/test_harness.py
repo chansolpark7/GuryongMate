@@ -329,6 +329,27 @@ def test_repropose(client, session):
     err(client.post(f"/agent/sessions/{sid}/proposals/{p1['id']}/repropose", headers=H), 409, "proposal_not_pending")
 
 
+def test_repropose_without_changes_closes_original(client, session):
+    """A9: 다시 제안했는데 새 변경이 없으면, 승인할 수 없는(base_changed) 원래 제안을 대기로 남기지 않고 거절로 정리한다."""
+    sid, pid = session
+    p1 = last(chat(client, sid, "점심 넣어줘", [[("add_item", {"place_id": "p-food"})], ["제안"]]), "proposal")
+    ok(client.post(f"/planner/plans/{pid}/items", json={"place_id": "p-food"}, headers=H), 201)  # 그사이 직접 넣음
+    llm.script = [[("view_plan", {})], ["이미 들어 있어서 바꿀 게 없어요."]]
+    events = sse(client.post(f"/agent/sessions/{sid}/proposals/{p1['id']}/repropose", headers=H))
+    assert "proposal" not in dict(events) and last(events, "done")["text"] == "이미 들어 있어서 바꿀 게 없어요."
+    assert ok(client.get(f"/planner/plans/{pid}/proposals/{p1['id']}", headers=H))["status"] == "rejected"
+    assert not [p for p in ok(client.get(f"/planner/plans/{pid}/proposals?status=pending", headers=H))]
+
+
+def test_repropose_without_changes_keeps_approvable_original(client, session):
+    """승인할 수 있는 제안(일정이 그대로)은 다시 제안 턴이 변경 없이 끝나도 그대로 대기."""
+    sid, pid = session
+    p1 = last(chat(client, sid, "점심 넣어줘", [[("add_item", {"place_id": "p-food"})], ["제안"]]), "proposal")
+    llm.script = [["그대로 두면 돼요."]]
+    sse(client.post(f"/agent/sessions/{sid}/proposals/{p1['id']}/repropose", headers=H))
+    assert ok(client.get(f"/planner/plans/{pid}/proposals/{p1['id']}", headers=H))["status"] == "pending"
+
+
 def test_plan_changed_during_turn(client, session):
     sid, pid = session
 
