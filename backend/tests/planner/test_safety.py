@@ -560,3 +560,43 @@ def test_estimated_leg_does_not_clear_alert(client, sc, watcher):
     sc.routes.paths.clear()
     sc.routes.road = False
     assert not [x for x in watcher.tick(force=True).alerts if x.plan_id == p["id"]]
+
+
+# ---------- 로직 버그 점검 2026-10-12 A2·S5: 여행 중 점검은 실제 진행 + 지금 기준 ----------
+
+@pytest.fixture
+def planner_now():
+    from app.planner import clock
+    from app.planner.clock import FixedClock
+    saved, clock._clock = clock._clock, FixedClock(NOW)
+    yield
+    clock._clock = saved
+
+
+def today_trip(client) -> tuple[int, int, int]:
+    """오늘 08:00 시작: 가옥거리(60분) -> 방파제(20분). 계획 기준이면 방파제가 10:00(지금) 전에 끝난다."""
+    p = new_plan(client, start_date=NOW.date().isoformat(), day_start="08:00", day_end="20:00")
+    for pid, stay in (("s-street", 60), ("s-breakwater", 20)):
+        ok(client.post(f"/planner/plans/{p['id']}/items", json={"place_id": pid, "stay_minutes": stay}, headers=H), 201)
+    plan = get_plan(client, p["id"])
+    return p["id"], item_id(plan, "s-street"), item_id(plan, "s-breakwater")
+
+
+def test_safety_follows_live_progress(client, sc, watcher, planner_now):
+    """A2·S5: 가옥거리에 늦게 도착해 아직 머무는 중이면 방파제 방문은 지금 이후다. GET /safety·주기 점검이 계획 시각으로
+    보고 '지난 일정'(past)으로 빼면 안 된다 (safety/preview 와 같은 기준)."""
+    pid, street, bw = today_trip(client)
+    assert by_place(check(client, pid))["s-breakwater"]["unassessed_reason"] == "past"  # 기록 없음: 계획 기준
+    live = by_place(ok(client.get(f"/planner/plans/{pid}/safety", params={"live": True}, headers=H)))  # 동행 중 (A1)
+    assert live["s-breakwater"]["unassessed_reason"] is None and live["s-breakwater"]["start_at"] >= "10:00"
+
+    ok(client.post(f"/planner/plans/{pid}/items/{street}/progress", json={"status": "visiting", "at": "08:30"}, headers=H))
+    bw_visit = by_place(check(client, pid))["s-breakwater"]
+    assert bw_visit["unassessed_reason"] is None and bw_visit["start_at"] >= "10:00"
+
+    seen: list[dict] = []
+    assess = sc.assess
+    sc.assess = lambda vs: (seen.extend(vs), assess(vs))[1]
+    watcher.tick(force=True)
+    sent = [v for v in seen if v.get("key") == str(bw)]
+    assert sent and sent[0]["start"] >= "10:00"
