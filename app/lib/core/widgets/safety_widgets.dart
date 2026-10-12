@@ -165,8 +165,12 @@ class SkeletonChip extends StatelessWidget {
 
 /// "10/10 12:00–15:00"
 String windowLabel(TimeWindow w) {
-  final s = w.start.toLocal(), e = w.end.toLocal();
+  final s = kst(w.start), e = kst(w.end);
   return '${two(s.month)}/${two(s.day)} ${two(s.hour)}:${two(s.minute)}–${two(e.hour)}:${two(e.minute)}';
 }
 
-String hhmm(DateTime t) => '${two(t.toLocal().hour)}:${two(t.toLocal().minute)}';
+/// 안전 시각을 계획 지역(KST) 벽시계로. 시간대가 붙은 값(UTC 로 읽힘)은 +9시간, 시간대 없는 값은 이미 벽시계라 그대로.
+/// 기기 시간대(toLocal)를 쓰면 KST 가 아닌 브라우저에서 Today(벽시계)와 어긋난다 (audit-2026-10-12 F12).
+DateTime kst(DateTime t) => t.isUtc ? t.add(const Duration(hours: 9)) : t;
+
+String hhmm(DateTime t) => '${two(kst(t).hour)}:${two(kst(t).minute)}';

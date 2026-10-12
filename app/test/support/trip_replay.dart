@@ -73,7 +73,10 @@ class TripReplay {
         if (e['for_event'] != null) session = _copy(r);
         if (route.endsWith('/accept') && r is Map && r['plan'] != null) {
           final keep = {for (final i in _items) i['id']: i};
+          final progress = plan['progress_version'] as int? ?? 0;
           plan = _copy(r['plan']);
+          // 재생이 도착·출발마다 올린 진행 version 은 서버처럼 내려가지 않는다 (앱은 더 작은 version 응답을 옛 것으로 버린다)
+          if ((plan['progress_version'] as int? ?? 0) < progress) plan['progress_version'] = progress;
           for (final i in _items) {
             final old = keep[i['id']];
             if (old != null && i['status'] == 'planned' && old['status'] != 'planned') {
@@ -113,6 +116,10 @@ class TripReplay {
 
   void _install() {
     gw.on('GET /planner/plans/{id}', (_) => Res.json(200, plan));
+    // 동행 중 계획 version 가벼운 확인 (목록의 version·progress_version)
+    gw.on('GET /planner/plans', (_) => Res.json(200, [
+          {...plan, 'item_count': _items.length}..remove('days'),
+        ]));
     gw.on('GET /trip/plans/{id}/state', (_) => Res.json(200, state));
     gw.on('GET /trip/plans/{id}/events', (r) {
       final after = int.tryParse(r.query['after'] ?? '0') ?? 0;

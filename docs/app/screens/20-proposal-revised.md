@@ -23,7 +23,7 @@ Figma: 화면 `73:3115` · Spec `73:3336` · 흐름 F5
 | added | 추가 | Green |
 | removed | 삭제 | Red |
 | moved | 이동 | Blue |
-| updated | 변경 (같은 장소가 다른 장소로 바뀐 것처럼 보이면 교체 — 같은 order 에서 removed+added 쌍) | Blue / Purple(교체) |
+| updated | 변경 (같은 장소가 다른 장소로 바뀐 것처럼 보이면 교체 — 같은 order 에서 removed+added 쌍. 같은 `place_id` 의 removed+added 는 자리와 상관없이 "이동" 한 줄: 이전 시각 → 새 시각, audit-2026-10-12 F10) | Blue / Purple(교체) |
 | rule_added · rule_removed | 규칙 | Purple |
 | plan | 설정 | Blue |
 | day_end | 카드 아래 "종료" 행으로 따로 | — |
