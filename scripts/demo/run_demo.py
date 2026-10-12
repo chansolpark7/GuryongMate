@@ -50,6 +50,9 @@ HAZARD_VIA = [35.9912, 129.5572]  # 카페 가는 길에 지나는 구룡포수�
 # 장면 ④ 폭풍이 그치는 시각 (가상 날씨 시간표 15:20~17:00). 수협 앞 near_hazard(약 16:33) 뒤, 카페 도착 무렵
 STORM_UNTIL = "17:00"
 PLAN_NOW = "2026-10-09T10:00:00+09:00"  # 장면 ①: 여행 전날
+# 장면 ③: 다음 일정이 이만큼(분) 늦으면 trip 이 일정 밀림 선제 턴을 낸다 (서버 TRIP_BEHIND_MIN 기본값, docs/trip/README.md §3.2).
+# 가옥거리(규칙 B: 늦게 온 곳은 예정 종료에 떠난다고 봄)에 예정 종료 + 이만큼 머물면 밀림 알림, 그 2분 뒤 멈춘다 (18:00 초과는 13:53 부터)
+BEHIND_MIN = 15
 # 장면 ① 에서 Agent 가 조건을 되물을 때의 답 (페르소나: 역사·사진 / 음식·바다, 오래 걷기 부담. PROJECT.md §3)
 ANSWER = ("엄마가 오래 걷는 건 힘들어하셔. 역사랑 사진, 바다랑 과메기 같은 음식을 좋아해. 일본인 가옥거리 보고 구룡포항에서 점심 먹고, "
           "과메기문화관이랑 북방파제 들렀다가 마지막엔 바다 보이는 카페파도에서 쉬고 싶어. 시간은 지금대로 12시 반부터 6시 전까지.")
@@ -392,16 +395,18 @@ class Demo:
             Step("s2_shorter", "장면 ②", "«다음부터는 더 짧게 해줘요» → 선호 기억", [
                 "채팅: '기억했어요' 메모리 칩 (해설은 핵심만 짧게)",
             ], self.s2_shorter),
-            Step("s3_delay", "장면 ③", "가옥거리에 30분 더 머묾 → 지연 감지 → Agent 가 먼저 제안", [
-                "13:53 Agent 메시지가 먼저 옴: 18:01 종료로 18시 규칙 위반 + 추천안 1개 + 다른 방법 한 줄",
-                "제안 카드 (각본: 과메기문화관 빼기 / 실제 LLM 은 예: 카페 체류 줄이기 — 문장·안은 매번 다를 수 있음)",
+            Step("s3_delay", "장면 ③", "가옥거리에 더 머묾 → 일정 밀림 감지 → Agent 가 먼저 제안", [
+                "Today: 다음 일정 칩이 늦음으로 (구룡포항 13:40 예정 → 13:55, 15분 늦음)",
+                "13:45 Agent 메시지가 먼저 옴: 구룡포항 도착이 15분쯤 늦어질 것 + 추천안 1개 + 다른 방법 한 줄",
+                "제안 카드 (각본: 가옥거리 60 → 95분 + 구룡포항 점심 50 → 30분, 17:52 종료 / 다른 방법: 과메기문화관 빼기."
+                " 실제 LLM 은 문장·안이 매번 다를 수 있음)",
             ], self.s3_delay),
             Step("s3_keep", "장면 ③", "«과메기문화관은 유지해줘» → 다시 제안", [
-                "채팅: 조건 반영(과메기문화관 꼭 포함) → 새 제안 (각본: 구룡포항 50분 → 30분, 17:43 종료)",
+                "채팅: 조건 반영(과메기문화관 꼭 포함) → 새 제안 (각본: 앞의 안 + 규칙 '과메기문화관은 꼭 가기', 17:52 종료)",
                 "이전 제안 카드는 '대체됨'",
             ], self.s3_keep),
             Step("s3_accept", "장면 ③", "새 제안 승인 → 플래너·지도 갱신", [
-                "플래너: 구룡포항 30분, 과메기문화관 유지 (18시 전 종료)",
+                "플래너: 가옥거리 95분 · 구룡포항 30분, 과메기문화관 유지, 17:52 종료 (승인한 일정 기준이라 늦음 표시가 사라짐)",
             ], self.s3_accept),
             Step("s3_move", "장면 ③→④", "구룡포항 점심 → 과메기문화관 (이동)", [
                 "지도: 가옥거리 → 구룡포항 → 과메기문화관으로 이동 (출발·도착 알림)",
@@ -611,10 +616,15 @@ class Demo:
 
     # ----- 장면 ③ -----
     def s3_delay(self) -> None:
-        self.stay_until("13:55")
-        self.expect({"type": "delay", "level": 3})
+        # 가옥거리 예정 종료(13:30) + 15분에 밀림 알림 -> 그 2분 뒤까지 머문다 (하루 초과 13:53 보다 먼저 승인까지 가도록)
+        house = next(i for i in self.c.get_plan(self.plan)["days"][0]["items"] if i["place_id"] == HOUSE)
+        alert = at(house["end_at"]) + timedelta(minutes=BEHIND_MIN)
+        self.play([{"at": f"{alert:%H:%M}"}, {"at": f"{alert + timedelta(minutes=2):%H:%M}"}])
+        self.expect({"type": "delay", "level": 3, "reason": "behind_schedule"})
+        self.expect({"type": "delay", "reason": "violations", "not": True})
         ev = self.show_proactive("delay")
         self.check(bool(ev and (ev.get("agent") or {}).get("proposal_id")), "선제 턴 제안 카드")
+        self.check(len(self.events_since("delay")) == 1, "지연 선제 턴 한 번 (일정 밀림)")
 
     def s3_keep(self) -> None:
         old = self.pending_proposal()
@@ -627,11 +637,14 @@ class Demo:
         p = self.show_plan_brief()
         self.check(bool(r) and any(i["place_id"] == MUSEUM and i["status"] != "skipped" for i in p["days"][0]["items"]),
                    "과메기문화관 유지")
+        self.check(bool(p["days"][0].get("end_at")) and p["days"][0]["end_at"] <= "18:00", "18시 전 종료")
 
     def s3_move(self) -> None:
         self.play([{"at": "14:00"}, {"walk_to": PORT, "stay": 30}, {"walk_to": MUSEUM, "stay": 5}, {"at": "15:18"}])
         self.expect({"type": "arrived", "place_id": PORT})
         self.expect({"type": "arrived", "place_id": MUSEUM})
+        # 승인한 일정 기준으로 새로 세므로(docs/trip/README.md §3.2) 이동 중에 지연 선제 턴이 다시 나오지 않는다
+        self.check(len(self.events_since("delay")) == 1, "두 번째 지연 알림 없음")
 
     # ----- 장면 ④ -----
     def s4_live(self) -> None:
@@ -690,6 +703,7 @@ class Demo:
         # planner 경고 완화는 없지만, trip 이 safety 상황(특보·구역)이 평상시로 돌아온 것을 보고 safety_eased 를 한 번 낸다
         self.expect({"type": "safety_eased", "level": 1})
         self.check(len(self.events_since("safety_eased", end)) == 1, "상황 해제 알림 한 번 (중복 없음)")
+        self.check(len(self.events_since("delay")) == 1, "장면 ③·④ 의 지연 선제 턴은 한 번뿐")
 
     def finish(self) -> None:
         trip_cli.print_state(self.c.trip_state(self.plan))

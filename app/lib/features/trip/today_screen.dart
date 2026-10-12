@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' show max, min;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
@@ -82,7 +83,17 @@ class _TodayScreenState extends State<TodayScreen> {
   /// 위 막대(Pill·데모 칩·안내 카드) — 작은 창이 그 아래로만 뜨게 높이를 잰다.
   final _topBar = GlobalKey();
 
-  static const _fabTop = 222.0;
+  /// 패널 높이 (화면 비율, 시트 알림으로 갱신). 바뀌면 버튼·작은 창만 다시 그린다.
+  final _extent = ValueNotifier<double>(_half);
+  Size _size = Size.zero;
+
+  static const _half = 0.49;
+
+  /// 패널을 이보다 펼치면(0.86 쪽) 버튼을 숨긴다 — 접힘 0.19 · 반 0.49 에서는 보인다.
+  static const _fabHideAt = 0.6;
+
+  /// 오른쪽 버튼 칸: 현재 위치(44) · 10 · AI(56), 패널 위 12 (Map 과 같은 순서·간격).
+  static const _fabW = 56.0, _fabH = 44.0 + 10 + 56, _fabGap = 12.0;
 
   /// 14-S2: 지금 위치 → 첫 장소 도보 시간.
   int? _firstWalk;
@@ -100,6 +111,7 @@ class _TodayScreenState extends State<TodayScreen> {
   @override
   void dispose() {
     _tick?.cancel();
+    _extent.dispose();
     super.dispose();
   }
 
@@ -176,8 +188,26 @@ class _TodayScreenState extends State<TodayScreen> {
     return top + 11 + (box != null && box.hasSize ? box.size.height : 48) + 8;
   }
 
-  /// 오른쪽 AI FAB(56) + 현재 위치(44) 버튼 칸 (지도 크기 기준).
-  List<Rect> _fabRect(Size map) => [Rect.fromLTWH(map.width - 16 - 56, MediaQuery.paddingOf(context).top + _fabTop, 56, 56 + 12 + 44)];
+  /// 오른쪽 현재 위치(44) + AI(56) 버튼 칸 — 패널 위 가장자리에 붙어 함께 움직인다 (화면 = 지도 크기 기준).
+  /// 패널을 크게 펼치거나 위 막대(Pill·안내 카드)에 닿을 만큼 올라가면 숨긴다 (null).
+  Rect? _fabBox(Size size, double extent) {
+    if (size.isEmpty || extent > _fabHideAt) return null;
+    final r = _fabAt(size, extent);
+    return r.top < _topBarBottom() ? null : r;
+  }
+
+  /// 패널 위 가장자리에 붙인 버튼 칸 (보이든 숨든).
+  static Rect _fabAt(Size size, double extent) => Rect.fromLTWH(size.width - 16 - _fabW, size.height * (1 - extent) - _fabGap - _fabH, _fabW, _fabH);
+
+  /// 작은 창이 피할 칸 (버튼이 숨어 있으면 없음).
+  List<Rect> _fabRect(Size map) => [?_fabBox(map, _extent.value)];
+
+  /// 오버레이(도착 카드·미리보기·토스트)가 버튼을 피하게 지금 배치를 알린다. 프레임 뒤에만 (오버레이가 다시 그려진다).
+  void _publishChrome(TripController t) {
+    if (!mounted) return;
+    final v = (barBottom: _topBarBottom(), fab: _fabBox(_size, _extent.value));
+    if (t.todayChrome.value != v) t.todayChrome.value = v;
+  }
 
   /// 핀·남은 일정 행 → 지도에서 그 핀 + 작은 창 (탭 이동 없음, redesign §2.2).
   void _focus(PlanItem i) {
@@ -230,7 +260,8 @@ class _TodayScreenState extends State<TodayScreen> {
     final items = _items(t);
     final done = items.where((i) => i.status == 'done').toList();
     final current = s != null && s.visiting ? t.item(s.currentItemId) : null;
-    final next = t.item(s?.nextItemId) ?? items.where((i) => i.status == 'planned').firstOrNull;
+    // 머무는 중이면 서버(projection)의 다음만 — 순서를 바꿔 뒤 장소에 와 있으면 건너뛴 앞 항목은 '다음'이 아니다 (audit-2026-10-12 B7)
+    final next = t.item(s?.nextItemId) ?? (s?.visiting == true ? null : items.where((i) => i.status == 'planned').firstOrNull);
     final remaining = items.where((i) => i.status == 'planned').toList();
     final moving = s?.moving == true;
     final started = items.any((i) => i.status != 'planned');
@@ -251,9 +282,12 @@ class _TodayScreenState extends State<TodayScreen> {
     if (beforeFirst) _ensureFirstWalk(t, next);
     final popup = _popup == null ? null : items.where((i) => i.id == _popup).firstOrNull;
     final top = MediaQuery.paddingOf(context).top;
+    afterFrame(() => _publishChrome(t));
 
     return Scaffold(
-      body: Stack(children: [
+      body: LayoutBuilder(builder: (context, box) {
+        _size = box.biggest;
+        return Stack(children: [
         Positioned.fill(child: _buildMap(c, t, items, done, current, target, popup)),
         Positioned(
           left: 16,
@@ -281,34 +315,52 @@ class _TodayScreenState extends State<TodayScreen> {
             ],
           ]),
         ),
-        Positioned(
-          right: 16,
-          top: top + _fabTop,
-          child: Column(children: [
-            AiFab(onTap: t.openAiFromFab, hasSuggestion: t.hasSuggestion),
-            const SizedBox(height: 12),
-            _RoundButton(
-              icon: Icons.my_location,
-              tooltip: '현재 위치',
-              onTap: () {
-                final l = _loc(t);
-                if (l != null && _ready) _map.move(l, 16.5);
-              },
-            ),
-          ]),
+        // 현재 위치 · AI 버튼: 패널 위 가장자리에 붙어 함께 움직이고, 크게 펼치면 투명 + 눌리지 않음 (Map 과 같은 방식, 2026-10-12)
+        ValueListenableBuilder<double>(
+          valueListenable: _extent,
+          builder: (context, extent, _) {
+            final fab = _fabBox(box.biggest, extent);
+            final at = fab ?? _fabAt(box.biggest, extent.clamp(0, _fabHideAt)); // 숨을 때는 사라지기 시작한 자리에서 흐려진다
+            return Positioned(
+              left: at.left,
+              top: at.top,
+              width: _fabW,
+              child: IgnorePointer(
+                ignoring: fab == null,
+                child: AnimatedOpacity(
+                  opacity: fab == null ? 0 : 1,
+                  duration: const Duration(milliseconds: 150),
+                  child: Column(key: const ValueKey('today-fab'), children: [
+                    _RoundButton(
+                      icon: Icons.my_location,
+                      tooltip: '현재 위치',
+                      onTap: () {
+                        final l = _loc(t);
+                        if (l != null && _ready) _map.move(l, 16.5);
+                      },
+                    ),
+                    const SizedBox(height: 10),
+                    AiFab(onTap: t.openAiFromFab, hasSuggestion: t.hasSuggestion),
+                  ]),
+                ),
+              ),
+            );
+          },
         ),
         NotificationListener<DraggableScrollableNotification>(
-          // 패널을 펼치면 노트 목록을 가볍게 다시 읽는다 (10초 안에 읽었으면 건너뜀)
           onNotification: (n) {
+            _extent.value = n.extent;
+            afterFrame(() => _publishChrome(t));
+            // 패널을 펼치면 노트 목록을 가볍게 다시 읽는다 (10초 안에 읽었으면 건너뜀)
             if (n.extent > 0.6) t.loadGuideNotes(minGap: const Duration(seconds: 10));
             return false;
           },
           child: DraggableScrollableSheet(
-            initialChildSize: 0.49,
+            initialChildSize: _half,
             minChildSize: 0.19,
             maxChildSize: 0.86,
             snap: true,
-            snapSizes: const [0.19, 0.49, 0.86],
+            snapSizes: const [0.19, _half, 0.86],
             builder: (context, scroll) => Container(
               decoration: const BoxDecoration(
                 color: AppColors.surface,
@@ -355,6 +407,7 @@ class _TodayScreenState extends State<TodayScreen> {
                       items: beforeFirst ? items : remaining.where((i) => i.id != next?.id || moving).toList(),
                       total: beforeFirst,
                       end: (t.today?.endAt ?? items.lastOrNull?.endAt),
+                      expected: s.expected,
                       safety: c.safety,
                       selected: popup?.id,
                       onTap: _focus,
@@ -377,7 +430,8 @@ class _TodayScreenState extends State<TodayScreen> {
             ),
           ),
         ),
-      ]),
+      ]);
+      }),
     );
   }
 
@@ -453,11 +507,16 @@ class _TodayScreenState extends State<TodayScreen> {
         // 사용자 위치는 장소 Pin 위에 (새 위치로 부드럽게 옮겨 간다)
         if (loc != null) UserLocationLayer(point: loc, accuracy: acc, duration: t.markerGlide, dotKey: const ValueKey('today-location')),
         if (popup != null)
-          _PopupLayer(
-            point: _pt(popup),
-            // 위 막대(Pill·안내 카드) 아래 · 오른쪽 AI·현재 위치 버튼 밖으로 (2026-10-11)
-            minTop: _topBarBottom(),
-            avoid: _fabRect,
+          // 버튼이 패널을 따라 움직이므로 패널 높이가 바뀌면 자리를 다시 고른다
+          ValueListenableBuilder<double>(
+            valueListenable: _extent,
+            builder: (context, _, child) => _PopupLayer(
+              point: _pt(popup),
+              // 위 막대(Pill·안내 카드) 아래 · 오른쪽 AI·현재 위치 버튼 밖으로 (2026-10-11)
+              minTop: _topBarBottom(),
+              avoid: _fabRect,
+              child: child!,
+            ),
             child: _PlacePopup(
               item: popup,
               number: items.indexOf(popup) + 1,
@@ -533,12 +592,14 @@ class _RoundButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Tooltip(
         message: tooltip,
-        child: Material(
-          color: AppColors.surface,
-          shape: const CircleBorder(),
-          elevation: 3,
-          shadowColor: const Color(0x33111827),
-          child: InkWell(customBorder: const CircleBorder(), onTap: onTap, child: SizedBox(width: 44, height: 44, child: Icon(icon, color: AppColors.text))),
+        // Map 의 버튼과 같은 모양 (그림자 · 아이콘 20)
+        child: Container(
+          decoration: const BoxDecoration(shape: BoxShape.circle, boxShadow: AppShadow.floating),
+          child: Material(
+            color: AppColors.surface,
+            shape: const CircleBorder(),
+            child: InkWell(customBorder: const CircleBorder(), onTap: onTap, child: SizedBox(width: 44, height: 44, child: Icon(icon, size: 20, color: AppColors.text))),
+          ),
         ),
       );
 }
@@ -686,7 +747,15 @@ class _GuideCard extends StatelessWidget {
 
 int _nowMin(DateTime now) => now.hour * 60 + now.minute;
 
-/// ETA 칩 (Components_Companion): 제시간 / n분 여유 (Green) · n분 늦음 (Amber) · HH:MM 종료 · 규칙 넘음 (Red, 새 위반 + 대기 제안).
+/// 운영시간 원문에 시간 범위가 정확히 하나일 때 여는 시각(분). 그 외는 판단하지 않는다 (planner validation.open_range 와 같은 규칙).
+int? _opensAt(String? openHours) {
+  if (openHours == null || openHours.contains('입실') || openHours.contains('퇴실')) return null;
+  final m = RegExp(r'(\d{1,2}):(\d{2})\s*[~\-]\s*(\d{1,2}):(\d{2})').allMatches(openHours).toList();
+  if (m.length != 1) return null;
+  return int.parse(m.first.group(1)!) * 60 + int.parse(m.first.group(2)!);
+}
+
+/// ETA 칩 (Components_Companion): 제시간 / n분 여유 (Green) · n분 늦음 (Amber) · HH:MM 종료 · 규칙 넘음 / n분 늦음 (Red, 대기 중인 지연 제안).
 class EtaChip extends StatelessWidget {
   const EtaChip({super.key, required this.delay, this.violation});
   final int? delay;
@@ -700,16 +769,27 @@ class EtaChip extends StatelessWidget {
     return InfoChip.success(d < 0 ? '${-d}분 여유' : '제시간', icon: Icons.schedule);
   }
 
-  /// 대기 중인 지연 제안이 있으면 Red "18:07 종료 · 규칙 넘음" (시각은 이벤트 문구·위반에서).
+  /// 대기 중인 지연 제안이 있으면 Red. 위반이면 "18:07 종료 · 규칙 넘음" (하루 초과·종료 규칙의 끝나는 시각) 또는 위반 종류,
+  /// 일정 밀림(behind_schedule)은 규칙 위반이 아니라 "n분 늦음" (지금 지연). 이벤트 문구의 시각은 읽지 않는다 —
+  /// 밀림 문구 "구룡포항 도착이 13:34 예정에서 …" 의 첫 시각은 다음 장소 계획 시작이다 (audit-2026-10-12 B1).
   static String? violationLabel(TripController t) {
     final e = t.pendingDelay;
     if (e == null) return null;
-    final texts = [e.message, for (final v in (e.payload['new_violations'] as List?) ?? const []) if (v is Map) '${v['message'] ?? ''}'];
-    for (final s in texts) {
-      final m = RegExp(r'(\d{1,2}:\d{2})').allMatches(s).map((m) => m.group(1)!).where((x) => x != '18:00' || texts.length == 1).toList();
-      if (m.isNotEmpty) return '${m.first} 종료 · 규칙 넘음';
+    if (e.payload['reason'] == 'behind_schedule') {
+      final d = t.state?.delayMinutes;
+      return d != null && d >= 1 ? '$d분 늦음' : null;
     }
-    return '규칙 넘음';
+    final vs = [for (final v in (e.payload['new_violations'] as List?) ?? const []) if (v is Map) v];
+    for (final v in vs.where((v) => v['code'] == 'day_overflow' || v['code'] == 'end_before')) {
+      final m = RegExp(r'(\d{1,2}:\d{2}) ?에 끝나').firstMatch('${v['message'] ?? ''}');
+      if (m != null) return '${m.group(1)} 종료 · 규칙 넘음';
+    }
+    return switch (vs.firstOrNull?['code']) {
+      'fixed_time_missed' => '고정 시각 놓침',
+      'outside_open_hours' => '운영시간 밖',
+      'closed_day' => '휴무일',
+      _ => '규칙 넘음',
+    };
   }
 }
 
@@ -728,8 +808,21 @@ class _NowSection extends StatelessWidget {
     final now = _nowMin(trip.serverNow());
     final end = toMinutes(item.endAt);
     final arrived = toMinutes(since);
-    // 실제 도착 + 체류 = 예정 끝 (진행 기준). 없으면 계획 end_at
-    final until = arrived != null ? arrived + item.stayMinutes : end;
+    // 실제 도착부터, 고정 시각·문 여는 시각 전이면 그때까지 기다린 뒤 체류 = 예정 끝 (진행 기준, 서버 재계산과 같게 — audit-2026-10-12 B4).
+    // 없으면 계획 end_at. 늦게 왔으면(시작 + 체류 > 계획 end_at) 계획 end_at 에 떠난다고 본다 (서버 규칙 B, planner §8.2):
+    // 끝 = min(시작 + 체류, 계획 끝). 단 기다려야 하는 시각(고정·개장) + 체류보다 이르게 자르지는 않는다.
+    // 계획 끝을 넘겨 머물면 '예정보다 n분 더' (계획 끝 기준)
+    var start = arrived;
+    int? wait;
+    for (final w in [toMinutes(item.startTime), _opensAt(item.place?.openHours)]) {
+      if (w != null && (wait == null || w > wait)) wait = w;
+    }
+    if (start != null && wait != null && wait > start) start = wait;
+    int? until = start != null ? start + item.stayMinutes : end;
+    if (start != null && end != null) {
+      final cap = wait == null ? end : max(end, wait + item.stayMinutes);
+      until = min(until!, cap);
+    }
     final left = until == null ? null : until - now;
     final over = left != null && left < 0;
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
@@ -822,6 +915,7 @@ class _RemainingSection extends StatelessWidget {
     required this.items,
     required this.total,
     required this.end,
+    this.expected,
     required this.safety,
     required this.selected,
     required this.onTap,
@@ -831,18 +925,40 @@ class _RemainingSection extends StatelessWidget {
   /// 첫 장소 전: 머리가 "오늘 일정 n곳" (목록은 처음부터 모두).
   final bool total;
   final String? end;
+
+  /// 서버 재계산의 예상 시각 (TripState.expected). 늦으면 '기준 → 예상'으로 보인다 (audit-2026-10-12 D2).
+  final TripExpected? expected;
   final SafetyCheck? safety;
   final int? selected;
 
   /// 행 → 지도에서 그 핀 + 작은 창 (탭 이동 없음).
   final ValueChanged<PlanItem> onTap;
 
+  /// 예상이 기준보다 [lateMin]분 이상 늦은지. 제시간·이르면 기준만 보인다 (지금과 같게).
+  static const lateMin = 5;
+  static bool late(String? planned, String? expected) {
+    final p = toMinutes(planned), e = toMinutes(expected);
+    return p != null && e != null && e - p >= lateMin;
+  }
+
+  /// 늦은 행의 예상 시작 (아니면 null).
+  String? _lateStart(PlanItem i) {
+    final e = expected?.items[i.id]?.start;
+    return late(i.startAt, e) ? e : null;
+  }
+
   @override
-  Widget build(BuildContext context) => Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+  Widget build(BuildContext context) {
+    final lateEnd = late(end, expected?.end) ? expected!.end : null;
+    final endText = end == null ? '' : (lateEnd == null ? ' · $end 종료 예정' : ' · $end → $lateEnd 종료 예상');
+    // 한 행이라도 늦으면 시각 칸을 넓혀 줄을 맞춘다 ("14:47 → 15:27", 390px 에서도 제목만 줄어든다)
+    final anyLate = items.any((i) => _lateStart(i) != null);
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
         // 머리는 요약 한 줄만 — [전체 지도]·[전체 일정 ›] 는 바로 아래 하단 탭(Map·Planner)과 같아 없앴다 (2026-10-11)
         Text(
-          !total && items.isEmpty ? '다음이 마지막 일정이에요${end == null ? '' : ' · $end 종료 예정'}' : '${total ? '오늘 일정' : '남은 일정'} ${items.length}곳${end == null ? '' : ' · $end 종료 예정'}',
-          style: AppText.caption.copyWith(fontWeight: FontWeight.w700),
+          !total && items.isEmpty ? '다음이 마지막 일정이에요$endText' : '${total ? '오늘 일정' : '남은 일정'} ${items.length}곳$endText',
+          key: const ValueKey('remaining-header'),
+          style: AppText.caption.copyWith(fontWeight: FontWeight.w700, color: lateEnd == null ? null : AppColors.warning),
         ),
         const SizedBox(height: 4),
         for (final i in items)
@@ -856,7 +972,7 @@ class _RemainingSection extends StatelessWidget {
               child: Padding(
                 padding: const EdgeInsets.symmetric(vertical: 7, horizontal: 4),
                 child: Row(children: [
-                  SizedBox(width: 50, child: Text(i.startAt ?? '', style: AppText.meta.copyWith(fontWeight: FontWeight.w700, color: AppColors.text2))),
+                  SizedBox(width: anyLate ? 104 : 50, child: _time(i)),
                   Expanded(child: Text(i.title, style: AppText.label, overflow: TextOverflow.ellipsis)),
                   if (safety?.visit(i.id) != null) RiskBadge(item: safety!.visit(i.id)!, compact: true),
                 ]),
@@ -864,6 +980,25 @@ class _RemainingSection extends StatelessWidget {
             ),
           ),
       ]);
+  }
+
+  /// 기준 시작, 늦으면 "기준(흐리게·취소선) → 예상(Amber)".
+  Widget _time(PlanItem i) {
+    final strong = AppText.meta.copyWith(fontWeight: FontWeight.w700, color: AppColors.text2);
+    final e = _lateStart(i);
+    if (e == null) return Text(i.startAt ?? '', style: strong);
+    return Text.rich(
+      key: ValueKey('remaining-time-${i.id}'),
+      TextSpan(children: [
+        TextSpan(text: i.startAt, style: AppText.caption.copyWith(color: AppColors.text3, decoration: TextDecoration.lineThrough)),
+        TextSpan(text: ' → ', style: AppText.caption.copyWith(color: AppColors.text3)),
+        TextSpan(text: e, style: strong.copyWith(color: AppColors.warning)),
+      ]),
+      maxLines: 1,
+      softWrap: false,
+      overflow: TextOverflow.visible,
+    );
+  }
 }
 
 /// Today 남은 일정 아래 한 줄: "가이드 노트 n/m 준비됨 · k곳 다시 준비 필요 ›" / "가이드 노트 준비 중 n/m ›" → 32.

@@ -33,6 +33,22 @@ class TripLocation {
       );
 }
 
+/// 재계산한 예상 시각 (TripState.expected, audit-2026-10-12 D2). 오늘 남은 항목(planned·visiting)의 시작·종료와 그날 종료, "HH:MM".
+class TripExpected {
+  TripExpected({this.end, this.items = const {}});
+  final String? end;
+  final Map<int, ({String? start, String? end})> items;
+
+  factory TripExpected.fromJson(Map<String, dynamic> j) => TripExpected(
+        end: j['end'] as String?,
+        items: {
+          for (final e in ((j['items'] as Map?) ?? const {}).entries)
+            if (int.tryParse('${e.key}') != null && e.value is Map)
+              int.parse('${e.key}'): (start: (e.value as Map)['start'] as String?, end: (e.value as Map)['end'] as String?),
+        },
+      );
+}
+
 /// trip 여행 상태. 모드는 스위치가 아니라 이 상태다: active 면 동행 모드 (trip §1.1).
 class TripState {
   TripState({
@@ -54,6 +70,7 @@ class TripState {
     this.nextPlannedStart,
     this.nextEta,
     this.delayMinutes,
+    this.expected,
     this.sessionId,
   });
 
@@ -79,6 +96,9 @@ class TripState {
 
   /// 다음 일정 기준 예상 지연 (음수 = 여유).
   final int? delayMinutes;
+
+  /// 마지막 재계산의 예상 시각. 재계산 전·진행 중이 아님·옛 서버면 null.
+  final TripExpected? expected;
   final String? sessionId;
 
   bool get visiting => currentState == 'visiting';
@@ -107,6 +127,7 @@ class TripState {
       nextPlannedStart: next?['planned_start'] as String?,
       nextEta: next?['eta'] as String?,
       delayMinutes: j['delay_minutes'] as int?,
+      expected: j['expected'] is Map ? TripExpected.fromJson(Map<String, dynamic>.from(j['expected'] as Map)) : null,
       sessionId: j['session_id'] as String?,
     );
   }

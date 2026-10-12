@@ -53,11 +53,29 @@ def test_baseline_unchanged_without_actual():
     assert days[0].items[1].arrived_at == time(15, 0)  # 실제 기록은 ItemView 에 그대로 노출
 
 
-def test_light_delay_has_no_new_violation():
+def test_late_arrival_leaves_at_planned_end():
+    """규칙 B: 14분 늦게 왔으면(13:50) 예정 종료(14:36)에 떠난다고 본다 -> 뒤 일정은 아직 제시간."""
     plan = make_plan(("done", "12:30", "13:30"), ("visiting", "13:50", None), PLANNED)
     items, new, delay, nxt = run(plan, Actual(1, hm("14:00"), anchor_id=2, anchor_arrive=hm("13:50")))
-    assert [(i.start_at, i.end_at) for i in items] == [("12:30", "13:30"), ("13:50", "14:50"), ("14:56", "15:56")]
+    assert [(i.start_at, i.end_at) for i in items] == [("12:30", "13:30"), ("13:50", "14:36"), ("14:42", "15:42")]
+    assert new == [] and nxt == 3 and delay == 0
+
+
+def test_late_arrival_overstay_past_planned_end_is_late():
+    """예정 종료(14:36)를 넘겨 머물면 now 에 끝난다 -> 그때부터 늦음."""
+    plan = make_plan(("done", "12:30", "13:30"), ("visiting", "13:50", None), PLANNED)
+    items, new, delay, nxt = run(plan, Actual(1, hm("14:50"), anchor_id=2, anchor_arrive=hm("13:50")))
+    assert [(i.start_at, i.end_at) for i in items][1:] == [("13:50", "14:50"), ("14:56", "15:56")]
     assert new == [] and nxt == 3 and delay == 14
+
+
+def test_early_arrival_keeps_full_stay():
+    """일찍 왔으면(13:20, 예정 13:36) 그대로 도착 + 체류 (규칙 B 와 무관). now 가 지나면 now."""
+    plan = make_plan(("done", "12:30", "13:10"), ("visiting", "13:20", None), PLANNED)
+    items, new, delay, _ = run(plan, Actual(1, hm("13:30"), anchor_id=2, anchor_arrive=hm("13:20")))
+    assert (items[1].end_at, items[2].start_at) == ("14:20", "14:26") and delay == -16
+    items, new, delay, _ = run(plan, Actual(1, hm("14:30"), anchor_id=2, anchor_arrive=hm("13:20")))
+    assert (items[1].end_at, items[2].start_at) == ("14:30", "14:36") and delay == -6
 
 
 def test_overstay_ends_now_and_overflows_day():
@@ -71,8 +89,9 @@ def test_overstay_ends_now_and_overflows_day():
 
 
 def test_closure_is_a_new_violation():
+    """늦게 와서(14:20) 예정 종료(14:36)를 넘겨 15:20 까지 머묾 -> 문화관이 운영시간(16:00) 밖."""
     plan = make_plan(("done", "12:30", "13:30"), ("visiting", "14:20", None), PLANNED)
-    items, new, delay, _ = run(plan, Actual(1, hm("14:30"), anchor_id=2, anchor_arrive=hm("14:20")))
+    items, new, delay, _ = run(plan, Actual(1, hm("15:20"), anchor_id=2, anchor_arrive=hm("14:20")))
     assert (items[2].start_at, items[2].end_at) == ("15:26", "16:26")
     assert new == [("outside_open_hours", 3)] and delay == 44
 
@@ -90,10 +109,13 @@ def test_past_items_keep_recorded_times_without_violations():
     """다녀온 항목은 기록 그대로이고 시각 위반을 따지지 않는다. 머무는 항목은 고정 시각 놓침을 따지지 않는다."""
     plan = make_plan(("done", "12:30", "13:30"), ("done", "13:40", "14:30"), ("visiting", "15:20", None),
                      fixed_c=time(15, 0))
-    items, new, delay, nxt = run(plan, Actual(1, hm("15:30"), anchor_id=3, anchor_arrive=hm("15:20")))
-    assert [(i.arrive_at, i.end_at) for i in items] == [("12:30", "13:30"), ("13:40", "14:30"), ("15:20", "16:20")]
+    items, new, delay, nxt = run(plan, Actual(1, hm("16:10"), anchor_id=3, anchor_arrive=hm("15:20")))
+    assert [(i.arrive_at, i.end_at) for i in items] == [("12:30", "13:30"), ("13:40", "14:30"), ("15:20", "16:10")]
     assert ("fixed_time_missed", 3) not in new
-    assert nxt is None and delay == hm("16:20") - hm("16:00")  # 다음 항목이 없으면 그날 종료 시각 차이 (기준: 15:00 고정)
+    assert nxt is None and delay == hm("16:10") - hm("16:00")  # 다음 항목이 없으면 그날 종료 시각 차이 (기준: 15:00 고정)
+    # 고정 시각보다 늦게 왔으면 예정 종료(16:00)에 떠난다고 본다 (규칙 B). 아직 그 전이면 늦음 없음
+    items, new, delay, nxt = run(plan, Actual(1, hm("15:30"), anchor_id=3, anchor_arrive=hm("15:20")))
+    assert items[2].end_at == "16:00" and delay == 0
 
 
 def test_no_anchor_leaves_now():

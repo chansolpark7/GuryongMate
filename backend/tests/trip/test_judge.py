@@ -179,17 +179,18 @@ def behind(delay: int, eta: str, violations=(), plan_end: str = "15:42") -> dict
 
 
 def judge_behind(proj, at, known=frozenset(), notice=None, track=VISITING):
-    return judge.judge_delay(proj, at, known, behind_min=30, plan=BASE, day=1, track=track, notice=notice)
+    return judge.judge_delay(proj, at, known, behind_min=15, plan=BASE, day=1, track=track, notice=notice)
 
 
-def test_behind_schedule_asks_at_30_minutes():
+def test_behind_schedule_asks_at_15_minutes():
     t = T0.replace(hour=13, minute=54)
-    assert judge_behind(behind(25, "14:04"), t) is None  # 30분 미만: 가벼운 지연
+    assert judge_behind(behind(14, "13:53"), t) is None  # 15분 미만: 가벼운 지연
     assert judge.judge_delay(behind(64, "14:43"), t) is None  # behind_min 0(기본): 보지 않음 (기존 동작)
+    assert judge_behind(behind(15, "13:54"), t).cause_key == "delay:behind:1:0:1"
     d = judge_behind(behind(64, "14:43", plan_end="16:46"), t.replace(hour=14, minute=34))
     assert (d.type, d.level, d.item_ids, d.payload["reason"]) == ("delay", 3, [2], "behind_schedule")
     assert d.message == "구룡포항 도착이 13:39 예정에서 14:43으로 1시간 늦어질 것 같아요."
-    assert d.cause_key == "delay:behind:1:0:2"
+    assert d.cause_key == "delay:behind:1:0:4"  # 15분 단계 4
     assert d.payload["end"] == {"planned": "15:42", "expected": "16:46"} and d.payload["plan_version"] == 3
     assert d.payload["next"]["title"] == "구룡포항"
     # 추천안: 가옥거리 체류를 계획 시작(12:30)부터 지금(14:34) + 여유 15분 = 140분(5분 올림)으로
@@ -198,23 +199,61 @@ def test_behind_schedule_asks_at_30_minutes():
     assert judge.duration_ko(35) == "35분" and judge.duration_ko(75) == "1시간 15분"
 
 
-def test_behind_schedule_asks_again_30_minutes_after_last_notice():
+def test_behind_schedule_asks_again_15_minutes_after_last_notice():
     t = T0.replace(hour=14, minute=10)
-    first = judge_behind(behind(35, "14:14"), t)
+    first = judge_behind(behind(20, "13:59"), t)
     assert first.cause_key == "delay:behind:1:0:1"
-    # 알린 뒤(이벤트 9, 그때 35분)에는 그보다 30분 더 밀릴 때만
-    for d in (35, 50, 64):
-        assert judge_behind(behind(d, "x"), t, notice=(9, 35)) is None
-    again = judge_behind(behind(65, "14:44"), t, notice=(9, 35))
+    # 알린 뒤(이벤트 9, 그때 20분)에는 그보다 15분 더 밀릴 때마다
+    for d in (20, 30, 34):
+        assert judge_behind(behind(d, "x"), t, notice=(9, 20)) is None
+    again = judge_behind(behind(35, "14:14"), t, notice=(9, 20))
     assert again.cause_key == "delay:behind:1:9:1" and again.payload["reason"] == "behind_schedule"
-    # 위반으로 알린 지연(23분)도 기준이다 -> 다음 항목이 바뀌어도 53분 전에는 다시 묻지 않는다
+    assert judge_behind(behind(50, "x"), t, notice=(9, 20)).cause_key == "delay:behind:1:9:2"
+    # 위반으로 알린 지연(23분)도 기준이다 -> 다음 항목이 바뀌어도 38분 전에는 다시 묻지 않는다
     assert judge_behind(behind(30, "x"), t, notice=(5, 23)) is None
-    assert judge_behind(behind(53, "x"), t, notice=(5, 23)) is not None
-    # 제안 승인으로 지연이 30분 이상 줄면(65 -> -15) 새로 센다: 그 일정 기준 30분이 되면 다시 묻는다
-    assert judge_behind(behind(-15, "x"), t, notice=(12, 65)) is None
-    assert judge_behind(behind(10, "x"), t, notice=(12, 65)) is None  # 그 뒤 25분 더 늦어도 조용
-    reset = judge_behind(behind(30, "x"), t, notice=(12, 65))
+    assert judge_behind(behind(38, "x"), t, notice=(5, 23)) is not None
+    # 따라잡아(직접 고쳐) 지연이 15분 이상 줄면(50 -> 0) 새로 센다: 그 뒤 15분이 되면 다시 묻는다
+    assert judge_behind(behind(0, "x"), t, notice=(12, 50)) is None
+    assert judge_behind(behind(14, "x"), t, notice=(12, 50)) is None
+    reset = judge_behind(behind(15, "x"), t, notice=(12, 50))
     assert reset.cause_key == "delay:behind:1:12r:1"
+
+
+def test_behind_schedule_counts_fresh_after_accepted_proposal():
+    """알린 뒤 제안을 승인했으면(notice 의 세 번째 값) 그때 지연과 상관없이 승인한 일정 기준 0 부터 센다 (§3.2)."""
+    t = T0.replace(hour=16, minute=40)
+    # 20분으로 알림 -> 승인. 지연이 줄지 않았어도(승인한 변경이 다 흡수하지 못함) 새 일정 기준 15분이면 묻는다
+    assert judge_behind(behind(14, "x"), t, notice=(12, 20, True)) is None
+    d = judge_behind(behind(15, "x"), t, notice=(12, 20, True))
+    assert d.cause_key == "delay:behind:1:12a:1" and d.payload["reason"] == "behind_schedule"
+    assert judge_behind(behind(32, "x"), t, notice=(12, 20, True)).cause_key == "delay:behind:1:12a:2"
+    # 승인하지 않았으면 그때 지연(20) + 15 = 35분까지 조용
+    assert judge_behind(behind(32, "x"), t, notice=(12, 20, False)) is None
+    assert judge.behind_ref(32, (12, 20, False), 15) == ("12", 20)
+
+
+DAY_OVERFLOW = "delay:day_overflow:1:5:None"
+
+
+def test_resolve_violations_after_grace():
+    """알린 위반이 재계산에서 10분 이어서 사라지면 해소 (released), 그 전에 돌아오면 그대로 (§4.1 다시 알리기)."""
+    t = T0.replace(hour=16, minute=20)
+    known = {DAY_OVERFLOW, "delay:behind:1:0:1", "arrived:3"}
+    st = judge.resolve_violations(None, set(), known, t, 10, last_id=40)
+    assert st == {"gone": {DAY_OVERFLOW: t.isoformat()}, "released": {}}  # 밀림·도착 키는 보지 않는다
+    # 5분 뒤 다시 나타남 -> 사라진 시각을 지운다 (깜빡임은 해소가 아니다)
+    st = judge.resolve_violations(st, {DAY_OVERFLOW}, known, t + timedelta(minutes=5), 10, last_id=40)
+    assert st["gone"] == {} and st["released"] == {}
+    # 다시 사라져 10분 -> 해소: 그때까지의 이벤트(id 41 까지)는 이 원인을 알린 것으로 세지 않는다
+    st = judge.resolve_violations(st, set(), known, t + timedelta(minutes=6), 10, last_id=41)
+    st = judge.resolve_violations(st, set(), known, t + timedelta(minutes=15), 10, last_id=41)
+    assert st["gone"] == {DAY_OVERFLOW: (t + timedelta(minutes=6)).isoformat()}
+    st = judge.resolve_violations(st, set(), known, t + timedelta(minutes=16), 10, last_id=41)
+    assert st["gone"] == {} and st["released"] == {DAY_OVERFLOW: 41}
+    # 해소된 원인은 known 에서 빠져 있으므로 더 보지 않는다 / 시각이 되돌아가면 사라진 시각을 지금으로
+    st2 = judge.resolve_violations({"gone": {DAY_OVERFLOW: t.isoformat()}}, set(), known, t - timedelta(hours=1), 10, 9)
+    assert st2["gone"] == {DAY_OVERFLOW: (t - timedelta(hours=1)).isoformat()} and st2["released"] == {}
+    assert judge.resolve_violations({"accepted": {"event": 1}}, set(), set(), t, 10, 9)["accepted"] == {"event": 1}
 
 
 def test_behind_and_violation_together_make_one_event():
@@ -222,7 +261,7 @@ def test_behind_and_violation_together_make_one_event():
     v = violation("outside_open_hours", 5)
     d = judge_behind(behind(31, "x", [v]), t)
     assert d.payload["reason"] == "violations" and d.item_ids == [5] and "outside_open_hours 5" in d.message
-    assert d.cause_key == "delay:behind:1:0:1|delay:outside_open_hours:1:5:None"
+    assert d.cause_key == "delay:behind:1:0:2|delay:outside_open_hours:1:5:None"  # 31분: 15분 단계 2
     assert d.payload["suggest"]["kind"] == "extend_stay"  # 밀림 정보도 담는다
     # 위반은 이미 알렸고 밀림만 새것이면 밀림이 이유
     d = judge_behind(behind(31, "16:16", [v]), t, known={"delay:outside_open_hours:1:5:None"})

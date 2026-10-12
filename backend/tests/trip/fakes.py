@@ -2,6 +2,7 @@
 
 가짜 planner 는 실제 planner 의 시간 모델(docs/planner/README.md §2.1, §8.2)을 단순하게 흉내 낸다:
 도보 이동시간 = 직선거리 × 1.3 / 70m, 차량 = 직선거리 × 1.3 / 400m + 주차 5분 (분 올림), 운영시간 밖·하루 초과·고정 시각 놓침만 본다.
+재계산(actual)에서는 문을 열기 전에 도착하면 기다리고, 머무는 곳에 늦게 왔으면 예정 종료에 떠난다고 본다 (규칙 B).
 도착지에 road(실제 길 / 직선 비율)가 있으면 1.3 대신 그 값 (항구를 돌아가는 방파제, 해안도로로 돌아가는 카페 — 실제 길찾기 거리로 맞춤).
 """
 import math
@@ -65,6 +66,7 @@ class FakePlanner:
         self.down = False
         self._next_id = 100
         self._alert_id = 1
+        self.proposals: dict[int, list[dict]] = {}  # 승인된 제안 (plan_id -> [{id, status, base_version}])
 
     # ----- 준비 (테스트) -----
     def create(self, user: str, plan: dict) -> int:
@@ -97,10 +99,19 @@ class FakePlanner:
         self.plans[plan_id]["version"] += 1
 
     def set_stay(self, plan_id: int, place_id: str, stay: int) -> None:
-        """사용자가 체류 시간을 바꾸는 제안을 승인함 (일정 밀림: 지금 장소 체류 늘리기). version 이 오른다."""
+        """사용자가 체류 시간을 바꿈 (직접 고침, 제안 승인이 아님). version 이 오른다."""
         it = next(i for i in self.plans[plan_id]["items"] if i["place_id"] == place_id)
         it["stay"] = stay
         self.plans[plan_id]["version"] += 1
+
+    def accept(self, plan_id: int, proposal_id: int, stays: dict[str, int] | None = None) -> None:
+        """사용자가 제안(proposal_id)을 승인함: 체류 변경(stays: place_id -> 분)을 반영하고 version 을 올린다."""
+        base = self.plans[plan_id]["version"]
+        for place_id, stay in (stays or {}).items():
+            next(i for i in self.plans[plan_id]["items"] if i["place_id"] == place_id)["stay"] = stay
+        self.plans[plan_id]["version"] += 1
+        self.proposals.setdefault(plan_id, []).append({"id": proposal_id, "plan_id": plan_id, "status": "accepted",
+                                                        "base_version": base})
 
     def add_alert(self, plan_id: int, kind: str, changes: list[tuple[int, str, str]]) -> dict:
         """changes: (item_id, from_risk, to_risk)."""
@@ -168,9 +179,14 @@ class FakePlanner:
                 continue
             if actual and it["order"] == pivot and anchor is not None:
                 arrive = actual["arrived"]
-                end = max(arrive + it["stay"], now)
-                rows.append({"id": it["id"], "arrive": arrive, "start": arrive, "end": end})
-                self._check_open(place, it, arrive, end, vs)
+                start = self._opened(place, arrive)
+                # 늦게 왔으면 기준 일정의 예정 종료에 떠난다고 본다 (planner §8.2 규칙 B). 개장 대기만큼은 온전히 머문다
+                planned = {r["id"]: r["end"] for r in self._schedule(p)[0]}[it["id"]]
+                if "open" in place:
+                    planned = max(planned, hm(place["open"][0]) + it["stay"])
+                end = max(start, min(start + it["stay"], planned), now)
+                rows.append({"id": it["id"], "arrive": arrive, "start": start, "end": end})
+                self._check_open(place, it, start, end, vs)
                 t, prev = end, place
                 continue
             if actual and it["order"] == pivot and moving is not None:
@@ -180,6 +196,8 @@ class FakePlanner:
                     t = max(t, now)
                 arrive = t + (leg_min(prev, place, it["mode"]) if prev else 0)
             start = max(arrive, hm(it["start_time"])) if it["start_time"] else arrive
+            if actual:  # 실제 진행 기준: 문을 열기 전에 도착하면 기다린다 (planner §8.2)
+                start = self._opened(place, start)
             if it["start_time"] and arrive > hm(it["start_time"]):
                 vs.append({"code": "fixed_time_missed", "severity": "error", "day": 1, "item_id": it["id"],
                            "constraint_id": None, "message": f"{place['title']} 고정 시각을 놓쳐요."})
@@ -191,6 +209,10 @@ class FakePlanner:
             vs.append({"code": "day_overflow", "severity": "error", "day": 1, "item_id": rows[-1]["id"],
                        "constraint_id": None, "message": f"일정이 {fmt(rows[-1]['end'])}에 끝나 종료 목표 {p['day_end']}를 넘어요."})
         return rows, vs
+
+    @staticmethod
+    def _opened(place: dict, start: int) -> int:
+        return max(start, hm(place["open"][0])) if "open" in place else start
 
     @staticmethod
     def _check_open(place: dict, it: dict, start: int, end: int, vs: list[dict]) -> None:
@@ -277,6 +299,11 @@ class FakePlanner:
     def safety_alerts(self, plan_id, auth):
         self._plan(plan_id)
         return [a for a in reversed(self.alerts.get(plan_id, [])) if a["status"] == "new"]
+
+    def accepted_proposals(self, plan_id, auth):
+        self._plan(plan_id)
+        self.calls.append(("proposals", plan_id))
+        return [p for p in reversed(self.proposals.get(plan_id, [])) if p["status"] == "accepted"]
 
     def alert_seen(self, plan_id, alert_id, auth):
         self.calls.append(("seen", alert_id))

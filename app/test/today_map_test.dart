@@ -245,7 +245,7 @@ void main() {
     await settle(tester);
     final popup = find.byKey(const ValueKey('today-place-popup'));
     expect(popup, findsOneWidget);
-    final buttons = tester.getRect(find.ancestor(of: find.byTooltip('현재 위치'), matching: find.byType(Column)).first);
+    final buttons = tester.getRect(find.byKey(const ValueKey('today-fab'))); // 버튼 칸 (패널 위에 붙어 움직이므로 키로 찾는다)
     final screen = tester.getRect(find.byType(IndexedStack).first);
 
     // 지도를 끌어 핀을 버튼 바로 아래·오른쪽 끝으로 (창이 핀 위 가운데면 버튼과 겹치는 자리)
@@ -266,6 +266,70 @@ void main() {
     expect(rect.right, lessThanOrEqualTo(screen.right));
     expect(rect.top, greaterThan(tester.getRect(find.byType(TripPill)).bottom), reason: 'Pill 아래');
     expect(find.descendant(of: popup, matching: find.text('길 안내')).hitTestable(), findsOneWidget, reason: '창 버튼이 눌린다');
+  });
+
+  testWidgets('14 AI·현재 위치 버튼: 패널 위에 붙어 함께 움직임(접힘·반) · 크게 펼치면 숨김·눌리지 않음 · 도착 카드·작은 창과 안 겹침', (tester) async {
+    final r = scene('scene2_arrival', flows: ['f4_arrival_docent.json']);
+    r.advanceTo('12:30:30');
+    await openShell(tester, r.gw, r.planId);
+    r.advanceTo('12:33:00');
+    await poll(tester);
+    final fab = find.byKey(const ValueKey('today-fab'));
+    final grab = find.byType(Grabber).last;
+    final locate = find.byTooltip('현재 위치');
+    double panelTop() => tester.getTopLeft(grab).dy;
+    double opacity() => tester.widget<AnimatedOpacity>(find.ancestor(of: fab, matching: find.byType(AnimatedOpacity)).first).opacity;
+
+    // 반 (0.49): 패널 바로 위, Map 과 같은 순서 (위치 위 · AI 아래)
+    final half = tester.getRect(fab);
+    expect(panelTop() - half.bottom, closeTo(12, 2), reason: '패널 위 가장자리에 붙는다');
+    expect(tester.getCenter(locate).dy, lessThan(tester.getCenter(find.byType(AiFab)).dy), reason: '위치 버튼 위, AI 아래 (Map 과 같게)');
+    expect(locate.hitTestable(), findsOneWidget);
+    expect(opacity(), 1);
+
+    // 도착 카드: 버튼 바로 위 전체 폭 — 버튼과 겹치지 않는다
+    final card = find.byKey(const ValueKey('arrival-card'));
+    expect(card, findsOneWidget);
+    final cr = tester.getRect(card);
+    expect(cr.overlaps(half), isFalse, reason: '도착 카드가 버튼을 가리지 않는다');
+    expect(cr.width, greaterThan(340), reason: '버튼이 아래로 내려가 전체 폭');
+    expect(cr.top, greaterThan(tester.getRect(find.byType(TripPill)).bottom), reason: '위 막대 아래');
+    tripOf(tester).dismissArrival();
+    await settle(tester);
+
+    // 접힘 (0.19): 버튼도 함께 내려간다
+    await tester.drag(grab, const Offset(0, 300));
+    await settle(tester);
+    final low = tester.getRect(fab);
+    expect(low.top, greaterThan(half.top + 150), reason: '패널과 함께 내려감');
+    expect(panelTop() - low.bottom, closeTo(12, 2));
+    expect(locate.hitTestable(), findsOneWidget);
+
+    // 접힘에서도 작은 창은 버튼 밖
+    await tester.tap(find.byKey(const ValueKey('today-pin-502')));
+    await settle(tester);
+    final popup = find.byKey(const ValueKey('today-place-popup'));
+    expect(popup, findsOneWidget);
+    expect(tester.getRect(popup).overlaps(low), isFalse, reason: '작은 창이 옮겨 간 버튼을 피한다');
+    await tester.tap(find.byTooltip('닫기').last);
+    await settle(tester);
+
+    // 펼침 (0.86): 투명 + 눌리지 않음
+    await tester.drag(grab, const Offset(0, -600));
+    await settle(tester);
+    expect(panelTop(), lessThan(200), reason: '크게 펼침');
+    expect(opacity(), 0);
+    expect(locate.hitTestable(), findsNothing, reason: '숨은 버튼은 눌리지 않는다');
+    expect(find.byType(AiFab).hitTestable(), findsNothing);
+    expect(tripOf(tester).todayChrome.value?.fab, isNull, reason: '오버레이도 버튼이 없다고 본다');
+
+    // 다시 반으로 → 다시 보인다
+    await tester.drag(grab, const Offset(0, 300));
+    await settle(tester);
+    expect(tester.getRect(fab).top, closeTo(half.top, 4));
+    expect(opacity(), 1);
+    expect(locate.hitTestable(), findsOneWidget);
+    expect(r.gw.unmatched, isEmpty);
   });
 
   testWidgets('28 우회 카드 [이 길로 안내] (동행 중) → Today 로 돌아가 그 장소로 길 안내', (tester) async {

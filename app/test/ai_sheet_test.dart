@@ -3,8 +3,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:guryong_mate/core/models/agent.dart';
 import 'package:guryong_mate/core/models/safety.dart';
+import 'package:guryong_mate/core/widgets/common.dart';
 import 'package:guryong_mate/features/chat/chat_controller.dart';
 import 'package:guryong_mate/features/planner/plan_controller.dart';
+import 'package:guryong_mate/features/planner/planner_screen.dart';
 import 'package:guryong_mate/features/planner/planner_shell.dart';
 import 'package:provider/provider.dart';
 
@@ -126,8 +128,13 @@ void main() {
     final applied = plan.lastApplied!;
     plan.lastApplied = AppliedProposal(proposal: applied.proposal, before: plan.plan!, at: applied.at);
     plan.setTab(1);
+    // Planner 버튼은 탭이 바뀐 바로 다음 프레임에 사라진다 (Scaffold 퇴장 200ms 동안 남지 않게, 2026-10-12)
+    await tester.pump();
+    expect(find.byType(PlannerFabs).hitTestable(), findsNothing);
     await settle(tester, 4);
-    await tester.tap(find.text('변경 내역'));
+    // 승인 직후 [실행 취소] 스낵바(4초)가 아래 버튼 위에 떠 있어 좌표 탭은 스낵바가 받는다 (Planner FAB 가 애니메이션 없이 바로 사라져
+    // 스낵바가 맨 아래로 내려옴, 2026-10-12). 아래 '실행 취소' 확인에 스낵바가 필요하므로 버튼 동작을 직접 부른다.
+    tester.widget<AppButton>(find.widgetWithText(AppButton, '변경 내역')).onPressed!();
     await settle(tester, 8);
     expect(tester.takeException(), isNull);
     expect(find.text('6건 적용됨'), findsOneWidget, reason: '읽기 전용 카드');
@@ -138,18 +145,18 @@ void main() {
     plan.setTab(0);
     await settle(tester, 4);
 
-    // 25 배너 우선순위: 새 안전 경고(needs_action)가 초록 "반영됐어요" 배너보다 먼저
+    // 25 배너: AI 적용 직후 초록 "반영됐어요" 배너는 없다 (2026-10-12 제거 — 이력은 ⋯ → 변경 이력). 새 안전 경고는 그대로 뜬다
     final summary = applied.proposal.summary.trim().split('\n').first;
-    expect(find.text(summary), findsOneWidget, reason: '초록 배너');
+    expect(find.widgetWithText(InkWell, '이력'), findsNothing, reason: '초록 배너 없음');
     plan.alerts = [SafetyAlert.fromJson({'id': 901, 'level': 'danger', 'needs_action': true, 'status': 'new', 'message': '북방파제 강풍 위험', 'changes': []})];
     plan.notifyListeners();
     await settle(tester, 2);
     expect(find.text('북방파제 강풍 위험'), findsOneWidget);
-    expect(find.text(summary), findsNothing);
     plan.alerts = const [];
     plan.notifyListeners();
     await settle(tester, 2);
-    expect(find.text(summary), findsOneWidget, reason: '경고가 없어지면 다시 초록 배너');
+    expect(find.text('북방파제 강풍 위험'), findsNothing);
+    expect(summary, isNotEmpty);
 
     // 08 실행 취소 (승인 직후 스낵바에서만, c9): 승인 전 일정으로 되돌리는 ops
     gw.on('POST /planner/plans/{id}/ops', (r) => Res.json(200, gw.response('create_plan')));

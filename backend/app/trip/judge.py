@@ -2,7 +2,8 @@
 DB·HTTP 를 쓰지 않는다. 같은 입력이면 같은 결과라 pytest 와 재생 파일로 그대로 검증한다 (docs/trip/README.md §3, §8).
 
 - 도착·출발: step()       반경(60m + accuracy, 최대 150m) 안 90초 머묾 / 머무는 곳 반경 밖 120초
-- 지연:      judge_delay() planner projection 의 new_violations 중 일정에 영향이 있는 것, 또는 다음 일정이 30분 이상 밀림
+- 지연:      judge_delay() planner projection 의 new_violations 중 일정에 영향이 있는 것, 또는 다음 일정이 15분 이상 밀림
+            resolve_violations() 알린 위반이 10분 이어서 사라지면 해소 (다시 생기면 또 알린다)
 - 위험 구역: judge_hazard() safety /avoid 구역 안이거나 50m 안
 - 안전 경고: judge_alert() planner 경고의 오늘 남은 항목 변화
 - 상황 해제: judge_situation() 이 여행일에 주의·위험이던 safety 상황(구역 단계·특보)이 모두 평상시로
@@ -265,6 +266,40 @@ def violation_key(v: dict) -> str:
     return f"delay:{v['code']}:{v.get('day')}:{v.get('item_id')}:{v.get('constraint_id')}"
 
 
+def is_violation_key(k: str) -> bool:
+    return k.startswith("delay:") and not k.startswith("delay:behind:")
+
+
+def current_violation_keys(projection: dict) -> set[str]:
+    """재계산의 지금 위반 (알리는 대상인 것만)의 원인 키."""
+    return {violation_key(v) for v in projection.get("new_violations") or [] if is_delay_violation(v)}
+
+
+def resolve_violations(state: dict | None, current: set[str], known: set[str], at: datetime, grace_min: float,
+                       last_id: int) -> dict:
+    """알린 위반이 해소됐는지 (docs/trip/README.md §4.1 다시 알리기). -> 새 기록 (gone·released 만 바꾸고 그 밖의 키는 그대로).
+    - known: 지금 '알린 것'으로 세는 원인 키 (해소된 것은 이미 빠져 있다). 그중 위반 키만 본다.
+    - 재계산(current)에 다시 있으면 gone 에서 지운다. 없으면 처음 사라진 시각을 gone 에 두고, grace_min 분(trip 의 지금 기준)
+      이어서 없으면 해소: released[키] = last_id (그 id 까지의 이벤트는 그 원인을 알린 것으로 세지 않는다 -> 다시 생기면 또 알린다).
+    - 시각이 되돌아가면(가상 시각) 사라진 시각을 지금으로 다시 잡는다. 재계산을 받지 못한 판정에서는 부르지 않는다 (모르는 것)."""
+    st = dict(state or {})
+    gone = dict(st.get("gone") or {})
+    released = dict(st.get("released") or {})
+    watch = {k for k in known if is_violation_key(k)}
+    for k in list(gone):
+        if k not in watch or k in current:
+            del gone[k]
+    for k in sorted(watch - current):
+        since = min(datetime.fromisoformat(gone[k]), at) if k in gone else at
+        if at - since >= timedelta(minutes=grace_min):
+            released[k] = last_id
+            gone.pop(k, None)
+        else:
+            gone[k] = since.isoformat()
+    st["gone"], st["released"] = gone, released
+    return st
+
+
 def duration_ko(minutes: int) -> str:
     """64 -> '1시간', 75 -> '1시간 15분', 35 -> '35분' (10분 미만 나머지는 말하지 않는다)."""
     if minutes < 60:
@@ -280,35 +315,58 @@ def _ceil5(minutes: float) -> int:
 BEHIND_MARGIN_MIN = 15  # 밀림 추천안: 지금 장소 체류를 '지금 + 이만큼'까지로 늘린다 (조금 더 머물 여유)
 
 
-def behind_ref(delay: float, notice: tuple[int, float | None] | None, step_min: float) -> tuple[str, float]:
-    """일정 밀림을 셀 기준 (기준 이름, 기준 지연). notice: 이 여행일에 마지막으로 알린 delay 이벤트 (id, 그때 delay_minutes).
-    - 알린 적 없음: 기준 0 -> 30분 밀리면 묻는다.
-    - 알린 적 있음: 그때 지연이 기준 -> 그보다 30분 더 밀릴 때만 다시 묻는다 (위반으로 알렸어도, 다음 항목이 바뀌어도).
-    - 그 뒤 지연이 그때보다 30분 이상 줄었으면 (제안 승인으로 일정이 미뤄짐) 새로 센다: 기준 0.
-    계획 version 은 쓰지 않는다 — 승인한 변경이 지연을 흡수하지 않았으면(장면 ③: 끝 시각만 맞춤) 같은 지연을 또 묻게 된다."""
+Notice = tuple  # (이벤트 id, 그때 delay_minutes) 또는 (id, delay_minutes, 그 뒤 제안을 승인했는지)
+
+
+def behind_ref(delay: float, notice: Notice | None, step_min: float) -> tuple[str, float]:
+    """일정 밀림을 셀 기준 (기준 이름, 기준 지연). notice: 이 여행일에 마지막으로 알린 delay 이벤트
+    (id, 그때 delay_minutes[, 그 뒤 제안을 승인했는지]). 큐에서 빠진(suppressed) 것은 알린 것이 아니라 넣지 않는다 (service._last_delay).
+    - 알린 적 없음: 기준 0 -> step_min(TRIP_BEHIND_MIN, 15분) 밀리면 묻는다.
+    - 그 뒤 제안을 승인함 (계획 version 이 바뀌었고 그 알림 뒤 제안이 승인됨, service._notice): 승인한 일정 기준으로 새로 센다 ('a', 기준 0).
+      승인한 변경이 지연을 다 흡수하지 못했으면 새 일정 기준으로 다시 step_min 밀릴 때 묻는다.
+    - 알린 적 있음: 그때 지연이 기준 -> 그보다 step_min 더 밀릴 때마다 다시 묻는다 (위반으로 알렸어도, 다음 항목이 바뀌어도).
+    - 그 뒤 지연이 그때보다 step_min 이상 줄었으면 (따라잡음·직접 고침) 새로 센다 ('r', 기준 0)."""
     if not notice or notice[1] is None:
         return "0", 0
-    nid, nd = notice
+    nid, nd = notice[0], notice[1]
+    if len(notice) > 2 and notice[2]:
+        return f"{nid}a", 0
     if delay <= nd - step_min:
         return f"{nid}r", 0
     return str(nid), max(nd, 0)
 
 
 def behind_key(day: int, ref: str, delay: float, ref_delay: float, step_min: float) -> str:
-    """일정 밀림 원인 키: 같은 기준에서 30분 단계가 오를 때만 새것."""
+    """일정 밀림 원인 키: 같은 기준에서 step_min 단계가 오를 때만 새것."""
     return f"delay:behind:{day}:{ref}:{int((delay - ref_delay) // step_min)}"
 
 
-def behind_suggestion(plan: dict | None, day: int, track: Track | None, nxt: dict, at: datetime) -> dict | None:
+def _day_items(plan: dict | None, day: int) -> dict[int, dict]:
+    return {i["id"]: i for d in (plan or {}).get("days") or [] if d.get("day") in (None, day) for i in d["items"]}
+
+
+def behind_suggestion(plan: dict | None, day: int, track: Track | None, nxt: dict, at: datetime,
+                      projected: dict | None = None) -> dict | None:
     """밀림 추천안 (Agent 가 그대로 도구로 만들 변경). 남은 일정을 미루되 완료 항목·지난 시각은 건드리지 않는다.
-    - 머무는 중: 지금 장소 체류를 (계획 시작부터 지금까지 + 여유 15분, 5분 올림)으로 늘린다 -> 뒤 일정이 자동으로 밀린다.
-      계획 시작 기준이라 도착이 늦었던 만큼도 함께 흡수한다.
-    - 이동 중·첫 장소 전 (늘릴 체류가 없음): 다음 장소 시작 시각을 예상 도착(5분 올림)으로 정한다 -> 그 뒤 일정이 밀린다."""
-    items = {i["id"]: i for d in (plan or {}).get("days") or [] if d.get("day") in (None, day) for i in d["items"]}
+    - 머무는 중: 지금 장소 체류를 계획 시작부터 (지금 + 여유 15분)과 재계산의 그 장소 종료 중 늦은 때까지로 늘린다 (5분 올림)
+      -> 뒤 일정이 자동으로 밀린다. 계획 시작 기준이라 도착이 늦었던 만큼도 함께 흡수한다 (audit-2026-10-12 B5).
+      규칙 B(늦게 온 곳은 예정 종료에 떠난다, planner §8.2)라 승인 뒤 재계산 종료 = max(계획 시작 + 새 체류, 지금) 이다.
+      일찍 왔으면 재계산은 실제 시작 + 체류에 끝나므로 계획 시작·재계산 시작 중 이른 쪽부터 센다.
+    - 이동 중·첫 장소 전 (늘릴 체류가 없음): 다음 장소 시작 시각을 예상 도착(5분 올림)으로 정한다 -> 그 뒤 일정이 밀린다.
+    projected: 재계산 일정 PlanDetail (projection.plan)."""
+    items = _day_items(plan, day)
     now_min = at.hour * 60 + at.minute
     cur = items.get(track.item_id) if track is not None and track.state == "visiting" else None
     if cur and cur.get("status") != "done" and cur.get("start_at") and cur.get("stay_minutes") is not None:
-        stay = max(_ceil5(now_min + BEHIND_MARGIN_MIN - minutes_of(cur["start_at"])), cur["stay_minutes"] + 5)
+        until = now_min + BEHIND_MARGIN_MIN
+        start = minutes_of(cur["start_at"])
+        here = _day_items(projected, day).get(cur["id"])
+        if here and here.get("end_at"):
+            until = max(until, minutes_of(here["end_at"]))
+        if here and here.get("start_at"):
+            # 일찍 왔으면 재계산은 실제 시작 + 체류에 끝난다 (늦게 왔으면 예정 종료, 규칙 B) -> 둘 중 이른 시작 기준
+            start = min(start, minutes_of(here["start_at"]))
+        stay = max(_ceil5(until - start), cur["stay_minutes"] + 5)
         return {"kind": "extend_stay", "item_id": cur["id"], "title": (cur.get("place") or {}).get("title"),
                 "stay_minutes": stay, "from_stay_minutes": cur["stay_minutes"]}
     if nxt.get("eta"):
@@ -320,9 +378,10 @@ def behind_suggestion(plan: dict | None, day: int, track: Track | None, nxt: dic
 
 def judge_delay(projection: dict, at: datetime, known: set[str] | frozenset = frozenset(), *,
                 behind_min: float = 0, plan: dict | None = None, day: int = 1, track: Track | None = None,
-                notice: tuple[int, float | None] | None = None) -> Detection | None:
+                notice: Notice | None = None) -> Detection | None:
     """planner projection(§6.2)으로 delay 감지. 둘 중 하나라도 새것이면 이벤트 하나:
     - 위반: new_violations 중 일정에 영향이 있는 것. 원인 키는 위반마다 하나 ('|' 로 묶음) — 하나라도 새것이면 다시 알린다.
+      known 은 지금 '알린 것'으로 세는 원인이다 (해소된 위반은 빠져 있다, resolve_violations).
     - 일정 밀림: 다음 항목이 계획 시작보다 behind_min(TRIP_BEHIND_MIN) 이상 늦음 (0 이면 보지 않음).
       다시 묻는 것은 마지막으로 알린 지연(notice)보다 behind_min 더 밀릴 때 (behind_ref). 원인 키는 behind_key.
     payload.reason: 새 위반이 있으면 violations (밀림 정보도 담는다), 밀림만 새것이면 behind_schedule.
@@ -342,13 +401,13 @@ def judge_delay(projection: dict, at: datetime, known: set[str] | frozenset = fr
     titles = {i["id"]: (i.get("place") or {}).get("title") or i["place_id"]
               for d in (projection.get("plan") or {}).get("days") or [] for i in d["items"]}
     payload: dict = {"reason": "violations", "new_violations": vs, "delay_minutes": delay,
-                     "next": {**nxt, "title": titles.get(nxt["item_id"])} if nxt else nxt}
+                     "next": {**nxt, "title": titles.get(nxt["item_id"])} if nxt else nxt,
+                     "plan_version": (plan or {}).get("version")}  # 그 뒤 승인으로 계획이 바뀌었는지 볼 기준 (behind_ref)
     item_ids = {v["item_id"] for v in vs if v.get("item_id") is not None}
     if behind:
         keys.append(behind_key(day, ref, delay, ref_delay, behind_min))
-        payload["plan_version"] = (plan or {}).get("version")
         payload["end"] = {"planned": _day_end(plan, day), "expected": _day_end(projection.get("plan"), day)}
-        payload["suggest"] = behind_suggestion(plan, day, track, payload["next"], at)
+        payload["suggest"] = behind_suggestion(plan, day, track, payload["next"], at, projection.get("plan"))
         if not fresh:  # 새 위반이 없으면 밀림이 이 이벤트의 이유다 (밀림도 이미 알렸으면 policy.fresh 가 뺀다)
             payload["reason"] = "behind_schedule"
             item_ids = {nxt["item_id"]}

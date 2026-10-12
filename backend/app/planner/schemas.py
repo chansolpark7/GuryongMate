@@ -204,6 +204,7 @@ class PlaceInfo(BaseModel):
     id: str
     title: str
     content_type: str = ""
+    category_names: list[str] = Field(default_factory=list, description="한국관광공사 분류 (안전 점검의 해안 판단에 쓴다)")
     lat: float
     lng: float
     addr: str = ""

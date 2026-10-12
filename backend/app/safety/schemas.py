@@ -50,6 +50,10 @@ class Visit(BaseModel):
                                                   "(문화시설·음식점·쇼핑·숙박 = 실내)")
     content_type: str | None = Field(None, max_length=20, description="장소 종류 (관광지·음식점…). 주면 places 조회 없이 "
                                                                       "실내를 추정한다")
+    categories: list[str] | None = Field(
+        None, max_length=10, description="장소 분류 (places 의 category_names, 예: 자연관광 > 자연경관(하천‧해양) > 항구/포구). "
+                                         "해안(항구·해수욕장·등대 …)인지 판단한다. 생략하면 places 를 조회했을 때의 분류, "
+                                         "그것도 없으면 이름·좌표(해안선 30m)로 본다")
     path: list[tuple[float, float]] | None = Field(
         None, min_length=2, max_length=MAX_PATH_POINTS,
         description="이동 경로 평가: (lat, lng) 점 목록 (길찾기 경로선). 주면 장소 대신 이 경로를 start~end 동안 지나는 것으로 본다")
@@ -98,7 +102,8 @@ class VisitAssessment(BaseModel):
     data_missing: bool = Field(False, description="필요한 근거 일부(장소 정보·실측·특보·예보)를 받지 못함. risk 가 있으면 "
                                                   "확인된 근거만으로 낸 단계라 실제로는 더 높을 수 있다")
     hazards: list[Hazard] = Field(description="근거. 위험 단계가 safe 여도 참고(info) 신호가 있으면 들어 있다")
-    sensitivity: list[str] = Field(description="날씨에 따라 위험해지는 장소 특성 (방파제, 침수 감시 구역). 위험이 아니라 성질")
+    sensitivity: list[str] = Field(description="날씨에 따라 위험해지는 장소 특성 (방파제, 침수 감시 구역, 해안, 실내). "
+                                               "위험이 아니라 성질")
     notes: list[str] = Field(description="참고 정보 (조위, 계절 등). 일정 변경 근거로 쓰지 않는다")
     advice: str = Field(description="계획 Agent 에게 주는 행동 지침")
     better_times: list[TimeWindow] = Field(
@@ -145,8 +150,9 @@ class DaySummary(BaseModel):
 
 
 class SafeWindow(BaseModel):
-    place_kind: Literal["breakwater", "flood", "outdoor"] = Field(
-        description="breakwater 방파제 / flood 해안 저지대(침수 감시 구역) / outdoor 그 밖의 야외")
+    place_kind: Literal["breakwater", "flood", "coast", "outdoor"] = Field(
+        description="breakwater 방파제 / flood 해안 저지대(침수 감시 구역) / coast 해안(항구·해수욕장 등 바다와 맞닿은 야외) / "
+                    "outdoor 그 밖의 야외")
     start: datetime
     end: datetime
     has_info: bool = Field(description="구간 안에 참고(info) 신호가 있는지")
@@ -254,7 +260,7 @@ class ZoneView(BaseModel):
     radius_m: float
 
 
-PlaceKind = Literal["breakwater", "flood", "outdoor", "indoor"]
+PlaceKind = Literal["breakwater", "flood", "coast", "outdoor", "indoor"]
 
 
 class SituationHour(BaseModel):

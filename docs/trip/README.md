@@ -87,8 +87,13 @@
  "current": {"item_id": 12, "state": "visiting", "since": "14:05"},  // visiting: 장소 안 / moving: 이동 중 (item_id = 떠나온 항목) / idle: 시작 전·끝
  "next": {"item_id": 13, "title": "구룡포과메기문화관", "planned_start": "15:00", "eta": "15:12"},
  "delay_minutes": 12,                                                // 다음 일정 기준 예상 지연 (음수 = 여유)
+ "expected": {"end": "18:18",                                        // 그날 예상 종료 (재계산 마지막 일정 종료)
+              "items": {"13": {"start": "15:27", "end": "16:27"}}},  // 오늘 남은 항목(planned·visiting)의 예상 시작·종료
  "session_id": "9288a236…"}
 ```
+- `expected` (2026-10-12, audit D2): `next`·`delay_minutes` 와 같은 재계산(위치·틱의 planner projection, §6.2)에서 그날(`plan.days[day]`)의 `end_at`·남은 항목 `start_at`/`end_at` 을 저장해 둔 것.
+  GET state 는 planner 를 부르지 않고 마지막 값을 돌려준다 (앱이 1~5초마다 부름). 재계산 전이거나 진행 중이 아니면 `null`, 여행일이 끝나면 지운다.
+  앱 Today 남은 일정은 예상이 기준보다 5분 이상 늦을 때만 "기준 → 예상"으로 보인다 (`docs/app/screens/14-today.md`).
 
 ---
 
@@ -143,37 +148,50 @@
 | `arrived` | 오늘 남은 항목 장소 반경(`TRIP_ARRIVE_RADIUS_M` 60 + accuracy, 최대 150m) 안에 `TRIP_ARRIVE_DWELL_SEC`(90초) 이상 머묾. 예정 순서가 아닌 항목이어도 오늘 남은 항목이면 도착으로 본다 (`out_of_order: true`). **머무는 중에도** 다른 남은 항목 B 의 반경 안이고 지금 장소보다 B 에 더 가까운 점이 90초 이어지면 `departed` → `arrived` (가까운 장소 사이 이동, 아래) | 0 + 2 | 항목을 `visiting` 으로. **해설 카드**: "일본인가옥거리예요. 이야기 들어볼까요? [짧게] [자세히]" → 누르면 해설 (`docs/docent/README.md`). 응답 뒤 그 장소 가이드 자동 준비 요청 (`place_ids: [그 장소]`, 노트가 있거나 준비 중·실패면 agent 가 건너뜀) | ② |
 | `departed` | `visiting` 장소 반경 밖이 `TRIP_DEPART_DWELL_SEC`(120초) 이상 이어짐, 또는 위의 가까운 장소 전환 | 0 + 1 | 항목을 `done` 으로. "다음은 과메기문화관, 도보 8분" | |
 | `delay` (`reason: violations`) | 현재 위치·시각 기준으로 남은 일정을 다시 계산(§6.2)했을 때 **기준 일정에 없던 위반이 새로 생김**: `fixed_time_missed`, `day_overflow`, `outside_open_hours`, `closed_day`, hard 규칙 위반 | 3 | Agent 선제 턴: 근거·영향 설명 + 추천안 1개(제안 카드) + "다른 방법" 한 줄 → 승인 (대화로 조건을 붙이면 다시 제안) | ③ |
-| `delay` (`reason: behind_schedule`) | 새 위반은 없지만 **다음 일정이 계획보다 `TRIP_BEHIND_MIN`(30)분 이상 늦음** (`delay_minutes` ≥ 30). 마지막으로 알린 지연보다 30분 더 밀릴 때만 다시 | 3 | Agent 선제 턴: "남은 일정을 미룰까요?" — 늦어진 정도·영향 + 추천안 1개(남은 일정 미루기) + "다른 방법" 한 줄 | |
-| (가벼운 지연) | 늦어졌지만 새 위반 없고 30분 미만 | 0 | `delay_minutes`·`eta` 만 갱신. 알리지 않음 | |
+| `delay` (`reason: behind_schedule`) | 새 위반은 없지만 **다음 일정이 계획보다 `TRIP_BEHIND_MIN`(15)분 이상 늦음** (`delay_minutes` ≥ 15). 마지막으로 알린 지연보다 15분 더 밀릴 때마다 다시, 알린 뒤 제안을 승인했으면 승인한 일정 기준으로 새로 | 3 | Agent 선제 턴: "남은 일정을 미룰까요?" — 늦어진 정도·영향 + 추천안 1개(남은 일정 미루기) + "다른 방법" 한 줄 | |
+| (가벼운 지연) | 늦어졌지만 새 위반 없고 15분 미만 | 0 | `delay_minutes`·`eta` 만 갱신. 알리지 않음 | |
 | `safety_raised` | planner 안전 경고 중 `needs_action=true`, 오늘 남은 항목에 해당 (`GET /planner/plans/{id}/safety/alerts?status=new`) | 3 | Agent 선제 턴: 위험 근거 + 추천 대체안 1개(시간 이동·실내 대체, 제안 카드) + "다른 방법" 한 줄 → 승인 | ④ |
 | `safety_eased` | planner 경고의 `lowered`/`cleared`, 또는 **상황 해제**: 이 여행일에 주의·위험이던 safety 상황(구역 단계·특보)이 모두 평상시로 (`payload.reason: situation_cleared`) | 1 | "방파제 풍랑 주의가 해제됐어요" / "악천후가 그쳤어요. 지금 구룡포는 특이사항이 없어요." | ④ 끝 |
 | `near_hazard` | **지금 위치**가 safety `/safety/avoid` 구역 안이거나 `TRIP_HAZARD_NEAR_M`(50m) 안 | 1 | **LLM 없이 즉시** 고정 경고: "침수 감시 구역(구룡포수협 주변) 근처예요. 물이 고인 길은 피하세요." | ④ 보조 |
 | `day_started` / `day_ended` | 시작·종료 | 0 | 기록만 | |
 
 - **일정 밀림 (결정 2026-10-11, 구현 `feat/behind-schedule`)** — 하루 끝이 괜찮아도 다음 일정을 계획대로 못 가면 Agent 가 먼저 "남은 일정을 미룰까요?"를 묻는다.
-  - 판정: projection 의 `delay_minutes`(다음 항목의 예상 시작 − 계획 시작) ≥ `TRIP_BEHIND_MIN`(30, 0 이면 끔). 다음 항목이 없으면(오늘 마지막 장소) 보지 않는다.
+  - 판정: projection 의 `delay_minutes`(다음 항목의 예상 시작 − 계획 시작) ≥ `TRIP_BEHIND_MIN`(15, 0 이면 끔). 다음 항목이 없으면(오늘 마지막 장소) 보지 않는다.
+    (2026-10-12 30 → 15분: 하루 끝 위반보다 먼저, 다음 일정을 놓치기 전에 묻는다. 데모 장면 ③ 도 이 밀림 알림 한 번으로 바꿨다)
   - 이벤트는 새 타입이 아니라 같은 `delay` (단계 3, `payload.reason: behind_schedule`) — 앱은 바뀌지 않아도 그대로 선제 메시지로 보여준다.
     문구: "구룡포항 도착이 13:39 예정에서 14:43으로 1시간 늦어질 것 같아요." (60분 이상은 시간 단위, 10분 미만 나머지는 말하지 않음)
   - 새 위반과 밀림이 함께면 이벤트 하나: 새 위반이 있으면 `reason: violations`(문구·`item_ids` 는 위반 기준)이고 payload 에 밀림 정보도 담는다.
     위반은 이미 알렸고 밀림만 새것이면 `behind_schedule`.
-  - **다시 묻기 = 마지막으로 알린 지연보다 30분 더 밀릴 때.** 기준은 이 여행일의 마지막 `delay` 이벤트(이유 무관, 전송 실패·대체된 것 포함)의 `delay_minutes`:
-    알린 적이 없으면 30분, 있으면 그때 지연 + 30분 (예: 35분에 물었으면 65분에 다시). 다음 항목이 바뀌어도(이동·도착) 기준은 그대로다.
-    제안 승인으로 일정이 미뤄져 지연이 그때보다 30분 이상 줄면 새로 센다 (새 일정 기준으로 다시 30분). 원인 키 `delay:behind:{day}:{기준 이벤트 id}[r]:{단계}`
-    (`r` = 새로 세는 중, 단계 = ⌊(지연 − 기준 지연) / 30⌋). 쿨다운(10분)·큐(새 delay 가 큐의 옛것을 대체)는 위반 delay 와 같다.
+  - **다시 묻기 = 마지막으로 알린 지연보다 15분 더 밀릴 때마다.** 기준은 이 여행일에 마지막으로 **알린** `delay` 이벤트(이유 무관, 전송 실패한 것 포함)의 `delay_minutes`:
+    알린 적이 없으면 15분, 있으면 그때 지연 + 15분 (예: 20분에 물었으면 35분, 50분에 다시). 다음 항목이 바뀌어도(이동·도착) 기준은 그대로다.
+    - **큐에서 빠진(`suppressed`) delay 는 알린 것이 아니다** (2026-10-12): 보내기 전에 따라잡아 버려진 것(§4.1 큐 갱신)이 기준이 되면 다시 늦어져도
+      '그때 지연 + 15분'까지 조용했다. 버려진 것은 기준에서도 원인 키(§4.1)에서도 빼고 처음부터 센다.
+    - **알린 뒤 제안을 승인했으면 승인한 일정 기준으로 새로 센다** (기준 0, 결정 2026-10-12): 계획 version 이 그 알림(`payload.plan_version`) 때와 다르고,
+      planner 의 승인된 제안(`GET /planner/plans/{id}/proposals?status=accepted`) 중 그 알림의 선제 턴 제안 id 이상인 것이 있으면 승인으로 본다
+      (대화로 고쳐 대체한 제안을 승인해도 맞다). 승인한 변경이 지연을 다 흡수하지 못했으면 새 일정 기준으로 15분이 되면 다시 묻는다.
+      확인 결과는 `trip_day.delay_state.accepted` 에 둔다 (같은 알림·같은 version 이면 planner 를 다시 부르지 않는다, 다시 시작해도 그대로).
+      전에는 '지연이 그때보다 30분 이상 줄면'만 새로 세서, 끝 시각만 맞춘 승인(카페 45 → 30분) 뒤 다시 늦어져도 30분을 더 기다렸다.
+    - 승인 없이 지연이 그때보다 15분 이상 줄면(따라잡음·직접 고침) 새로 센다. 원인 키 `delay:behind:{day}:{기준 이벤트 id}[a|r]:{단계}`
+      (`a` = 승인 뒤 새로 셈, `r` = 줄어서 새로 셈, 단계 = ⌊(지연 − 기준 지연) / 15⌋). 쿨다운(10분)·큐(새 delay 가 큐의 옛것을 대체)는 위반 delay 와 같다.
   - 처음 결정한 원인 키(다음 항목 + 계획 version + ⌊지연/30⌋)에서 바꾼 이유: 데모 장면 ③ 의 제안(구룡포항 30분 + 과메기문화관 유지)은 끝 시각만 맞추고
     가옥거리 초과 체류는 일정에 넣지 않아, 승인 뒤에도 남은 일정이 계속 약 30분 늦다. version·다음 항목이 바뀔 때마다 새 키가 되어 14:00(구룡포항)·14:40(과메기문화관)에
     밀림 선제 턴이 두 번 더 나왔고, 큐에 남은 것이 장면 ④ 선제 턴 대기를 300초 막았다. 이미 알린 지연을 다시 묻지 않도록 기준을 '마지막으로 알린 지연'으로 바꿨다.
   - payload: `reason`, `delay_minutes`, `next` {item_id, title, planned_start, eta, start_at}, `end` {planned, expected}(오늘 종료: 기준 일정 / 재계산),
     `plan_version`, `suggest`(추천 변경, 아래), `new_violations`(함께 생긴 위반, 없으면 빈 목록).
   - 추천 변경(`suggest`, trip 이 계산하고 Agent 는 그대로 도구로 만든다. 완료 항목·지난 시각은 건드리지 않는다):
-    - 머무는 중 → `{"kind": "extend_stay", item_id, title, stay_minutes, from_stay_minutes}`: 지금 장소 체류를 (계획 시작부터 지금까지 + 여유 15분, 5분 올림)으로 늘린다.
-      planner 가 뒤 일정을 자동으로 미룬다. 계획 시작 기준이라 도착이 늦었던 만큼도 함께 흡수한다.
+    - 머무는 중 → `{"kind": "extend_stay", item_id, title, stay_minutes, from_stay_minutes}`: 지금 장소 체류를 계획 시작부터 (지금 + 여유 15분)과
+      재계산의 그 장소 종료 중 늦은 때까지로 늘린다 (5분 올림). planner 가 뒤 일정을 자동으로 미룬다. 계획 시작 기준이라 도착이 늦었던 만큼도 함께 흡수한다
+      (늦게 도착해 남은 체류가 길면 재계산 종료까지 — 지금 + 15분만 보면 승인해도 30분 넘게 늦었다, `audit-2026-10-12.md` B5).
+      규칙 B(늦게 온 곳은 예정 종료에 떠난다) 아래서는 머무는 중 지연은 예정 종료를 넘긴 뒤에만 생기므로 보통 '지금 + 15분' 이 기준이고,
+      승인하면 그 장소가 `계획 시작 + 새 체류` 에 끝난다고 본다. 일찍 왔으면 재계산은 실제 시작 + 체류에 끝나므로 계획 시작·재계산 시작 중 이른 쪽부터 센다.
     - 이동 중·첫 장소 전 (늘릴 체류가 없음) → `{"kind": "shift_next", item_id, title, start_time, from_start}`: **다음 장소 시작 시각을 예상 도착(5분 올림)으로 고정**한다 (최소한의 변경).
       그 뒤 일정이 밀리고 승인하면 `delay_minutes` 가 0 근처로 돌아온다. 고정 시각은 남으므로 그보다 더 늦게 도착할 것 같으면 `fixed_time_missed` 위반 delay 가 된다.
   - Agent 선제 턴 (docs/agent/README.md §11.2): 늦어진 정도·영향(다음 일정·오늘 종료) → 추천안 1개(위 변경, 미뤄서 새 문제가 생기면 함께 고침) → "다른 방법" 한 줄(체류 줄이기·한 곳 빼기로 원래 시간 맞추기).
-  - 데모: 장면 ③ 은 13:53 위반 delay(23분) 선제 턴 1번 그대로다 (그 뒤 지연은 30분 안팎이라 53분 전에는 다시 묻지 않는다). 확인: 아래 §8.
+  - 데모 (2026-10-12): 장면 ③ 은 가옥거리 예정 종료(13:30) + 15분 = **13:45 밀림 delay(15분) 선제 턴 1번**이다. 하루 초과(18:00, 13:53)보다 먼저 묻고,
+    «과메기문화관은 유지해줘» → 새 제안 승인(가옥거리 체류 늘리기 + 구룡포항 30분, 17:52 종료)이 13:53 전에 끝나 하루 초과는 생기지 않는다.
+    승인한 일정 기준으로 새로 세므로 이동(14:00~) 중에도 다시 묻지 않는다. 확인: 아래 §8.
 - 위반 지연은 "N분 늦음"이 아니라 **"새 위반이 생김"**으로 정의한다. 늦어서 실제로 문제가 생길 때 알리고, 운영시간 종료(`closure`)도 같은 판정으로 잡힌다. 판정 로직은 planner 검증을 그대로 쓴다.
-  위반이 없어도 30분 이상 밀리면 위의 일정 밀림으로 묻는다.
+  위반이 없어도 15분 이상 밀리면 위의 일정 밀림으로 묻는다.
   `new_violations` 중 위 코드와 hard 규칙(`constraint_id` 가 있고 `error`)만 본다. 이동 근사(`travel_estimated`)·긴 도보 같은 경고는 지연이 아니다.
 - `delay` 판정은 위치가 들어올 때와 백그라운드 틱(§4.3)마다 한다. 위치가 안 들어와도 시간이 흐르면 지연이 생기기 때문이다.
   다만 앱이 꺼져 위치가 안 들어오면 '마지막 장소에 계속 머무는 중'으로 보고 판정하므로 틀릴 수 있다 — 그래서 활동이 없으면 단계 3 전송을 보류한다 (§4.1 앱 활동).
@@ -239,6 +257,9 @@
 - **우선순위**: 안전(`near_hazard`, `safety_raised`) > 일정 영향(`delay`) > 안내(`arrived`, `departed`). 한 요청에서 여러 이벤트가 나오면 이 순서로 id 를 매긴다.
 - **단계 3은 한 번에 하나.** 진행 중인 선제 턴이 있거나 Agent 세션이 응답 중(409 `agent_busy`)이면 `queued` 로 두고 끝난 뒤 보낸다. 큐에서는 우선순위 높은 것부터, 같은 원인의 오래된 것은 `suppressed`.
   - 같은 원인 묶음: `delay` 는 하나 (새 이벤트가 그날 일정의 지금 위반 전체를 담는다), `safety_raised` 는 같은 항목 묶음끼리.
+  - **큐에서 기다리는 `delay` 는 지금 상황으로 (2026-10-12, `audit-2026-10-12.md` B6)**: 위치·틱에서 새 delay 가 없으면, 큐의 delay 를 보낸 적 있는 원인·지연만 기준으로 다시 판정해
+    새로 알릴 것이 없으면(지연이 풀림) `suppressed`, 이유·다음 일정·추천 대상이 바뀌었으면 가장 새 것의 문구·payload·`item_ids`·`now` 를 지금 것으로 바꾼다
+    (만든 때 그대로 늦게 보내면 떠난 곳 체류를 늘리자거나 이미 도착한 곳을 '다음'으로 말했다). 보내는 중이거나 앱 활동이 없어 보류 중이면 건드리지 않는다 (보류는 활동 복귀 때 재판정).
   - 보내는 때: 위치·틱 요청의 응답 뒤(백그라운드, LLM 응답을 기다리지 않게)와 백그라운드 틱마다. 한 여행일의 전송은 한 번에 하나만 돈다 (프로세스 안 잠금).
   - Agent 가 응답 중(409 `agent_busy`)이면 `queued` 로 두고 `last_error` 만 남긴 뒤 다음 틱에 다시 보낸다 (실패로 세지 않는다 — 대화가 길어져도 버리지 않게).
   - 그 밖의 실패(접근 불가, 5xx, 404, 세션을 정하지 못함)는 `attempts`·`last_error` 를 남기고 **간격을 늘려** 다시 보낸다:
@@ -251,14 +272,27 @@
 
   | type | 원인 키 |
   |---|---|
-  | `delay` | 새 위반마다 `delay:{code}:{day}:{item_id}:{constraint_id}` 를 `\|` 로 묶음. **하나라도 새것**이면 알린다. 일정 밀림이면 `delay:behind:{day}:{기준}:{단계}` 도 함께 (§3.2) |
+  | `delay` | 새 위반마다 `delay:{code}:{day}:{item_id}:{constraint_id}` 를 `\|` 로 묶음. **하나라도 새것**이면 알린다. 일정 밀림이면 `delay:behind:{day}:{기준}:{단계}` 도 함께 (§3.2). 해소된 위반은 다시 새것 (아래) |
   | `near_hazard` | 걸린 구역마다 `near_hazard:{zone_id}:{risk}` (`\|` 로 묶음) |
   | `safety_raised` / `safety_eased` | planner 경고 id (planner 가 단계가 바뀔 때만 경고를 만든다) |
   | `arrived` / `departed` | 항목 id |
+- **해소된 위반은 다시 알린다 (결정 2026-10-12, `fix/delay-realert`)**
+  - 문제: 위반 원인 키를 여행일 내내 기억해, 16:10 하루 초과(마지막 항목 19:35 > 19:30)를 알리고 제안(카페파도 45 → 30분)을 승인해 위반이 사라진 뒤
+    다음 장소에 오래 머물러 같은 항목의 하루 초과(19:32)가 다시 생겨도 조용했다 (밀림도 지난 알림 20분 + 30분 전이라 조용, §3.2).
+  - 위반 원인 키는 **아직 이어지는 동안만** '알린 것'이다. 위치·틱마다 재계산(§6.2)을 받으면 알린 위반 키 중 지금 `new_violations` 에 없는 것의
+    처음 사라진 시각을 `trip_day.delay_state.gone` 에 두고, **`TRIP_RESOLVE_MIN`(10분, trip 의 지금 기준) 이어서 없으면 해소**로 본다:
+    `delay_state.released[키]` = 그때 이 여행일의 마지막 이벤트 id → 그 id 까지의 이벤트는 그 원인을 알린 것으로 세지 않는다 (`policy.active_causes`).
+    그 뒤 다시 생기면 새 위반으로 다시 알리고, 다시 알린 이벤트부터는 또 센다. 사라졌다가 10분 안에 돌아오면 사라진 시각을 지운다 (해소 아님).
+    재계산을 받지 못한 판정은 건너뛴다 (모르는 것). 가상 시각을 되돌리면 사라진 시각을 지금으로 다시 잡는다.
+  - 유예를 '연속 판정 두 번'이 아니라 **trip 시각 10분**으로 정한 이유: 위치·틱은 30초 간격이라 두 번은 1분도 안 되어 경계에서 깜빡이면 알림이 쌓인다.
+    10분은 쿨다운과 같아, 해소 → 재발 → 다시 알림이 선제 턴 쿨다운보다 잦아질 수 없다. 데모처럼 점이 5분 간격이어도 두세 번 판정을 본다.
+  - 깜빡임 방지는 그대로: 쿨다운(10분) 안의 새 delay 는 큐에서 기다리고, 그 사이 위반이 다시 사라지면 큐의 것은 `suppressed`(위 큐 갱신),
+    같은 묶음의 새것이 옛것을 대체한다 → 선제 턴은 쿨다운마다 많아야 하나.
+  - 큐에서 빠진(`suppressed`) delay 의 원인은 알린 것으로 세지 않는다 (따라잡아 버려졌거나 더 새것이 대체, 여행일 종료). 다른 타입은 그대로.
 - **쿨다운**: 단계 3은 `TRIP_PROACTIVE_COOLDOWN_MIN`(기본 10분, trip 의 지금 기준) 안에 하나만. 안전(`safety_raised`)은 쿨다운을 무시한다.
 - **앱 활동 — 앱이 꺼져 있으면 단계 3 보류 (결정 2026-10-11)**
   - 문제: 틱은 앱과 무관하게 돌아, 앱이 꺼져 위치가 안 들어와도 '마지막 장소에 계속 머무는 중'으로 보고 지연을 판정했다 →
-    30분마다 밀림 선제 턴(LLM 비용)이 쌓이고, 실제로는 이동했을 수도 있어 틀린 판단일 수 있다. 푸시가 없어 사용자는 보지도 못한다.
+    15분마다 밀림 선제 턴(LLM 비용)이 쌓이고, 실제로는 이동했을 수도 있어 틀린 판단일 수 있다. 푸시가 없어 사용자는 보지도 못한다.
   - **활동** = 이 여행일에 위치 전송(`POST location`)·이벤트 조회(`GET events`)·여행일 시작. 그 시각을 `trip_day.active_at` 에 둔다.
     agent 가 매 턴 부르는 `GET state` 는 활동이 아니다 (앱이 꺼져도 Agent 는 부른다). 틱(`POST tick`)도 아니다.
     관제 대시보드(`/console/`)·`run_demo.py`·CLI `trip events` 의 이벤트 조회도 활동으로 친다 — 시연 중에는 그 화면이 앱 역할을 한다.
@@ -369,7 +403,7 @@ POST /planner/plans/{id}/projection        (저장 안 함, 본문·필드 모�
        "delay_minutes": 35,                                                   // 다음 항목 시작 시각 차이 (음수 = 여유)
        "next": {"item_id": 13, "planned_start": "15:00", "eta": "15:35", "start_at": "15:35"}}   // TripState.next 에 그대로 쓴다
 ```
-- `done` 항목은 기록된 시각 그대로, 현재 항목은 실제 도착 시각부터 (예정 체류가 이미 지났으면 `now` 에 끝난다고 본다), 이동 중이면 `now + 현재 위치 → 다음 장소 이동시간`(routing)에 도착한다고 보고 남은 항목을 다시 계산한다.
+- `done` 항목은 기록된 시각 그대로, 현재 항목은 실제 도착 시각부터 (늦게 왔으면 기준 일정의 예정 종료에 떠난다고 보고, 그 시각이 이미 지났으면 `now` 에 끝난다고 본다 — planner §8.2 규칙 B. 그래서 늦게 도착한 것만으로는 지연이 아니고, 예정 종료를 넘겨 머물 때부터 늦어진다), 이동 중이면 `now + 현재 위치 → 다음 장소 이동시간`(routing)에 도착한다고 보고 남은 항목을 다시 계산한다.
   이동 중의 '다음 장소'는 마지막으로 다녀온·머문 항목 뒤의 첫 `planned` 항목이다.
 - 지난 항목과 지금 머무는 항목의 고정 시각 놓침은 따지지 않는다 (이미 지난 일). 지금 머무는 곳의 운영시간 종료는 따진다.
 - 사용자가 고정한 `start_time` 은 그대로 고정이다 (늦으면 `fixed_time_missed`).
@@ -383,6 +417,7 @@ POST /planner/plans/{id}/projection        (저장 안 함, 본문·필드 모�
 |---|---|---|
 | planner | `GET /planner/plans/{id}` | 오늘 항목·장소 좌표 |
 | planner | `GET /planner/plans/{id}/safety/alerts?status=new`, `POST …/alerts/{id}/seen` | `safety_raised`/`safety_eased` |
+| planner | `GET /planner/plans/{id}/proposals?status=accepted` (계획 version 이 마지막 delay 알림 때와 다를 때만, 결과는 `trip_day.delay_state` 에 기억) | 알린 뒤 제안을 승인했는지 → 일정 밀림을 새로 셈 (§3.2) |
 | safety | `GET /safety/avoid` (fingerprint 가 바뀔 때만 다시 받기: `GET /safety/situation`) | `near_hazard` |
 | safety | `GET /safety/sim` | 시계 (§5) |
 | routing | (planner projection 이 부름) | 이동 중 예상 도착 |
@@ -404,7 +439,7 @@ POST /planner/plans/{id}/projection        (저장 안 함, 본문·필드 모�
 
 | 테이블 | 내용 |
 |---|---|
-| `trip_day` | plan_id, user_id, day, date, session_id, started_at, ended_at, ended_reason, 마지막 위치(lat, lng, accuracy, recorded_at, source), current_item_id, current_state, current_since, 머무름 판정(cand_item_id, cand_since, outside_since), delay_minutes, next(JSON), 앱 활동(active_at: 위치·이벤트 조회, located_at: 위치), situation(JSON, 상황 해제 판정) |
+| `trip_day` | plan_id, user_id, day, date, session_id, started_at, ended_at, ended_reason, 마지막 위치(lat, lng, accuracy, recorded_at, source), current_item_id, current_state, current_since, 머무름 판정(cand_item_id, cand_since, outside_since), delay_minutes, next(JSON), expected(JSON, TripState.expected — 종료하면 null), 앱 활동(active_at: 위치·이벤트 조회, located_at: 위치), situation(JSON, 상황 해제 판정), delay_state(JSON, 지연 알림 기억 — 해소된 위반 `gone`·`released`, 승인 확인 `accepted`, §4.1·§3.2) |
 | `trip_event` | 3.3 Event 필드 + 원인 키(`cause_key`, 중복 억제용), delivered_at(쿨다운 기준) |
 
 판정용 최근 위치(머무름 계산)는 `trip_day` 에 "반경 안에 처음 들어온 항목·시각(`cand_*`) / 반경 밖으로 처음 나간 시각(`outside_since`)"만 둔다. 전체 궤적은 저장하지 않는다.
@@ -449,7 +484,7 @@ python scripts/planner/cli.py trip end 7      # 재생이 끝나도 여행일은
 | 파일 | 장면 | 기대 이벤트 |
 |---|---|---|
 | `scene2_arrival.json` | ② 12:30 가옥거리 도착 | `arrived`(단계 2) + 해설 카드(`card.kind=docent`), 지연 없음 |
-| `scene3_delay.json` | ③ 가옥거리에서 30분 더 머묾 | 처음 60분은 `delay` 없음 → 카페 종료가 18:00 을 넘으면 `delay`(단계 3) 한 번 → 구룡포항 도착 |
+| `scene3_delay.json` | ③ 가옥거리에서 예정보다 오래 머묾 (13:47 까지) | 처음 60분은 `delay` 없음 → 13:45 구룡포항이 15분 늦어 `delay`(단계 3, `behind_schedule`) 한 번. 하루 초과(13:53)는 아직 없음. pytest 는 이어서 승인(가옥거리 체류 늘리기 + 구룡포항 30분) → 이동, 두 번째 지연 없음 |
 | `scene4_safety.json` | ④ 15:20 과메기문화관에서 storm | `safety_raised`(단계 3, 북방파제 위험) → 15:25 선제 제안 승인(북방파제 → 근대문화역사관) → 역사관 도착 → 차로 카페 가는 길에 구룡포수협 주변 `near_hazard`(단계 1) → 카페 도착 |
 
 ```jsonc
@@ -491,6 +526,11 @@ python scripts/planner/cli.py trip end 7      # 재생이 끝나도 여행일은
   - `run_demo.py --auto`: 기대 20개 모두 통과. 단계 3 은 13:53 delay(`violations`, 23분)와 15:20 safety_raised 두 번뿐 (밀림 선제 턴 없음).
   - 여유 있는 계획(가옥거리 60 → 구룡포항 50 → 과메기문화관 60, 15:42 종료)을 재생 파일로: 가옥거리에 머문 채 14:00(30분)·14:30(60분)에 밀림 선제 턴 2번
     (제안: 가옥거리 체류 60 → 105 → 135분) → 14:35 승인 → 구룡포항 13:40 → 14:55 예정 → 15:00(25분 더 머묾)에 15분 늦음, 이벤트 없음.
+  - (위 두 줄은 30분 기준 때의 결과다. 15분 기준은 아래)
+- 해소 뒤 다시 알리기·밀림 15분 확인 (2026-10-12, `fix/delay-realert`, `AGENT_PROVIDER=scripted`, `SAFETY_SIM_ENABLED=true`, `--speed 0`, LLM 호출 없음):
+  - `run_demo.py --auto`: 확인 29/29. 단계 3 은 13:45 delay(`behind_schedule`, 15분)와 15:20 safety_raised 두 번뿐 (위반 delay 없음).
+  - ③: 선제 턴 제안 "가옥거리 60 → 95분 + 구룡포항 50 → 30분, 17:52 종료"(다른 방법: 과메기문화관 빼기) → «과메기문화관은 유지해줘» 에
+    `must_include` 를 더한 새 제안이 이전 제안을 대체 → 승인 → 14:01 출발, 14:07 구룡포항, 14:49 과메기문화관. 이동 중 지연 알림 없음. ④ 는 그대로.
 - 해수욕장 계획(북방파제 대신 구룡포해수욕장, 2026-10-09 잠시 사용)으로 실제 서비스 확인 (`SAFETY_SOURCE=mock`, `--speed 0`, Claude Haiku 5.5): 장면 ② 3개, ③ 4개, ④ 5개 기대 모두 통과.
   - ③: 13:53 에 delay (`day_overflow` 18:02 + `end_before`) 한 번. 선제 턴은 "구룡포항 50분 → 30분, 17:46 종료" 제안.
   - ④: 15:20 safety_raised (해수욕장·가는 길 주의, 카페 가는 차량 구간 위험 — 구룡포수협 맨홀 등급 3). 선제 턴은 "해수욕장 대신 근대문화역사관(실내)" 제안.
@@ -511,8 +551,9 @@ python scripts/planner/cli.py trip end 7      # 재생이 끝나도 여행일은
 - 같은 지연으로 이벤트가 두 번 나오지 않는다. 제안 거절 후 더 나빠질 때만 다시 나온다.
 - 단계 3이 동시에 두 개 나가지 않는다 (큐).
 - 여행일이 아니면 시작이 409 `not_trip_day`.
-- 가벼운 지연(새 위반 없음, 30분 미만)은 이벤트가 없다.
-- 일정 밀림: 30분 미만 무반응 / 30분 → 1번 / 같은 단계 반복·다음 항목이 바뀌어도 무반응 / 60분 → 다시 / 승인(일정이 미뤄짐) 후 새 기준 / 위반과 동시 → 1개 / 큐·쿨다운.
+- 가벼운 지연(새 위반 없음, 15분 미만)은 이벤트가 없다.
+- 일정 밀림: 15분 미만 무반응 / 15분 → 1번 / 같은 단계 반복·다음 항목이 바뀌어도 무반응 / +15분 → 다시 / 제안 승인 후 승인한 일정 기준 0 부터 (직접 고침은 아님) / 큐에서 버려진 것은 기준 아님 / 위반과 동시 → 1개 / 큐·쿨다운.
+- 해소된 위반: 승인으로 사라져 10분 → 해소, 다시 생기면 새 이벤트 / 깜빡임(10분 안)·쿨다운 안에서는 선제 턴 많아야 하나.
 - 장면 ②·③·④ 재생 파일이 기대 이벤트를 낸다.
 - 선제 턴 전송이 실패하면 간격을 늘려 다시 보내고, 상한에 닿으면 `failed` (agent_busy 는 세지 않음).
 - 앱 활동 없음 → 단계 3 `queued`·전송 안 함(시도 수 0) / 활동 복귀 → 최신 한 건만 전송, 무효한 것 suppressed / 단계 0~2 영향 없음.
@@ -543,7 +584,8 @@ docker compose run --rm trip pytest tests/trip
 | `TRIP_DEFAULT_ACCURACY_M` | 30 | accuracy 를 보내지 않은 점 |
 | `TRIP_HAZARD_NEAR_M` | 50 | 위험 구역 접근 거리 |
 | `TRIP_HAZARD_CACHE_SEC` | 5 | safety 상황(fingerprint)을 다시 묻지 않는 시간 |
-| `TRIP_BEHIND_MIN` | 30 | 다음 일정이 이만큼(분) 밀리면 `delay`(`behind_schedule`). 마지막으로 알린 지연보다 이만큼 더 밀릴 때 다시 (§3.2). 0 이면 끔 |
+| `TRIP_BEHIND_MIN` | 15 | 다음 일정이 이만큼(분) 밀리면 `delay`(`behind_schedule`). 마지막으로 알린 지연보다 이만큼 더 밀릴 때마다 다시, 제안 승인 뒤에는 새 일정 기준으로 (§3.2). 0 이면 끔 |
+| `TRIP_RESOLVE_MIN` | 10 | 알린 위반이 재계산에서 이만큼(분, trip 의 지금 기준) 이어서 사라지면 해소 — 다시 생기면 또 알린다 (§4.1) |
 | `TRIP_PROACTIVE_COOLDOWN_MIN` | 10 | 단계 3 쿨다운 (안전 제외) |
 | `TRIP_PROACTIVE_MAX_ATTEMPTS` | 3 | 선제 턴 전송이 이만큼 실패하면 `failed` (agent_busy 는 세지 않음, §4.1) |
 | `TRIP_PROACTIVE_RETRY_SEC` | 30 | 실패 뒤 다시 보내기까지 기다림. 실패마다 두 배 |

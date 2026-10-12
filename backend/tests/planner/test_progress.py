@@ -218,6 +218,12 @@ def test_projection_from_stored_progress_light_delay(client):
     before = get_plan(client, pid)
     r = ok(project(client, pid, day=1, now="14:00"))
     assert (r["day"], r["now"]) == (1, "14:00")
+    # 14분 늦게 왔다: 예정 종료(14:36)에 떠난다고 본다 (규칙 B) -> 뒤 일정은 아직 제시간
+    assert view(r["plan"], ids["p-food"])["end_at"] == "14:36"
+    assert r["new_violations"] == [] and r["delay_minutes"] == 0
+    assert r["next"] == {"item_id": ids["p-museum"], "planned_start": "14:42", "eta": "14:42", "start_at": "14:42"}
+    # 예정 종료를 넘겨 머물면 그때부터 늦어진다
+    r = ok(project(client, pid, day=1, now="14:50"))
     assert view(r["plan"], ids["p-food"])["end_at"] == "14:50"
     assert r["new_violations"] == [] and r["delay_minutes"] == 14
     assert r["next"] == {"item_id": ids["p-museum"], "planned_start": "14:42", "eta": "14:56", "start_at": "14:56"}

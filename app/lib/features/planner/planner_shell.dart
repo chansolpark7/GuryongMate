@@ -322,7 +322,11 @@ class _PlannerShellState extends State<PlannerShell> {
               const MapScreen(),
               if (active) TodayScreen(onEndTrip: _endFlow) else const SizedBox.shrink(),
             ]),
-            floatingActionButton: tab == 0 && c.plan != null ? PlannerFabs(hasSuggestion: t.hasSuggestion) : null,
+            // 탭을 바꿀 때 버튼이 화면과 같은 순간에 나타나고 사라지게: 자리를 null 로 비우면 Scaffold 가 이전 버튼을
+            // 200ms(kFloatingActionButtonSegue) 남겨 두고 퇴장 처리를 해 한 박자 늦게 사라진다 → 버튼은 늘 두고 Planner 탭이 아닐 때 숨긴다.
+            // 셸 Scaffold 에 둔 이유(스낵바가 뜨면 함께 위로 비켜남)는 그대로다.
+            floatingActionButton: c.plan != null ? Visibility(visible: tab == 0, child: PlannerFabs(hasSuggestion: t.hasSuggestion)) : null,
+            floatingActionButtonAnimator: FloatingActionButtonAnimator.noAnimation,
             bottomNavigationBar: _BottomNav(
               index: tab,
               companion: active,

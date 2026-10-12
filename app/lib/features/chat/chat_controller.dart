@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:clock/clock.dart';
 
 import 'package:flutter/foundation.dart';
 
@@ -55,11 +56,26 @@ class ChatTurn {
   String? stepsSummary;
 
   bool thinking = false;
+
+  /// 경과 시간 (진행 카드 머리 · 접힌 요약). 이전 기록에서 불러온 턴은 null.
+  DateTime? startedAt;
+  DateTime? endedAt;
+  Duration? get elapsed => startedAt == null ? null : (endedAt ?? clock.now()).difference(startedAt!);
+
   final text = StringBuffer();
   final cards = <ChatCard>[];
   bool done = false;
   bool stopped = false;
   int? messageId;
+
+  /// 선제 턴의 계기 (서버 MessageView.trigger). 없으면 [ChatController.proactiveOf] 가 이벤트 맵·[userless] 로 판단한다.
+  AgentTrigger? trigger;
+
+  /// 사용자 말 없이 시작한 assistant 턴인데 대화의 첫 턴이 아니다 (trigger 가 없는 옛 기록의 선제 메시지 추정).
+  bool userless = false;
+
+  /// 이 턴의 답이 저장된 시각 (기록에서 불러온 턴). userless 선제 메시지의 시각으로 쓴다.
+  DateTime? createdAt;
 
   /// 오류 (error 이벤트·스트림 시작 전 503 등). [retryable] 이면 [다시 시도] 로 같은 말을 다시 보낸다.
   String? error;
@@ -85,6 +101,22 @@ class ChatTurn {
   }
 }
 
+/// 선제 메시지(Agent 가 먼저 말을 건 답)의 표시 정보. [ChatController.proactiveOf].
+class ProactiveInfo {
+  ProactiveInfo({this.type, this.reason, this.severity, this.at, this.event});
+
+  /// 이벤트 종류 (delay | safety_raised | …). 옛 기록에서 추정한 선제 메시지면 null.
+  final String? type;
+  final String? reason;
+  final String? severity;
+  final DateTime? at;
+
+  /// 이번 실행 중 받은 trip 이벤트 (안전 근거 박스·심각도). 새로고침 뒤에는 없을 수 있다.
+  final TripEvent? event;
+
+  String get timeText => at == null ? '' : clockText(at!);
+}
+
 /// 구룡메이트 대화. 계획 하나당 세션 하나 (여행 전·중 맥락 유지).
 class ChatController extends ChangeNotifier {
   ChatController(this.api, this.plan);
@@ -107,6 +139,23 @@ class ChatController extends ChangeNotifier {
 
   /// 선제 메시지 id → 그 이벤트. 대화 기록에는 숨김 `[이벤트]` 메시지가 안 보이므로 이벤트의 agent.message_id 로 맞춘다 (events.md §3.1).
   final proactive = <int, TripEvent>{};
+
+  /// 선제 메시지인지와 그 표시 정보. 서버 trigger → 이번 실행 중 받은 이벤트([proactive]) → 사용자 말 없이 시작한 턴(첫 턴 제외) 순.
+  /// 새로고침·앱이 꺼진 사이 온 선제 메시지도 trigger 로 알아본다.
+  ProactiveInfo? proactiveOf(ChatTurn t) {
+    final event = t.messageId == null ? null : proactive[t.messageId];
+    final tr = t.trigger;
+    if (tr != null) {
+      final e = event != null && (tr.eventId == null || event.id == tr.eventId) ? event : null;
+      return ProactiveInfo(type: tr.type, reason: tr.reason, severity: e?.severity, at: tr.at ?? e?.now, event: e);
+    }
+    if (event != null) {
+      final reason = event.payload['reason'];
+      return ProactiveInfo(type: event.type, reason: reason is String ? reason : null, severity: event.severity, at: event.now, event: event);
+    }
+    if (t.userless && t.user.isEmpty) return ProactiveInfo(at: t.createdAt);
+    return null;
+  }
 
   /// 시트를 이 메시지로 스크롤 (새 선제 메시지). 시트가 읽고 비운다.
   int? focusMessageId;
@@ -223,12 +272,17 @@ class ChatController extends ChangeNotifier {
         out.add(ChatTurn(m.content, fromHistory: true, placeId: m.placeId)..done = true);
         continue;
       }
-      if (out.isEmpty || out.last.text.isNotEmpty || out.last.cards.isNotEmpty) {
-        out.add(ChatTurn('', fromHistory: true)..done = true);
+      // 선제 메시지(trigger)는 앞 턴이 빈 답으로 끝났어도 항상 새 턴
+      if (out.isEmpty || out.last.text.isNotEmpty || out.last.cards.isNotEmpty || (m.trigger != null && out.last.trigger == null)) {
+        out.add(ChatTurn('', fromHistory: true)
+          ..done = true
+          ..userless = out.isNotEmpty);
       }
       final t = out.last
         ..messageId = m.id
-        ..placeId ??= m.placeId;
+        ..placeId ??= m.placeId
+        ..trigger ??= m.trigger
+        ..createdAt ??= m.createdAt;
       t.text.write(m.content);
       t.steps.addAll(m.steps);
       if (m.steps.isNotEmpty) t.stepsSummary = m.stepsSummary ?? '${m.steps.length}단계 완료';
@@ -272,6 +326,7 @@ class ChatController extends ChangeNotifier {
   }
 
   void _run(ChatTurn turn, Stream<SseEvent> stream) {
+    turn.startedAt = clock.now();
     turns.add(turn);
     busy = true;
     _notify();
@@ -327,6 +382,7 @@ class ChatController extends ChangeNotifier {
         final full = '${d['text'] ?? ''}';
         if (turn.text.isEmpty && full.isNotEmpty) turn.text.write(full);
         turn.messageId = d['message_id'] as int?;
+        turn.trigger ??= AgentTrigger.fromJson(d['trigger']);
       case 'error':
         turn
           ..error = '${d['message'] ?? '지금은 답할 수 없어요. 잠시 후 다시 시도해 주세요.'}'
@@ -339,7 +395,8 @@ class ChatController extends ChangeNotifier {
   void _finish(ChatTurn turn) {
     turn
       ..done = true
-      ..thinking = false;
+      ..thinking = false
+      ..endedAt ??= clock.now();
     for (final s in turn.steps) {
       if (s.running) s.status = turn.stopped || turn.error != null ? 'error' : 'done';
     }

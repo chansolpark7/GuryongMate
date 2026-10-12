@@ -45,6 +45,7 @@ from app.agent.schemas import (
     SessionDetail,
     SessionView,
     Step,
+    Trigger,
 )
 from app.core.auth import CurrentUser, ForwardAuth, issue_token
 from app.db import SessionLocal, get_db
@@ -181,10 +182,11 @@ async def get_session(session_id: str, db: DbSession, user_id: UserId, auth: Aut
             prev.steps += steps
             prev.cards += cards
             prev.steps_summary = _summary([x.model_dump() for x in prev.steps])
+            prev.trigger = prev.trigger or (Trigger.model_validate(m.trigger) if m.trigger else None)
         else:
             messages.append(MessageView(id=m.id, role=m.role, content=m.content, created_at=m.created_at,
                                         place_id=m.place_id, steps=steps, steps_summary=_summary(m.steps),
-                                        cards=cards))
+                                        cards=cards, trigger=Trigger.model_validate(m.trigger) if m.trigger else None))
     return SessionDetail(**SessionView.model_validate(s).model_dump(), messages=messages)
 
 
@@ -245,7 +247,7 @@ async def _turn_response(session_id: str, plan_id: int, text: str, auth: dict[st
             error = data
     return ChatResult(text=text_out, steps=[Step.model_validate(s) for s in steps.values()], steps_summary=summary,
                       cards=cards, error=error, usage=done.get("usage"), message_id=done.get("message_id"),
-                      mode=done.get("mode"))
+                      mode=done.get("mode"), trigger=done.get("trigger"))
 
 
 _STREAM_DOC = {200: {"content": {"text/event-stream": {}}, "description": "stream=true 면 SSE 이벤트 스트림"}}
@@ -279,10 +281,17 @@ async def proactive_turn(session_id: str, body: EventRequest, db: DbSession, use
     limits.consume(db, user_id, "event")  # 넘으면 429 -> trip 이 실패로 세고 다시 보낸다 (AGENT_LIMIT_EVENT_*)
     log.info("session=%s 선제 턴 event=%s id=%s", session_id[:8], event["type"], event_id)
     result = await _turn_response(session_id, s.plan_id, event_message(event), auth, http, llm, False,
-                                  trip=body.trip, fetch_trip=False, hidden=True)
+                                  trip=body.trip, fetch_trip=False, hidden=True, trigger=event_trigger(event))
     if event_id is not None and result.error is None:
         await to_thread.run_sync(_save_event_turn, session_id, event_id, result.model_dump(mode="json"))
     return result
+
+
+def event_trigger(event: dict) -> dict:
+    """선제 턴 답에 남길 계기 (schemas.Trigger). reason 은 delay 의 violations | behind_schedule 같은 세부 이유."""
+    reason = (event.get("payload") or {}).get("reason")
+    return Trigger(type=event["type"], event_id=event.get("id"), reason=reason if isinstance(reason, str) else None,
+                   at=event.get("now") or event.get("created_at")).model_dump()
 
 
 def _save_event_turn(session_id: str, event_id: int, result: dict) -> None:

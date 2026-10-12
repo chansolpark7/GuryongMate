@@ -15,6 +15,7 @@ class PlacePoint:
     lat: float
     lng: float
     content_type: str = ""  # 관광지·음식점·문화시설… (실내 추정용)
+    category_names: tuple[str, ...] = ()  # 한국관광공사 분류 (대·중·소, 해안 추정용: 항구/포구·해변. 해수욕장 …)
 
 
 class PlacesUnavailable(RuntimeError):
@@ -45,7 +46,8 @@ class HttpPlaceLookup:
             info = None
         elif resp.is_success:
             d = resp.json()
-            info = PlacePoint(d["id"], d["title"], float(d["lat"]), float(d["lng"]), d.get("content_type") or "")
+            info = PlacePoint(d["id"], d["title"], float(d["lat"]), float(d["lng"]), d.get("content_type") or "",
+                              tuple(d.get("category_names") or ()))
         else:
             raise PlacesUnavailable(f"GET /places/{place_id} -> {resp.status_code}")
         self._cache[place_id] = (_time.monotonic(), info)
