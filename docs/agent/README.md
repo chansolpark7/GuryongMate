@@ -477,8 +477,10 @@ Sonnet 5.5 의 thinking 블록도 읽지 못한다. Haiku 5.5 에는 서버측 f
 | `scene2_house_built` · `scene2_name` | "언제 지어진 집들이에요?" · "왜 이름이 구룡포야?" | 가이드 노트 확인 → 자료 찾기 → 해설 |
 | `scene2_shorter` | "더 짧게" | `remember(style, "해설은 핵심만 짧게", user)` → `style_length: short` |
 | `behind_schedule` | 선제 턴 `delay` + reason `behind_schedule` (`scene3_delay` 보다 위) | 일정 확인 → `update_item`(trip 의 추천 변경 `event:suggest.*` 그대로) → 검토 → "○○ 도착이 … 늦어질 것 같아요. 남은 일정을 그만큼 뒤로 미루는 안 … 다른 방법으로 …" |
+| `scene3_behind` | 선제 턴 `delay` + reason `behind_schedule`, 현재 일정에 구룡포항·과메기문화관이 있을 때 (`behind_schedule` 보다 위, 데모 장면 ③) | 일정 확인 → `update_item`(추천 변경 그대로: 가옥거리 체류 늘리기) → 구룡포항 30분 → 검토 → "○○ 도착이 … 늦어질 것 같아요. … 미루고 점심을 30분으로 … 18시 전에. 다른 방법으로 과메기문화관을 빼서 …" |
 | `scene3_delay` | 선제 턴 `delay` | 일정 확인 → 과메기문화관 빼기 → 검토 → 세 문단 답변 |
-| `scene3_keep_museum` | "과메기문화관은 유지해줘" (대기 제안 있을 때) | 초안 비우기 → `must_include` → 구룡포항 30분 → 새 제안이 이전 제안 대체 |
+| `scene3_keep_museum_removed` | "과메기문화관은 유지해줘" (대기 제안이 과메기문화관을 뺄 때 — `scene3_delay` 다음) | 초안 비우기 → `must_include` → 구룡포항 30분 → 새 제안이 이전 제안 대체 |
+| `scene3_keep_museum` | "과메기문화관은 유지해줘" (그 밖의 대기 제안 — `scene3_behind` 다음) | 이어받은 초안(앞의 안) 그대로 + `must_include` → 검토 → 새 제안이 이전 제안 대체 |
 | `scene4_safety` | 선제 턴 `safety_raised` | 안전 확인 → 실내 찾기 → 북방파제를 근대문화역사관으로 교체. 관문이 차량 구간(침수 감시 구역)을 되돌리면 이유를 덧붙인 답 |
 | `error_llm_unavailable` | "[테스트] LLM 오류" | `error` `llm_unavailable` (오류 화면 확인용) |
 | `guide_*` | 가이드 준비 (데모 6곳) | 근거 조각 출처(P1…)를 단 고정 노트 |
