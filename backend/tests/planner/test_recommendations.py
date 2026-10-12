@@ -1,4 +1,10 @@
 """장소 추천 (명세 §6): 후보 상태는 지금 일정(같은 날·같은 장소)에서 계산, [추가] 위치, [빼기] 대상."""
+from datetime import datetime
+
+import pytest
+
+from app.planner import clock
+from app.planner.clock import KST, FixedClock
 from .conftest import H, add, err, get_plan, item_id, new_plan, ok, order
 
 
@@ -174,3 +180,57 @@ def test_old_card_still_works_after_plan_changes(client):
         add(client, pid, place)
     plan = ok(act(client, pid, rec, rec["candidates"][0]["id"], "add"))["plan"]
     assert "p-cafe" in order(plan)
+
+
+# ---------- 여행 중 [추가] 위치 (2026-10-12) ----------
+
+@pytest.fixture
+def at_1030():
+    saved = clock._clock
+    clock._clock = FixedClock(datetime(2026, 10, 10, 10, 30, tzinfo=KST))
+    yield
+    clock._clock = saved
+
+
+def progress(client, pid, iid, status, at):
+    return ok(client.post(f"/planner/plans/{pid}/items/{iid}/progress", json={"status": status, "at": at}, headers=H))
+
+
+def three_stops(client, **museum) -> tuple[int, dict]:
+    """10:00 시작: 가옥거리(30분) -> 물회집 -> 과메기문화관. 카페는 가옥거리·물회집 사이에 있다."""
+    pid = new_plan(client, day_start="10:00", day_end="22:00")["id"]
+    add(client, pid, "p-house", stay_minutes=30)
+    add(client, pid, "p-food", stay_minutes=30)
+    return pid, add(client, pid, "p-museum", **museum)
+
+
+def test_add_before_trip_keeps_old_rule(client):
+    """여행 전(진행 기록 없음): 이동이 가장 적게 느는 곳 (가옥거리 바로 뒤)."""
+    pid, _ = three_stops(client)
+    rec = recommend(client, pid, [{"place_id": "p-cafe", "day": 1}])
+    plan = ok(act(client, pid, rec, rec["candidates"][0]["id"], "add"))["plan"]
+    assert order(plan) == ["p-house", "p-cafe", "p-food", "p-museum"]
+
+
+def test_add_during_trip_goes_after_done_items(client, at_1030):
+    """여행 중인 날은 다녀온·머무는 항목 앞에 넣지 않는다 (마지막 done·visiting 뒤만)."""
+    pid, plan = three_stops(client)
+    progress(client, pid, item_id(plan, "p-house"), "visiting", "10:00")
+    progress(client, pid, item_id(plan, "p-house"), "done", "10:20")
+    progress(client, pid, item_id(plan, "p-food"), "visiting", "10:25")
+    rec = recommend(client, pid, [{"place_id": "p-cafe", "day": 1}])
+    plan = ok(act(client, pid, rec, rec["candidates"][0]["id"], "add"))["plan"]
+    assert order(plan)[:2] == ["p-house", "p-food"] and "p-cafe" in order(plan)[2:]
+
+
+def test_add_during_trip_avoids_new_violation(client, at_1030):
+    """다녀온 뒤 자리 중 새 위반이 없는 곳을 먼저 고른다. 문화관(12:00 고정) 앞에 넣으면 놓치므로 맨 뒤로
+    (위반을 안 보면 이동이 가장 적게 느는 가옥거리 바로 뒤가 된다)."""
+    pid, plan = three_stops(client, start_time="12:00")
+    assert plan["violations"] == []
+    progress(client, pid, item_id(plan, "p-house"), "visiting", "10:00")
+    progress(client, pid, item_id(plan, "p-house"), "done", "10:25")
+    rec = recommend(client, pid, [{"place_id": "p-cafe", "day": 1, "stay_minutes": 90}])
+    plan = ok(act(client, pid, rec, rec["candidates"][0]["id"], "add"))["plan"]
+    assert order(plan) == ["p-house", "p-food", "p-museum", "p-cafe"]
+    assert plan["violations"] == []

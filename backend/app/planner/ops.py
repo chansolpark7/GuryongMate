@@ -316,6 +316,17 @@ def live_actual(plan: PlannerPlan, places: PlaceLookup, now: datetime | None) ->
     return _anchor(plan, places, day, now.hour * 60 + now.minute, None)
 
 
+def shown(plan: PlannerPlan, places: PlaceLookup, now: datetime | None) -> PlanDetail:
+    """응답용 계획 (GET·편집·진행 기록 응답). 시각은 계획 기준 그대로, 위반(violations)은 여행 중인 날(live_actual)이면
+    지금 기준(projection·preview·Agent 검토와 같은 기준)이다. 다녀온 항목의 계획 기준 시각 위반은 사라지고,
+    지금 기준으로 생기는 위반(늦어서 하루 초과 등)이 보인다. 다른 날은 계획 기준과 같다 (§8.5)."""
+    out = detail(plan, places)
+    actual = live_actual(plan, places, now)
+    if actual is not None:
+        out.violations = detail(plan, places, actual).violations
+    return out
+
+
 def progress_changed(before: PlanDetail, after: PlanDetail, current: PlannerPlan) -> list[dict]:
     """제안 이후 다녀온(done) 항목 중 제안이 바꾸거나 지우는 것. 승인하면 지난 일을 바꾸게 된다 (409 progress_changed)."""
     was_done = {i.id for d in before.days for i in d.items if i.status == "done"}
