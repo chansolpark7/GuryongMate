@@ -215,7 +215,8 @@ def test_situation_unknown_zone_is_not_cleared(env):
     env.safety.situation = lambda: sit  # 침수 센서 자료가 끊김 (값 없음) -> 해제라고 하지 않는다
     assert env.tick("12:40")["events"] == []
     sit["zones"]["flood_4"] = "safe"
-    assert [x["type"] for x in env.tick("12:50")["events"]] == ["safety_eased"]
+    # (위치 없이 12:50: 첫 장소를 지금 시작으로 봐 20분 밀림 delay 도 함께 나온다)
+    assert [x["type"] for x in env.tick("12:50")["events"] if x["type"] != "delay"] == ["safety_eased"]
 
 
 def test_held_safety_raised_dropped_when_situation_cleared(env):

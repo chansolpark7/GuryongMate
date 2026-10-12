@@ -61,17 +61,36 @@ def test_scene2_arrival_card(env):
     assert env.agent.received == []  # LLM 없이
 
 
+def play(env, start: str, steps: list[dict]) -> list[dict]:
+    """재생 파일 형식의 단계를 그 시각부터 이어서 보낸다 (위치만). 마지막 이벤트 목록."""
+    for a in scene.expand({"start": f"2026-10-10T{start}:00+09:00", "steps": steps}, coords):
+        if a.kind == "loc":
+            env.clock.when = a.at
+            ok(env.c.post(env.url("/location"), headers=H, json={
+                "lat": a.lat, "lng": a.lng, "accuracy": 10, "recorded_at": a.at.isoformat(), "source": "replay"}))
+    return env.events()
+
+
 def test_scene3_delay(env):
+    """데모 장면 ③ (docs/demo/README.md): 가옥거리에 오래 머묾 -> 13:45 일정 밀림 선제 턴 한 번 -> «과메기문화관은 유지해줘» 로
+    고친 제안 승인(가옥거리를 추천안만큼 늘리고 구룡포항 30분) -> 이동. 승인한 일정 기준으로 새로 세므로 그 뒤 선제 턴은 없다."""
     _, events = replay(env, "scene3_delay.json")
-    delays = [e for e in events if e["type"] == "delay"]
-    assert len(delays) == 1  # 같은 지연으로 두 번 나오지 않는다
-    d = delays[0]
+    [d] = [e for e in events if e["type"] == "delay"]
     assert d["status"] == "delivered" and d["agent"]["proposal_id"]
-    assert {v["code"] for v in d["payload"]["new_violations"]} == {"day_overflow"}
-    assert "13:50" < d["now"][11:16] <= "14:00"  # 가옥거리에 20여 분 더 머물면 카페 종료가 18:00 을 넘는다
+    assert d["payload"]["reason"] == "behind_schedule" and d["payload"]["new_violations"] == []
+    assert d["now"][11:16] == "13:45" and d["payload"]["delay_minutes"] == 15  # 18:00 초과(13:53)보다 먼저
+    sg = d["payload"]["suggest"]
+    assert sg["kind"] == "extend_stay" and sg["title"] == "구룡포 일본인 가옥거리" and sg["stay_minutes"] == 90
     assert [r[1]["type"] for r in env.agent.received] == ["delay"]
-    kinds = [e["type"] for e in events]
-    assert kinds.count("arrived") == 2 and kinds.count("departed") == 1
+    # 대화로 고친 제안(id 가 선제 턴 제안보다 큼)을 승인
+    env.planner.accept(env.plan_id, d["agent"]["proposal_id"] + 1, {"kto-1909659": sg["stay_minutes"], "kto-2610501": 30})
+    events = play(env, "13:48", [{"goto": "kto-1909659"}, {"at": "14:00"}, {"walk_to": "kto-2610501", "stay": 30},
+                                 {"walk_to": "kto-2660046", "stay": 5}, {"at": "15:18"}])
+    assert [e["type"] for e in events if e["type"] == "delay"] == ["delay"]  # 두 번째 지연 알림 없음
+    assert [r[1]["type"] for r in env.agent.received] == ["delay"]
+    arrived = [e["payload"]["place_id"] for e in events if e["type"] == "arrived"]
+    assert arrived == ["kto-1909659", "kto-2610501", "kto-2660046"]
+    assert env.state()["delay_minutes"] <= 0  # 승인한 일정보다 늦지 않음
 
 
 def test_scene4_safety(env):

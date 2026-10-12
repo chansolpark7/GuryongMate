@@ -3,6 +3,7 @@
 - 우선순위: 안전(near_hazard, safety_raised) > 일정 영향(delay) > 안내(arrived, departed …)
 - 중복 억제: 같은 원인 키로는 다시 알리지 않는다. 원인이 여럿('|')이면 하나라도 새것일 때만 알린다
   -> 제안을 거절해도 같은 상황이면 조용하고, 더 나빠지면(새 위반·새 경고) 다시 알린다.
+  알린 위반이 해소(TRIP_RESOLVE_MIN 이어서 사라짐)된 뒤 다시 생기면 또 알린다 (active_causes). 큐에서 빠진(suppressed) delay 는 알린 것이 아니다.
 - 단계 3은 한 번에 하나 (큐). 같은 원인 묶음의 오래된 것은 suppressed. 쿨다운 안에는 보내지 않는다 (safety_raised 는 무시).
 - 앱 활동이 없으면 단계 3 은 보류(queued). 활동이 돌아오면 지금도 유효한 것 중 하나만 보낸다 (pick_resume).
 """
@@ -24,6 +25,15 @@ def known_causes(cause_keys: list[str]) -> set[str]:
     out: set[str] = set()
     for k in cause_keys:
         out |= cause_parts(k)
+    return out
+
+
+def active_causes(rows: list[tuple[int, str]], released: dict[str, int] | None = None) -> set[str]:
+    """(이벤트 id, 원인 키) 목록에서 지금 '알린 것'으로 세는 원인. released[키] = id 면 그 id 까지의 이벤트는 그 원인을 세지 않는다
+    (해소된 위반, judge.resolve_violations) — 그 뒤 이벤트가 다시 담으면 다시 센다."""
+    out: set[str] = set()
+    for eid, key in rows:
+        out |= {k for k in cause_parts(key) if eid > (released or {}).get(k, 0)}
     return out
 
 

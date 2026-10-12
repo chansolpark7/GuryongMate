@@ -51,6 +51,10 @@ class TripDay(Base):
     located_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # 이 여행일의 안전 상황 (§3.2 상황 해제): {"abnormal": bool, "n": 주의·위험 상황 번호, "zones": [...], "warnings": [...]}
     situation: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    # 지연 알림 기억 (§4.1 다시 알리기): {"gone": {위반 원인 키: 재계산에서 처음 사라진 시각},
+    #   "released": {위반 원인 키: 해소로 본 때의 마지막 이벤트 id — 그 id 까지의 이벤트는 그 원인을 알린 것으로 세지 않음},
+    #   "accepted": {"event": 마지막 delay 이벤트 id, "version": 확인한 계획 version, "ok": 그 뒤 제안을 승인했는지}}
+    delay_state: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
@@ -89,6 +93,7 @@ _UPGRADES = [
     "ALTER TABLE trip_day ADD COLUMN IF NOT EXISTS located_at TIMESTAMP WITH TIME ZONE",
     "ALTER TABLE trip_day ADD COLUMN IF NOT EXISTS situation JSONB",
     "ALTER TABLE trip_day ADD COLUMN IF NOT EXISTS expected JSONB",
+    "ALTER TABLE trip_day ADD COLUMN IF NOT EXISTS delay_state JSONB",
 ]
 for _sql in _UPGRADES:
     event.listen(Base.metadata, "after_create", DDL(_sql).execute_if(dialect="postgresql"))

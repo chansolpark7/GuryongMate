@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 
 from app.db import SessionLocal
 from app.trip import service
+from app.trip.models import TripEvent
 
 from .conftest import H, USER, at, err, ok
 
@@ -23,6 +24,16 @@ def visited_until_port(env) -> None:
     for order, arrived, done in ((1, "12:30", "13:30"), (2, "13:37", "14:00")):
         it = env.planner.item(env.plan_id, order)
         it["status"], it["arrived_at"], it["done_at"] = "done", arrived, done
+
+
+def stored(e: dict) -> TripEvent:
+    """API 응답에 없는 이벤트 필드(원인 키·전송 시각)를 DB 에서."""
+    with SessionLocal() as s:
+        return s.get(TripEvent, e["id"])
+
+
+def cause(e: dict) -> str:
+    return stored(e).cause_key
 
 
 def progress_calls(env) -> list[tuple]:
@@ -149,30 +160,33 @@ def test_delay_once_and_again_when_worse(env):
     env.start("14:10")
     events = env.stay(HOUSE, "14:10", 3)
     assert [e["type"] for e in events] == ["arrived"] and events[0]["payload"]["out_of_order"] is False
-    # 가벼운 지연: 늦어져도 새 위반이 없으면 알리지 않는다
-    for t in ("15:00", "15:20", "15:35"):
+    # 가벼운 지연: 15분(TRIP_BEHIND_MIN) 미만으로 늦고 새 위반이 없으면 알리지 않는다
+    for t in ("15:00", "15:20", "15:30"):
         r = env.loc(HOUSE, t)
         assert r["events"] == []
-    assert r["state"]["delay_minutes"] > 0
+    assert r["state"]["delay_minutes"] == 14
+    # 15분 넘게 밀림 -> 일정 밀림 (위반 없음)
+    [b] = env.loc(HOUSE, "15:35")["events"]
+    assert b["payload"]["reason"] == "behind_schedule" and b["payload"]["delay_minutes"] == 19
     # 역사관이 17:30 마감을 넘음 -> delay (단계 3, Agent 선제 턴)
     r = env.loc(HOUSE, "15:45")
     [d] = r["events"]
     assert (d["type"], d["level"], d["status"]) == ("delay", 3, "queued")  # 응답 시점에는 큐에 있다
     assert d["item_ids"] == [item_id(env, 5)] and "운영시간" in d["message"]
-    # 29분 늦음. 위반으로 지연을 알렸으므로 그 뒤 30분 이상 밀려도(아래 16:05 까지) 일정 밀림으로 또 묻지 않는다
+    # 29분 늦음: 밀림은 지난 알림(19분) + 15 전이라 위반이 이유
     assert d["payload"]["reason"] == "violations" and d["payload"]["delay_minutes"] == 29
-    [sent] = env.agent.received
+    sent = env.agent.received[-1]
     assert sent[1]["id"] == d["id"] and sent[2]["active"] is True  # {"event", "trip"}
     delivered = env.events(after=d["id"] - 1)[0]
-    assert delivered["status"] == "delivered" and delivered["agent"]["proposal_id"] == 901
-    # 같은 지연은 다시 알리지 않는다
-    for t in ("15:50", "16:00", "16:05"):
+    assert delivered["status"] == "delivered" and delivered["agent"]["proposal_id"] == 902
+    # 같은 지연은 다시 알리지 않는다 (위반 그대로, 밀림은 29 + 15 = 44분 전)
+    for t in ("15:50", "15:55"):
         assert env.loc(HOUSE, t)["events"] == []
-    # 더 나빠짐 (18:00 초과가 새로 생김) -> 다시
+    # 더 나빠짐 (18:00 초과가 새로 생김) -> 다시 (밀림도 함께지만 이벤트는 하나, 이유는 새 위반)
     [d2] = env.loc(HOUSE, "16:15")["events"]
-    assert d2["type"] == "delay"
+    assert d2["type"] == "delay" and d2["payload"]["reason"] == "violations"
     assert {v["code"] for v in d2["payload"]["new_violations"]} == {"outside_open_hours", "day_overflow"}
-    assert len(env.agent.received) == 2
+    assert len(env.agent.received) == 3
 
 
 def test_delay_detected_by_tick_without_location(env):
@@ -183,6 +197,85 @@ def test_delay_detected_by_tick_without_location(env):
     [d] = env.tick("15:45")["events"]
     assert d["type"] == "delay"
     assert env.tick("15:55")["events"] == []
+
+
+# ---------- 해소된 위반 다시 알리기 (§4.1 결정 2026-10-12) ----------
+
+# 빠듯한 계획: 가옥거리 12:30~13:30 -> 구룡포항 13:39~14:29 -> 과메기문화관 14:42~15:42, 15:47 까지 (여유 5분)
+TIGHT = {"title": "빠듯", "start_date": "2026-10-10", "day_start": "12:30", "day_end": "15:47",
+         "items": [{"place_id": HOUSE, "stay_minutes": 60}, {"place_id": PORT, "stay_minutes": 50},
+                   {"place_id": MUSEUM, "stay_minutes": 60}]}
+
+
+def test_violation_alerted_again_after_accept_resolves_it(env):
+    """사용자 로컬 스택에서 본 상황: 하루 초과(day_overflow) 알림 → 제안 승인으로 사라짐 → 오래 머물러 같은 항목의 하루 초과가 다시.
+    위반이 10분(TRIP_RESOLVE_MIN) 이어서 사라졌으면 해소로 보고 다시 알린다. 밀림도 승인한 일정 기준 0 부터 센다."""
+    env.plan_id = env.planner.create(USER, TIGHT)
+    env.start("12:25")
+    env.stay(HOUSE, "12:30", 3)
+    [d1] = env.tick("13:36")["events"]  # 15:48 종료 (6분 늦음) -> 하루 초과
+    assert d1["payload"]["reason"] == "violations" and d1["payload"]["plan_version"] == 1
+    overflow = cause(d1)
+    assert overflow == f"delay:day_overflow:1:{item_id(env, 3)}:None"
+    pid = env.events(after=d1["id"] - 1)[0]["agent"]["proposal_id"]
+    env.planner.accept(env.plan_id, pid, {MUSEUM: 45})  # 과메기문화관 60 -> 45분 승인 (version 2)
+    assert env.tick("13:40")["events"] == []  # 15:37 종료: 위반이 사라짐 (13:40 부터)
+    # 승인한 일정 기준으로 새로 센다: 구룡포항 13:39 예정 -> 15분 늦으면 묻는다 (승인 전 지연 6분과 상관없이)
+    [d2] = env.tick("13:45")["events"]
+    assert d2["payload"]["reason"] == "behind_schedule" and cause(d2) == f"delay:behind:1:{d1['id']}a:1"
+    assert env.trip().delay_state["accepted"] == {"event": d1["id"], "version": 2, "ok": True}
+    assert env.events(after=d2["id"] - 1)[0]["status"] == "queued"  # 쿨다운 (13:36 선제 턴 뒤 10분)
+    assert env.tick("13:50")["events"] == []  # 위반이 10분째 없음 -> 해소 (다시 생기면 알린다)
+    assert env.events(after=d2["id"] - 1)[0]["status"] == "delivered"
+    assert env.trip().delay_state["released"] == {overflow: d2["id"]}
+    [d3] = env.tick("13:51")["events"]  # 15:48 종료 -> 같은 항목의 하루 초과가 다시 -> 다시 알린다
+    assert d3["payload"]["reason"] == "violations" and overflow in cause(d3).split("|")
+    assert env.events(after=d3["id"] - 1)[0]["status"] == "queued"  # 쿨다운 (13:50 선제 턴 뒤 10분)
+    assert env.tick("13:52")["events"] == []  # 다시 알린 것은 다시 센다
+    assert env.tick("13:55")["events"] == [] and len(env.agent.received) == 2
+    env.tick("14:00")
+    assert [e["type"] for _, e, _ in env.agent.received] == ["delay", "delay", "delay"]
+    assert env.agent.received[-1][1]["id"] == d3["id"]
+    # 승인 확인은 version 이 바뀔 때 한 번만 planner 에 묻는다
+    assert [c for c in env.planner.calls if c[0] == "proposals"] == [("proposals", env.plan_id)]
+
+
+def _inject(env, violations: list[dict]) -> None:
+    """가짜 planner 재계산의 new_violations 에 violations 를 덧붙인다 (테스트가 목록을 바꿔 위반을 켜고 끈다)."""
+    orig = env.planner.projection
+
+    def projection(plan_id, body, auth):
+        r = orig(plan_id, body, auth)
+        r["new_violations"] = r["new_violations"] + list(violations)
+        return r
+    env.planner.projection = projection
+
+
+FIXED = {"code": "fixed_time_missed", "severity": "error", "day": 1, "item_id": 7, "constraint_id": None,
+         "message": "고정 시각을 놓쳐요."}
+
+
+def test_flapping_violation_is_not_repeated(env, monkeypatch):
+    """위반이 켜졌다 꺼졌다 해도(TRIP_RESOLVE_MIN 안) 선제 턴은 한 번. 해소가 짧아도(1분) 쿨다운(10분) 안에는 하나만."""
+    monkeypatch.setattr(service.settings, "behind_min", 0)  # 위반만 본다
+    roomy(env)
+    on: list[dict] = []
+    _inject(env, on)
+    on.append(FIXED)
+    [d] = env.tick("13:00")["events"]
+    for i, t in enumerate(("13:02", "13:04", "13:06", "13:08", "13:10", "13:12", "13:14", "13:16")):
+        on[:] = [] if i % 2 == 0 else [FIXED]  # 2분마다 깜빡임 (10분 이어서 사라진 적 없음)
+        assert env.tick(t)["events"] == []
+    assert len(env.agent.received) == 1 and len(behind_events(env)) == 1
+    # 해소 기준이 짧으면 다시 알리지만, 쿨다운 안에서는 큐에서 기다리다 사라지면 버려진다 -> 선제 턴은 쿨다운마다 하나
+    monkeypatch.setattr(service.settings, "resolve_min", 1)
+    for i, t in enumerate(("13:18", "13:20", "13:22", "13:24", "13:26", "13:28", "13:30", "13:32", "13:34")):
+        on[:] = [] if i % 2 == 0 else [FIXED]
+        env.tick(t)
+    turns = [e for e in behind_events(env) if e["status"] == "delivered"]
+    times = [stored(e).delivered_at for e in turns]
+    assert len(turns) <= 3 and all(b - a >= timedelta(minutes=10) for a, b in zip(times, times[1:]))
+    assert len(env.agent.received) == len(turns)
 
 
 # ---------- 일정 밀림 (§3.2 결정 2026-10-11) ----------
@@ -203,41 +296,54 @@ def behind_events(env) -> list[dict]:
     return [e for e in env.events() if e["type"] == "delay"]
 
 
-def test_behind_schedule_asks_every_30_minutes_then_new_baseline_after_accept(env):
+def test_behind_schedule_asks_every_15_minutes_then_fresh_after_accept(env):
     roomy(env)
     planned = env.planner.get_plan(env.plan_id, {})["days"][0]["items"][1]["start_at"]
-    assert env.tick("13:55")["events"] == []  # 가옥거리에 머문 채 25분 늦음: 조용
-    [d] = env.tick("14:05")["events"]  # 35분 -> 묻는다 (위반 없음)
+    assert env.tick("13:44")["events"] == []  # 가옥거리에 머문 채 14분 늦음: 조용
+    [d] = env.tick("13:45")["events"]  # 15분 -> 묻는다 (위반 없음)
     assert (d["type"], d["level"], d["payload"]["reason"]) == ("delay", 3, "behind_schedule")
-    assert d["message"] == f"구룡포항 도착이 {planned} 예정에서 {d['payload']['next']['eta']}으로 35분 늦어질 것 같아요."
+    assert d["message"] == f"구룡포항 도착이 {planned} 예정에서 {d['payload']['next']['eta']}으로 15분 늦어질 것 같아요."
     assert d["item_ids"] == [item_id(env, 2)] and d["payload"]["new_violations"] == []
     assert d["payload"]["suggest"] == {"kind": "extend_stay", "item_id": item_id(env, 1), "title": "구룡포 일본인 가옥거리",
-                                       "stay_minutes": 110, "from_stay_minutes": 60}  # 12:30 ~ 14:05 + 15분
+                                       "stay_minutes": 90, "from_stay_minutes": 60}  # 12:30 ~ 13:45 + 15분
     assert env.events(after=d["id"] - 1)[0]["status"] == "delivered"
-    for t in ("14:10", "14:20", "14:34"):  # 같은 단계: 조용
+    for t in ("13:50", "13:59"):  # 같은 단계: 조용
         assert env.tick(t)["events"] == []
-    [d2] = env.tick("14:35")["events"]  # 65분 -> 다시
-    assert d2["payload"]["reason"] == "behind_schedule" and d2["payload"]["delay_minutes"] == 65
-    assert d2["payload"]["suggest"]["stay_minutes"] == 140
+    [d2] = env.tick("14:00")["events"]  # 30분 (지난 알림 15분 + 15) -> 다시
+    assert d2["payload"]["reason"] == "behind_schedule" and d2["payload"]["delay_minutes"] == 30
+    assert d2["payload"]["suggest"]["stay_minutes"] == 105
     assert len(env.agent.received) == 2
-    # 제안 승인 (가옥거리 140분, version 이 오른다) -> 미뤄진 일정이 새 기준
-    env.planner.set_stay(env.plan_id, HOUSE, 140)
+    # 제안 승인 (가옥거리 105분, version 이 오른다) -> 승인한 일정 기준으로 0 부터 센다
+    pid = env.events(after=d2["id"] - 1)[0]["agent"]["proposal_id"]
+    env.planner.accept(env.plan_id, pid, {HOUSE: 105})
     assert env.planner.get_plan(env.plan_id, {})["days"][0]["items"][1]["start_at"] > planned
-    for t in ("14:40", "15:05"):  # 그 뒤 25분 더 늦어도 조용 (새 기준으로 -15 -> 15분)
+    for t in ("14:05", "14:20", "14:29"):  # 새 일정(14:15 까지 가옥거리)보다 14분 늦을 때까지 조용
         assert env.tick(t)["events"] == []
-        assert env.state()["delay_minutes"] < 30
-    [d3] = env.tick("15:20")["events"]  # 새 기준으로 30분 -> 다시 묻는다
+    assert env.state()["delay_minutes"] == 14
+    [d3] = env.tick("14:30")["events"]  # 새 기준으로 15분 -> 다시 묻는다
     assert d3["payload"]["reason"] == "behind_schedule" and d3["payload"]["plan_version"] == 2
+    assert cause(d3) == f"delay:behind:1:{d2['id']}a:1"
     assert len(behind_events(env)) == 3
 
 
+def test_behind_schedule_not_fresh_when_plan_changed_without_accepting(env):
+    """계획이 바뀌었어도 알림 뒤 제안을 승인한 것이 아니면(직접 고침) 지난 알림 기준 그대로 (지연이 15분 이상 줄면 새로 센다)."""
+    roomy(env)
+    [d] = env.tick("13:50")["events"]  # 20분
+    env.planner.set_stay(env.plan_id, MUSEUM, 30)  # 뒤 장소만 줄임: 다음(구룡포항) 지연은 그대로
+    assert env.tick("14:04")["events"] == []  # 34분: 지난 알림 20 + 15 전
+    assert env.trip().delay_state["accepted"] == {"event": d["id"], "version": 2, "ok": False}
+    [d2] = env.tick("14:05")["events"]
+    assert cause(d2) == f"delay:behind:1:{d['id']}:1"
+
+
 def test_behind_schedule_same_step_is_quiet_after_moving_on(env):
-    """한 번 물은 지연은 다음 항목이 바뀌어도(이동·도착) 그보다 30분 더 밀리기 전에는 다시 묻지 않는다."""
+    """한 번 물은 지연은 다음 항목이 바뀌어도(이동·도착) 그보다 15분 더 밀리기 전에는 다시 묻지 않는다."""
     roomy(env)
     [d] = env.tick("14:05")["events"]
     walk = env.stay(PORT, "14:15", 5)  # 가옥거리를 떠나 구룡포항 도착 (다음은 과메기문화관)
     assert [e["type"] for e in walk] == ["departed", "arrived"]
-    # 늦게 온 구룡포항은 예정 종료(14:29)에 떠난다고 본다 (규칙 B) -> 그 뒤로 오래 머물러 다시 35분쯤 늦음
+    # 늦게 온 구룡포항은 예정 종료(14:29)에 떠난다고 본다 (규칙 B) -> 그 뒤로 오래 머물러 다시 35분쯤 늦음 (지난 알림 35분 + 15 전)
     assert env.tick("15:05")["events"] == [] and behind_events(env) == [env.events(after=d["id"] - 1)[0]]
     assert env.state()["delay_minutes"] >= 30 and env.state()["next"]["item_id"] == item_id(env, 3)
 
@@ -254,7 +360,7 @@ def test_behind_schedule_queue_and_cooldown(env, monkeypatch):
     assert [e["status"] for e in behind_events(env)] == ["suppressed", "delivered"]
     # 쿨다운(10분) 안에 생긴 delay 는 큐에서 기다린다
     monkeypatch.setattr(service.settings, "proactive_cooldown_min", 40)
-    [d3] = env.tick("15:05")["events"]  # 95분 -> 다시 (지난번 65분 + 30)
+    [d3] = env.tick("15:05")["events"]  # 95분 -> 다시 (지난번 65분 + 15 넘음)
     assert env.events(after=d3["id"] - 1)[0]["status"] == "queued"
     env.tick("15:17")
     assert env.events(after=d3["id"] - 1)[0]["status"] == "delivered" and len(env.agent.received) == 2

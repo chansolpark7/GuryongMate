@@ -7,7 +7,7 @@ from datetime import datetime
 from app.trip import judge
 from app.trip.clock import KST
 
-from .test_api import HOUSE, PORT, behind_events, item_id, roomy
+from .test_api import HOUSE, PORT, behind_events, cause, item_id, roomy
 
 
 def t(hhmm: str) -> datetime:
@@ -89,9 +89,11 @@ def test_queued_delay_is_refreshed_after_moving_on(env):
     env.tick("14:25")
     assert [e for _, e, _ in env.agent.received if e["type"] == "delay"] == []
     assert behind_events(env)[0]["status"] == "suppressed"
-    # 구룡포항에 계속 머물러 다시 늦으면 (지난 지연 35분 + 30분) 그때의 다음·추천안으로 묻는다
-    assert env.tick("15:05")["events"] == []
-    env.tick("15:35")
+    # 구룡포항에 계속 머물러 다시 늦으면 그때의 다음·추천안으로 묻는다. 큐에서 버려진 delay(35분)는 알린 것이 아니라
+    # 기준이 되지 않는다 -> 처음부터 세어 15분(TRIP_BEHIND_MIN)이면 묻는다 (지난 지연 35분 + 15 까지 기다리지 않음)
+    assert env.tick("14:40")["events"] == []  # 구룡포항 예정 종료 14:29 -> 과메기문화관 11분 늦음
+    [again] = env.tick("14:45")["events"]
+    assert again["payload"]["delay_minutes"] == 16 and cause(again) == "delay:behind:1:0:1"
     sent = [e for _, e, _ in env.agent.received if e["type"] == "delay"]
     assert len(sent) == 1
     assert sent[0]["payload"]["next"]["item_id"] == item_id(env, 3)
