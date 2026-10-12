@@ -28,18 +28,31 @@ BASE = {"version": 1, "days": [{"day": 1, "end_at": "15:42", "items": [
 # ---------- 7. 밀림 추천안 ----------
 
 def test_extend_stay_absorbs_late_arrival():
-    """구룡포항(계획 13:36 시작)에 14:30 에 늦게 도착, 14:40 지금. 재계산: 구룡포항 14:30~15:30 -> 과메기문화관 15:36 (54분 늦음).
-    추천안(체류 늘리기)을 승인하면 과메기문화관이 예상 시작(15:36) 근처로 미뤄져야 한다 — 계획 시작 + 체류 >= 재계산 종료."""
-    proj = {"new_violations": [], "delay_minutes": 54,
-            "next": {"item_id": 3, "planned_start": "14:42", "eta": "15:36", "start_at": "15:36"},
-            "plan": {"days": [{"day": 1, "end_at": "16:36", "items": [
-                _item(1, "가옥거리", "12:30", "13:30", 60, "done"), _item(2, "구룡포항", "14:30", "15:30", 60, "visiting"),
-                _item(3, "과메기문화관", "15:36", "16:36", 60)]}]}}
+    """구룡포항(계획 13:36~14:36)에 14:30 에 늦게 도착해 15:20 까지 머묾. 재계산(규칙 B): 예정 종료(14:36)를 넘겼으니
+    구룡포항 14:30~15:20(지금) -> 과메기문화관 15:26 (44분 늦음).
+    추천안(체류 늘리기)을 승인하면 구룡포항이 지금 + 15분 이후에 끝나야 한다 — 계획 시작 + 체류 >= 15:35."""
+    proj = {"new_violations": [], "delay_minutes": 44,
+            "next": {"item_id": 3, "planned_start": "14:42", "eta": "15:26", "start_at": "15:26"},
+            "plan": {"days": [{"day": 1, "end_at": "16:26", "items": [
+                _item(1, "가옥거리", "12:30", "13:30", 60, "done"), _item(2, "구룡포항", "14:30", "15:20", 60, "visiting"),
+                _item(3, "과메기문화관", "15:26", "16:26", 60)]}]}}
     track = judge.Track(state="visiting", item_id=2, since=t("14:30"))
-    d = judge.judge_delay(proj, t("14:40"), behind_min=30, plan=BASE, day=1, track=track)
+    d = judge.judge_delay(proj, t("15:20"), behind_min=30, plan=BASE, day=1, track=track)
     sg = d.payload["suggest"]
     assert sg["kind"] == "extend_stay" and sg["item_id"] == 2
-    assert judge.minutes_of("13:36") + sg["stay_minutes"] >= judge.minutes_of("15:30")
+    assert sg["stay_minutes"] == 120  # 13:36 ~ 15:35 (15:20 + 15) -> 5분 올림. 승인 뒤 재계산 종료 = 계획 시작 + 120 = 15:36
+
+
+def test_extend_stay_after_early_arrival_counts_from_actual_start():
+    """구룡포항에 일찍(13:20, 계획 13:36) 와서 14:40 까지 머묾 -> 재계산 13:20~14:40(지금). 일찍 온 곳은 실제 시작 + 체류에
+    끝나므로 체류는 실제 시작부터 센다: 13:20 ~ 14:55 (지금 + 15) -> 95분. (계획 시작 기준 80분이면 승인해도 14:40 에 끝나 그대로 늦다)"""
+    proj = {"new_violations": [], "delay_minutes": 10,
+            "next": {"item_id": 3, "planned_start": "14:42", "eta": "14:46", "start_at": "14:46"},
+            "plan": {"days": [{"day": 1, "items": [_item(2, "구룡포항", "13:20", "14:40", 60, "visiting"),
+                                                   _item(3, "과메기문화관", "14:46", "15:46", 60)]}]}}
+    d = judge.judge_delay(proj, t("14:40"), behind_min=5, plan=BASE, day=1,
+                          track=judge.Track(state="visiting", item_id=2, since=t("13:20")))
+    assert d.payload["suggest"]["stay_minutes"] == 95
 
 
 def test_extend_stay_overstay_and_shift_next_not_in_past():
@@ -64,7 +77,7 @@ def test_extend_stay_overstay_and_shift_next_not_in_past():
 
 def test_queued_delay_is_refreshed_after_moving_on(env):
     """가옥거리에서 35분 늦어 밀림 delay 가 생겼지만 Agent 가 응답 중이라 큐에 남음 -> 그 사이 가옥거리를 떠나 구룡포항 도착
-    -> 나중에 보내지는 선제 턴은 떠난 곳(가옥거리)의 체류를 늘리자거나 이미 도착한 구룡포항을 '다음'으로 말하면 안 된다."""
+    (규칙 B: 예정 종료 전이라 따라잡음, 큐의 것은 버림) -> 나중에 보내지는 선제 턴은 떠난 곳(가옥거리)의 체류를 늘리자거나 이미 도착한 구룡포항을 '다음'으로 말하면 안 된다."""
     roomy(env)
     env.agent.busy = True
     [d] = env.tick("14:05")["events"]
@@ -72,7 +85,13 @@ def test_queued_delay_is_refreshed_after_moving_on(env):
     walk = env.stay(PORT, "14:15", 5)
     assert [e["type"] for e in walk] == ["departed", "arrived"]
     env.agent.busy = False
+    # 늦게 온 구룡포항은 예정 종료(14:29)에 떠난다고 본다 (규칙 B) -> 더는 늦지 않아 큐의 delay 는 보내지 않는다
     env.tick("14:25")
+    assert [e for _, e, _ in env.agent.received if e["type"] == "delay"] == []
+    assert behind_events(env)[0]["status"] == "suppressed"
+    # 구룡포항에 계속 머물러 다시 늦으면 (지난 지연 35분 + 30분) 그때의 다음·추천안으로 묻는다
+    assert env.tick("15:05")["events"] == []
+    env.tick("15:35")
     sent = [e for _, e, _ in env.agent.received if e["type"] == "delay"]
     assert len(sent) == 1
     assert sent[0]["payload"]["next"]["item_id"] == item_id(env, 3)

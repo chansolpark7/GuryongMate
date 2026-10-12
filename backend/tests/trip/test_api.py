@@ -235,10 +235,11 @@ def test_behind_schedule_same_step_is_quiet_after_moving_on(env):
     """한 번 물은 지연은 다음 항목이 바뀌어도(이동·도착) 그보다 30분 더 밀리기 전에는 다시 묻지 않는다."""
     roomy(env)
     [d] = env.tick("14:05")["events"]
-    walk = env.stay(PORT, "14:15", 5)  # 가옥거리를 떠나 구룡포항 도착 (다음은 과메기문화관, 여전히 35분쯤 늦음)
+    walk = env.stay(PORT, "14:15", 5)  # 가옥거리를 떠나 구룡포항 도착 (다음은 과메기문화관)
     assert [e["type"] for e in walk] == ["departed", "arrived"]
+    # 늦게 온 구룡포항은 예정 종료(14:29)에 떠난다고 본다 (규칙 B) -> 그 뒤로 오래 머물러 다시 35분쯤 늦음
+    assert env.tick("15:05")["events"] == [] and behind_events(env) == [env.events(after=d["id"] - 1)[0]]
     assert env.state()["delay_minutes"] >= 30 and env.state()["next"]["item_id"] == item_id(env, 3)
-    assert env.tick("14:25")["events"] == [] and behind_events(env) == [env.events(after=d["id"] - 1)[0]]
 
 
 def test_behind_schedule_queue_and_cooldown(env, monkeypatch):

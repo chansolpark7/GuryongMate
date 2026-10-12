@@ -121,7 +121,8 @@ def build_schedule(
 
     actual 이 있으면 그날(actual.day)은 현재 기준으로 다시 계산한다 (projection, docs/planner/README.md §8):
     - 지난 항목(done, 또는 anchor 보다 앞의 항목): 기록된 도착·완료 시각 그대로 (없으면 계산값). 시각 위반은 따지지 않는다
-    - 지금 머무는 항목: 실제 도착부터, 예정 체류가 이미 지났으면 now 에 끝난다고 본다. 고정 시각 놓침은 따지지 않는다
+    - 지금 머무는 항목: 실제 도착부터 (고정 시각·운영 시작까지는 기다림). 늦게 와서 '도착 + 체류' 가 기준 일정의 예정 종료를
+      넘으면 예정 종료에 떠난다고 본다 (규칙 B, 2026-10-12). 어느 쪽이든 now 가 지났으면 now 에 끝난다. 고정 시각 놓침은 따지지 않는다
     - 이동 중 향하는 항목: anchor_arrive 에 도착. 그 뒤 항목은 평소처럼 이어서 계산한다"""
     travel = travel or {}
     violations: list[Violation] = []
@@ -137,6 +138,9 @@ def build_schedule(
         views: list[ItemView] = []
 
         now_day = actual if actual is not None and actual.day == d else None
+        # 머무는 항목의 기준 일정 예정 종료 (규칙 B). 계획 기준 계산은 actual 없이 한 번 더 돌린다
+        anchored = now_day is not None and now_day.anchor_id is not None and not now_day.moving
+        planned_end = _planned_end(plan, places, travel, now_day) if anchored else {}
         seen_anchor = live = False  # live: 지금 이후 항목(anchor 또는 남은 항목)을 계산하기 시작함
         for it in _timeline(plan, d):
             place = places.get(it.place_id)
@@ -177,7 +181,7 @@ def build_schedule(
             if phase == "here":
                 arrive = now_day.anchor_arrive
                 start = arrive if fixed is None else max(arrive, fixed)  # 이미 와 있다: 고정 시각 놓침은 따지지 않는다
-                end = max(start + it.stay_minutes, now_day.now)
+                end = None  # 운영 시작 대기까지 본 뒤 정한다 (아래)
             else:
                 arrive = now_day.anchor_arrive if phase == "moving" else cursor + (leg.minutes if leg else 0)
                 start = arrive
@@ -195,7 +199,12 @@ def build_schedule(
                 # 실제 진행 기준: 문을 열기 전에 도착하면 열 때까지 기다린다 (고정 시각과 같은 방식).
                 # 일찍 온 것을 '운영시간 밖' 새 위반(-> 지연 선제 턴)으로 보지 않는다 (audit-2026-10-12 B3). 계획 기준은 그대로 위반
                 start = hours[0]
-                end = max(start + it.stay_minutes, now_day.now) if phase == "here" else start + it.stay_minutes
+                if phase != "here":
+                    end = start + it.stay_minutes
+            if phase == "here":
+                # 기다려야 하는 시각(고정 시각·운영 시작). 그만큼은 예정 종료가 늦어도 온전히 머문다
+                floor = max((t for t in (fixed, hours[0] if hours else None) if t is not None), default=None)
+                end = visiting_end(start, it.stay_minutes, now_day.now, planned_end.get(it.id), floor)
 
             if place is not None:
                 if date.weekday() in closed_weekdays(place.rest_date):
@@ -223,6 +232,27 @@ def build_schedule(
     for c in plan.constraints:
         violations.extend(_check_constraint(c, plan, days, legs, places))
     return days, violations
+
+
+def visiting_end(start: int, stay: int, now: int, planned_end: int | None, floor: int | None = None) -> int:
+    """지금 머무는 항목이 끝나는 시각 (규칙 B, docs/planner/README.md §8.2).
+
+    - 제때·일찍 왔으면 start + 체류 (start 는 고정 시각·운영 시작 대기를 반영한 값).
+    - 늦게 와서 start + 체류 가 기준 일정의 예정 종료(planned_end)를 넘으면 예정 종료에 떠난다고 본다
+      (체류를 줄여 뒤 일정을 지킨다). 단 기다려야 하는 시각(floor) + 체류 보다 이르게 자르지는 않는다.
+    - 어느 쪽이든 now 가 지났으면 now 에 끝난다 (그때부터 늦음이 생긴다). 예정 종료를 모르면 기존대로."""
+    natural = start + stay
+    if planned_end is not None:
+        cap = planned_end if floor is None else max(planned_end, floor + stay)
+        natural = max(start, min(natural, cap))
+    return max(natural, now)
+
+
+def _planned_end(plan: PlannerPlan, places: dict[str, PlaceInfo | None], travel: TravelTable,
+                 actual: Actual) -> dict[int, int]:
+    """기준 일정(actual 없이 계산)에서 그날 항목별 예정 종료 (분). 규칙 B 의 기준."""
+    days, _ = build_schedule(plan, places, travel)
+    return {i.id: parse_hhmm(i.end_at) for i in days[actual.day - 1].items if i.end_at}
 
 
 def _check_travel(plan: PlannerPlan, legs: list[Leg]) -> list[Violation]:

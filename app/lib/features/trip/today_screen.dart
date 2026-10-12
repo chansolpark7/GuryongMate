@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' show max, min;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
@@ -808,12 +809,20 @@ class _NowSection extends StatelessWidget {
     final end = toMinutes(item.endAt);
     final arrived = toMinutes(since);
     // 실제 도착부터, 고정 시각·문 여는 시각 전이면 그때까지 기다린 뒤 체류 = 예정 끝 (진행 기준, 서버 재계산과 같게 — audit-2026-10-12 B4).
-    // 없으면 계획 end_at
+    // 없으면 계획 end_at. 늦게 왔으면(시작 + 체류 > 계획 end_at) 계획 end_at 에 떠난다고 본다 (서버 규칙 B, planner §8.2):
+    // 끝 = min(시작 + 체류, 계획 끝). 단 기다려야 하는 시각(고정·개장) + 체류보다 이르게 자르지는 않는다.
+    // 계획 끝을 넘겨 머물면 '예정보다 n분 더' (계획 끝 기준)
     var start = arrived;
+    int? wait;
     for (final w in [toMinutes(item.startTime), _opensAt(item.place?.openHours)]) {
-      if (start != null && w != null && w > start) start = w;
+      if (w != null && (wait == null || w > wait)) wait = w;
     }
-    final until = start != null ? start + item.stayMinutes : end;
+    if (start != null && wait != null && wait > start) start = wait;
+    int? until = start != null ? start + item.stayMinutes : end;
+    if (start != null && end != null) {
+      final cap = wait == null ? end : max(end, wait + item.stayMinutes);
+      until = min(until!, cap);
+    }
     final left = until == null ? null : until - now;
     final over = left != null && left < 0;
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [

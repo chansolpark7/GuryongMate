@@ -307,8 +307,9 @@ def behind_suggestion(plan: dict | None, day: int, track: Track | None, nxt: dic
                       projected: dict | None = None) -> dict | None:
     """밀림 추천안 (Agent 가 그대로 도구로 만들 변경). 남은 일정을 미루되 완료 항목·지난 시각은 건드리지 않는다.
     - 머무는 중: 지금 장소 체류를 계획 시작부터 (지금 + 여유 15분)과 재계산의 그 장소 종료 중 늦은 때까지로 늘린다 (5분 올림)
-      -> 뒤 일정이 자동으로 밀린다. 계획 시작 기준이라 도착이 늦었던 만큼도 함께 흡수한다 — 늦게 도착해 남은 체류가 길면
-      재계산 종료까지 (audit-2026-10-12 B5: 지금 + 15분만 보면 승인해도 30분 넘게 늦었다).
+      -> 뒤 일정이 자동으로 밀린다. 계획 시작 기준이라 도착이 늦었던 만큼도 함께 흡수한다 (audit-2026-10-12 B5).
+      규칙 B(늦게 온 곳은 예정 종료에 떠난다, planner §8.2)라 승인 뒤 재계산 종료 = max(계획 시작 + 새 체류, 지금) 이다.
+      일찍 왔으면 재계산은 실제 시작 + 체류에 끝나므로 계획 시작·재계산 시작 중 이른 쪽부터 센다.
     - 이동 중·첫 장소 전 (늘릴 체류가 없음): 다음 장소 시작 시각을 예상 도착(5분 올림)으로 정한다 -> 그 뒤 일정이 밀린다.
     projected: 재계산 일정 PlanDetail (projection.plan)."""
     items = _day_items(plan, day)
@@ -316,10 +317,14 @@ def behind_suggestion(plan: dict | None, day: int, track: Track | None, nxt: dic
     cur = items.get(track.item_id) if track is not None and track.state == "visiting" else None
     if cur and cur.get("status") != "done" and cur.get("start_at") and cur.get("stay_minutes") is not None:
         until = now_min + BEHIND_MARGIN_MIN
+        start = minutes_of(cur["start_at"])
         here = _day_items(projected, day).get(cur["id"])
         if here and here.get("end_at"):
             until = max(until, minutes_of(here["end_at"]))
-        stay = max(_ceil5(until - minutes_of(cur["start_at"])), cur["stay_minutes"] + 5)
+        if here and here.get("start_at"):
+            # 일찍 왔으면 재계산은 실제 시작 + 체류에 끝난다 (늦게 왔으면 예정 종료, 규칙 B) -> 둘 중 이른 시작 기준
+            start = min(start, minutes_of(here["start_at"]))
+        stay = max(_ceil5(until - start), cur["stay_minutes"] + 5)
         return {"kind": "extend_stay", "item_id": cur["id"], "title": (cur.get("place") or {}).get("title"),
                 "stay_minutes": stay, "from_stay_minutes": cur["stay_minutes"]}
     if nxt.get("eta"):
