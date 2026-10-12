@@ -114,15 +114,19 @@ class Timing:
 
 
 def classify(start: datetime, end: datetime, now: datetime, forecast_last: datetime | None,
-             forecast_ok: bool) -> Timing:
-    """forecast_last: 받은 단기예보의 마지막 시각. 예보 조회가 실패했으면 forecast_ok=False."""
+             forecast_ok: bool, forecast_first: datetime | None = None) -> Timing:
+    """forecast_last·forecast_first: 받은 단기예보의 마지막·첫 시각. 예보 조회가 실패했으면 forecast_ok=False.
+    recheck_from 은 내일 이후로 둔다 (오늘·지난 날짜에 '다시 확인하라'고 하지 않게)."""
     lead = start - now
-    recheck = start.date() - timedelta(days=RECHECK_LEAD_DAYS)
+    recheck = max(start.date() - timedelta(days=RECHECK_LEAD_DAYS), now.date() + timedelta(days=1))
     if end <= now:
         return Timing("past", "none", False, None)
-    # 방문 마지막 시각까지 예보가 있어야 판단한다 (일부만 덮이면 나머지 시간을 모른 채 safe 가 될 수 있다)
+    # 방문 처음~마지막 시각까지 예보가 있어야 판단한다 (일부만 덮이면 나머지 시간을 모른 채 safe 가 될 수 있다).
+    # 첫 시각: 발표 직후(hh:15~hh:59)에는 지금 시각 예보가 빌 수 있다 (sources 가 직전 발표로 채우지 못한 경우)
     last_needed = floor_hour(max(end - timedelta(minutes=1), now))
-    covered = forecast_ok and forecast_last is not None and last_needed <= forecast_last
+    first_needed = floor_hour(max(start, now))
+    covered = (forecast_ok and forecast_last is not None and last_needed <= forecast_last
+               and (forecast_first is None or forecast_first <= first_needed))
     if lead <= NOW_WINDOW:
         return Timing("now", "high", covered, None)
     if covered or (not forecast_ok and lead <= SHORT_RANGE_NOMINAL):
@@ -229,15 +233,20 @@ def hour_level(h: ForecastHour, sens: set[str], indoor: bool = False) -> str:
 
 def forecast_hazards(hours: list[ForecastHour], sens: set[str], indoor: bool = False,
                      coast: str | None = None) -> list[Hazard]:
-    """시간별 예보를 같은 종류·등급끼리 묶어 '14~19시 풍속 최대 16m/s' 형태로 만든다.
+    """시간별 예보를 같은 종류·등급의 이어진 시각끼리 묶어 '14~19시 풍속 최대 16m/s' 형태로 만든다.
     해안이라 그대로 적용한 바람·파고는 사유 앞에 성질을 붙인다 ('해안(항구) — …', coast: coast_label 값)."""
     by_coast = "coast" in sens and "breakwater" not in sens
-    groups: dict[tuple, list[tuple[datetime, float]]] = {}
+    # 같은 종류·등급이라도 이어진 시각끼리만 묶는다 (14시·18시를 '14~19시'로 읽히지 않게)
+    groups: dict[tuple, list[list[tuple[datetime, float]]]] = {}
     for h in sorted(hours, key=lambda x: x.time):
         for typ, lv, val, label, unit, capped in _hour_signals(h, sens, indoor):
-            groups.setdefault((typ, lv, label, unit, capped), []).append((h.time, val))
+            runs = groups.setdefault((typ, lv, label, unit, capped), [])
+            if runs and h.time - runs[-1][-1][0] == timedelta(hours=1):
+                runs[-1].append((h.time, val))
+            else:
+                runs.append([(h.time, val)])
     out = []
-    for (typ, lv, label, unit, capped), pts in groups.items():
+    for (typ, lv, label, unit, capped), pts in ((k, run) for k, runs in groups.items() for run in runs):
         first, last = pts[0][0], pts[-1][0]
         peak = max(v for _, v in pts)
         span = f"{first:%m/%d %H}시" if first == last else f"{first:%m/%d %H}~{(last + timedelta(hours=1)):%H}시"

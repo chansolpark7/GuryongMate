@@ -72,7 +72,8 @@ def travel_key(item_id: int) -> str:
 def visits(plan: PlanDetail, start: date | None = None, end: date | None = None,
            paths: dict[int, list[tuple[float, float]] | None] | None = None) -> list[dict]:
     """/safety/assess 요청의 visits. 방문 key = 항목 id, 이동 key = 't' + 도착 항목 id. start~end 날짜 밖은 뺀다.
-    paths: 도착 항목 id -> 길찾기 경로선. 없으면 두 장소를 잇는 직선으로 본다.
+    paths: 도착 항목 id -> 길찾기 경로선. 없으면 두 장소를 잇는 직선으로 보내고 path_estimated 를 붙인다
+    (safety 가 주의·위험 근거는 쓰되 안전으로는 판단하지 않는다: 직선이 침수 구역을 비켜 가도 실제 길은 지날 수 있다).
     계산된 시작 시각이 자정을 넘는 항목은 날짜가 애매해 빼고, 종료만 넘으면 60분으로 본다(end 생략)."""
     paths = paths or {}
     legs = {g.item_id: g for g in travel_legs(plan, start, end)}
@@ -83,10 +84,14 @@ def visits(plan: PlanDetail, start: date | None = None, end: date | None = None,
         for it in d.items:
             g = legs.get(it.id)
             if g is not None:
-                line = paths.get(it.id) or [(g.origin.lat, g.origin.lng), (g.dest.lat, g.dest.lng)]
-                out.append({"key": travel_key(it.id), "path": [list(p) for p in line], "mode": g.mode,
-                            "date": d.date.isoformat(), "start": _hhmm(g.depart), "end": _hhmm(g.arrive),
-                            "label": f"{g.origin.title} → {g.dest.title}"})
+                line = paths.get(it.id)
+                tv = {"key": travel_key(it.id), "mode": g.mode,
+                      "date": d.date.isoformat(), "start": _hhmm(g.depart), "end": _hhmm(g.arrive),
+                      "label": f"{g.origin.title} → {g.dest.title}"}
+                if not line:  # 직선은 실제 길이 아니다: safety 가 주의·위험 근거만 쓰고 안전으로는 판단하지 않는다
+                    line = [(g.origin.lat, g.origin.lng), (g.dest.lat, g.dest.lng)]
+                    tv["path_estimated"] = True
+                out.append(tv | {"path": [list(p) for p in line]})
             if it.status in SKIP_STATUS or it.start_at is None or it.end_at is None:
                 continue
             s, e = _minutes(it.start_at), _minutes(it.end_at)
