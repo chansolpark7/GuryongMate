@@ -4,7 +4,7 @@
 """
 import re
 from dataclasses import dataclass
-from datetime import time, timedelta
+from datetime import date, time, timedelta
 
 from app.planner.models import PlannerConstraint, PlannerItem, PlannerPlan
 from app.planner.schemas import DayView, ItemView, PlaceInfo, TravelOption, Violation
@@ -48,18 +48,86 @@ def closed_weekdays(rest_date: str) -> set[int]:
     return days
 
 
-def open_range(open_hours: str) -> tuple[int, int] | None:
-    """운영시간 원문에 시간 범위가 정확히 하나일 때만 (시작분, 종료분). 그 외에는 판단하지 않는다."""
+@dataclass(frozen=True)
+class OpenHours:
+    """그날의 영업 범위 하나 (분, 자정 넘으면 close > 24*60) 와 영업 중 쉬는 구간들 ((시작, 끝, 이름) — 이름은 '준비시간' 등)."""
+    open: int
+    close: int
+    breaks: tuple[tuple[int, int, str], ...] = ()
+
+
+_BREAK_NAMES = {"준비": "준비시간", "브레이크": "브레이크타임", "휴게": "휴게시간"}
+_HOURS_TOKEN = re.compile(
+    r"(?P<season>하절기|동절기)(?:\s*\(\s*(?P<m1>\d{1,2})월?\s*[~\-]\s*(?P<m2>\d{1,2})월\s*\))?"
+    r"|(?P<h1>\d{1,2}):(?P<n1>\d{2})\s*[~\-]\s*(?P<h2>\d{1,2}):(?P<n2>\d{2})"
+    r"|(?P<d1>[월화수목금토일])(?:요일)?\s*[~\-]\s*(?P<d2>[월화수목금토일])(?:요일)?"
+    r"|(?P<d>[월화수목금토일])요일"
+    r"|(?P<dw>평일|주말)"
+    r"|(?P<brk>준비|브레이크|휴게)\s*(?:시간|타임)"
+)
+_BREAK_WORD = re.compile(r"준비\s*시간|브레이크\s*타임|휴게\s*시간")
+_TIME_RANGE = re.compile(r"\d{1,2}:\d{2}\s*[~\-]\s*\d{1,2}:\d{2}")
+
+
+def open_hours_for(open_hours: str, day: date) -> OpenHours | None:
+    """운영시간 원문에서 그 날짜(월·요일)의 영업 범위 하나와 쉬는 구간들. 확실히 해석되지 않으면 None (판단하지 않는다).
+
+    - 시각 범위마다 앞에 나온 조건(하절기/동절기(M월~N월), 평일·주말·요일)을 붙인다. 계절이 바뀌면 요일 조건은 처음부터.
+    - 준비시간·브레이크타임·휴게시간 바로 뒤의 범위는 쉬는 구간. 마지막 주문·입장 마감 같은 시각 하나는 보지 않는다.
+    - 그날에 맞는 영업 범위가 요일 조건 붙은 것 중 하나, 없으면 조건 없는 것 중 하나일 때만 판단한다 (시설별 시간처럼 둘 이상이면 None).
+    - 계절에 월 범위가 없거나 조건 없는 범위가 따로 섞이면 None. ※ 뒤 참고 문구에 시각 범위가 있어도 None.
+    - ※ 의 '주말은 준비시간 없이' 는 주말에 쉬는 구간을 뺀다. 그 밖에 쉬는 구간을 말하는 ※ 문구가 있으면 쉬는 구간만 무시한다."""
     if "입실" in open_hours or "퇴실" in open_hours:
         return None
-    ranges = re.findall(r"(\d{1,2}):(\d{2})\s*[~\-]\s*(\d{1,2}):(\d{2})", open_hours)
-    if len(ranges) != 1:
+    text, _, note = open_hours.partition("※")
+    if _TIME_RANGE.search(note):
         return None
-    h1, m1, h2, m2 = map(int, ranges[0])
-    start, end = h1 * 60 + m1, h2 * 60 + m2
+    wd, month = day.weekday(), day.month
+    season: set[int] | None = None
+    days: frozenset[int] | None = None
+    pending_break: str | None = None
+    entries: list[tuple[set[int] | None, frozenset[int] | None, str | None, int, int]] = []
+    for m in _HOURS_TOKEN.finditer(text):
+        if m["season"]:
+            if not m["m1"]:
+                return None  # 하절기·동절기의 달을 모른다
+            a, b = int(m["m1"]), int(m["m2"])
+            if not (1 <= a <= 12 and 1 <= b <= 12):
+                return None
+            season = {(a - 1 + k) % 12 + 1 for k in range((b - a) % 12 + 1)}
+            days, pending_break = None, None
+        elif m["h1"]:
+            s, e = int(m["h1"]) * 60 + int(m["n1"]), int(m["h2"]) * 60 + int(m["n2"])
+            entries.append((season, days, pending_break, s, e))
+            pending_break = None
+        elif m["d1"]:
+            i, j = WEEKDAYS.index(m["d1"]), WEEKDAYS.index(m["d2"])
+            days, pending_break = frozenset((i + k) % 7 for k in range((j - i) % 7 + 1)), None
+        elif m["d"]:
+            days, pending_break = frozenset({WEEKDAYS.index(m["d"])}), None
+        elif m["dw"]:
+            days, pending_break = frozenset(range(5) if m["dw"] == "평일" else (5, 6)), None
+        else:
+            pending_break = _BREAK_NAMES[m["brk"]]
+    opens = [e for e in entries if e[2] is None]
+    if not opens:
+        return None
+    if any(e[0] is None for e in opens) and any(e[0] is not None for e in opens):
+        return None  # 계절 구분과 아닌 것이 섞임
+    today = [e for e in entries if e[0] is None or month in e[0]]
+    ctx = [e for e in today if e[1] is not None and wd in e[1]] or [e for e in today if e[1] is None]
+    ctx_opens = [e for e in ctx if e[2] is None]
+    if len(ctx_opens) != 1:
+        return None
+    _, ctx_days, _, start, end = ctx_opens[0]
     if end <= start:  # 자정 넘어 영업
         end += 24 * 60
-    return start, end
+    breaks = [(s, e, name) for _, d, name, s, e in ctx if name is not None and d == ctx_days and start < s < e < end]
+    if _BREAK_WORD.search(note):
+        weekend_free = re.search(r"주말\S*\s*(준비\s*시간|브레이크\s*타임|휴게\s*시간)\s*없", note)
+        if not weekend_free or wd >= 5:
+            breaks = []
+    return OpenHours(start, end, tuple(sorted(breaks)))
 
 
 def _name(place: PlaceInfo | None, place_id: str) -> str:
@@ -194,16 +262,23 @@ def build_schedule(
                     start = max(arrive, fixed)
                 end = start + it.stay_minutes
 
-            hours = open_range(place.open_hours) if place is not None else None
-            if now_day is not None and hours and start < hours[0]:
-                # 실제 진행 기준: 문을 열기 전에 도착하면 열 때까지 기다린다 (고정 시각과 같은 방식).
-                # 일찍 온 것을 '운영시간 밖' 새 위반(-> 지연 선제 턴)으로 보지 않는다 (audit-2026-10-12 B3). 계획 기준은 그대로 위반
-                start = hours[0]
-                if phase != "here":
-                    end = start + it.stay_minutes
+            hours = open_hours_for(place.open_hours, date) if place is not None else None
+            waited = None  # 진행 중 기준으로 기다려서 시작하는 시각 (운영 시작·쉬는 구간 끝)
+            if now_day is not None and hours:
+                # 실제 진행 기준: 문을 열기 전에 도착하면 열 때까지, 쉬는 구간(준비시간 등) 중에 도착하면 끝날 때까지 기다린다
+                # (고정 시각과 같은 방식). 일찍 온 것을 '운영시간 밖' 새 위반(-> 지연 선제 턴)으로 보지 않는다
+                # (audit-2026-10-12 B3). 계획 기준은 그대로 위반
+                waited = hours.open if start < hours.open else None
+                for bs, be, _ in hours.breaks:
+                    if bs <= (start if waited is None else waited) < be:
+                        waited = be
+                if waited is not None:
+                    start = waited
+                    if phase != "here":
+                        end = start + it.stay_minutes
             if phase == "here":
-                # 기다려야 하는 시각(고정 시각·운영 시작). 그만큼은 예정 종료가 늦어도 온전히 머문다
-                floor = max((t for t in (fixed, hours[0] if hours else None) if t is not None), default=None)
+                # 기다려야 하는 시각(고정 시각·운영 시작·쉬는 구간 끝). 그만큼은 예정 종료가 늦어도 온전히 머문다
+                floor = max((t for t in (fixed, hours.open if hours else None, waited) if t is not None), default=None)
                 end = visiting_end(start, it.stay_minutes, now_day.now, planned_end.get(it.id), floor)
 
             if place is not None:
@@ -211,10 +286,14 @@ def build_schedule(
                     violations.append(Violation(
                         code="closed_day", severity="warning", day=d, item_id=it.id,
                         message=f"'{name}' 는 {WEEKDAYS[date.weekday()]}요일 휴무일 수 있습니다 (휴무: {place.rest_date.strip()})."))
-                if hours and (start < hours[0] or end > hours[1]):
+                if hours and (start < hours.open or end > hours.close):
                     violations.append(Violation(
                         code="outside_open_hours", severity="warning", day=d, item_id=it.id,
-                        message=f"'{name}' 방문 {fmt(start)}~{fmt(end)} 이 운영시간({fmt(hours[0])}~{fmt(hours[1])}) 밖입니다."))
+                        message=f"'{name}' 방문 {fmt(start)}~{fmt(end)} 이 운영시간({fmt(hours.open)}~{fmt(hours.close)}) 밖입니다."))
+                elif hours and (brk := next((b for b in hours.breaks if start < b[1] and end > b[0]), None)):
+                    violations.append(Violation(
+                        code="outside_open_hours", severity="warning", day=d, item_id=it.id,
+                        message=f"'{name}' 방문 {fmt(start)}~{fmt(end)} 이 {brk[2]}({fmt(brk[0])}~{fmt(brk[1])})과 겹칩니다."))
 
             views.append(_view(it, place, leg, arrive, start, end, mode, options))
             cursor = last_end = end

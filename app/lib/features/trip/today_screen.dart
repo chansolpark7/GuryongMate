@@ -747,7 +747,8 @@ class _GuideCard extends StatelessWidget {
 
 int _nowMin(DateTime now) => now.hour * 60 + now.minute;
 
-/// 운영시간 원문에 시간 범위가 정확히 하나일 때 여는 시각(분). 그 외는 판단하지 않는다 (planner validation.open_range 와 같은 규칙).
+/// 운영시간 원문에 시간 범위가 정확히 하나일 때 여는 시각(분). 그 외는 판단하지 않는다
+/// (planner validation.open_hours_for 보다 좁다: 요일·계절·쉬는 구간이 있는 원문은 보지 않는다).
 int? _opensAt(String? openHours) {
   if (openHours == null || openHours.contains('입실') || openHours.contains('퇴실')) return null;
   final m = RegExp(r'(\d{1,2}):(\d{2})\s*[~\-]\s*(\d{1,2}):(\d{2})').allMatches(openHours).toList();
