@@ -45,6 +45,7 @@ LLM은 일정을 직접 바꾸지 않는다. 결과는 두 종류의 **카드**�
 | GET | `/agent/limits` | | 200 내 LLM 호출 수와 한도: `{"chat"|"event"|"guide": {"hour"|"day": {"used", "limit"}}}` (`limit` null = 제한 없음, 이때는 세지 않아 `used` 0) |
 | POST | `/agent/plans/{plan_id}/guide/prepare` | `GuidePrepareRequest` (생략 가능) | 202 `GuideJobView` — 가이드 준비 작업 (§12) |
 | GET | `/agent/plans/{plan_id}/guide/jobs/{job_id}` | | 200 `GuideJobView` (§12) |
+| DELETE | `/agent/plans/{plan_id}` | | 204 — 이 사용자의 그 계획 세션·메시지 삭제, 진행 중인 가이드 준비 작업 멈춤. planner 가 계획을 지운 뒤 부른다 (planner 에 묻지 않음) |
 | DELETE | `/agent/me` | | 204 — 이 사용자의 세션·메시지를 모두 삭제 (account 탈퇴가 부른다) |
 
 ```jsonc
@@ -662,8 +663,9 @@ trip 이 단계 3 이벤트(`delay`, `safety_raised`)에서 부른다. 앱은 �
 - 대상: 일정의 장소(날짜·순서대로, 같은 장소는 한 번, 건너뛴 항목 제외). `place_ids` 면 그중 그 장소만. `force` 가 아니면 이미 `ready` 인 노트는 건너뛴다
   (`pending`·`preparing`·`failed`·`stale`·없음은 다시 만든다 — 앱의 [다시 시도]·[다시 준비]도 같은 호출).
   지금 돌고 있는 작업이 아직 끝내지 않은 장소와 이어서 할 장소(`queued`)는 대상에서 뺀다 (`force` 여도).
-- `auto: true` (trip 의 여행 시작·도착): 노트가 `ready`·`pending`·`preparing`·`failed` 면 건너뛰고(없음·`stale` 만), 일정에 없는 `place_ids` 는 422 대신 무시한다.
-  `AGENT_GUIDE_AUTO=false` 면 아무것도 하지 않는다 (`total: 0`).
+- `auto: true` (trip 의 여행 시작·도착, 승인·추가 뒤): 노트가 `ready`·`failed` 면 건너뛰고(없음·`stale`, 그리고 지금 준비하는 작업이 없는 `pending`·`preparing` 만),
+  일정에 없는 `place_ids` 는 422 대신 무시한다. **다녀온(`done`) 항목**과, 오늘(agent 의 '지금', 가상 시각)이 계획 기간 안이면 **지난 날의 장소**도 뺀다 (2026-10-12).
+  `pending`·`preparing` 은 예전에는 늘 건너뛰어, agent 가 다시 시작되면(작업 상태는 메모리에만) 영구히 남았다. `AGENT_GUIDE_AUTO=false` 면 아무것도 하지 않는다 (`total: 0`).
 - **계획당 작업 하나**: 진행 중인 작업이 있으면 새로 만들지 않고 그 작업을 돌려준다(202). 그 작업에 없는 대상은 `pending` 으로 표시하고 `queued` 에 두었다가
   **작업이 끝나면 그 장소들로 새 작업을 이어서** 돌린다 (작업 id 가 바뀐다. 노트 상태는 docent 에서 계속 볼 수 있다). 준비할 곳이 없으면 바로 `status: "done"`, `total: 0`.
 - **자동 시작** (`docs/docent/README.md` §3.2): 제안 승인·추천 후보 [추가]가 성공하면 응답 뒤(기다리지 않음) 같은 함수(`router._prepare`, `auto`)로 일정 전체를 준비한다.
@@ -687,7 +689,9 @@ trip 이 단계 3 이벤트(`delay`, `safety_raised`)에서 부른다. 앱은 �
 ```
 
 장소마다 (코드: `backend/app/agent/guide.py`):
-1. 작업 시작 때 docent 메모리 요약·`memory_version` 을 한 번 받는다. 장소마다 노트를 `preparing` 으로 저장하고, 장소 상세(places)와
+1. **장소마다** docent 메모리 요약·`memory_version` 을 다시 받는다 (2026-10-12. 예전에는 작업 시작 때 한 번 — 준비 도중 «더 짧게» 가 와도 남은 장소가 옛 메모리로 `ready` 가 됐다.
+   받지 못하면 앞 장소에서 받은 것). 그 장소를 쓰는 사이에 관심사·스타일·동행 메모리가 바뀌면 docent 가 `ready` 대신 `stale` 로 저장한다 (`docs/docent/README.md` §3.2).
+   노트를 `preparing` 으로 저장하고, 장소 상세(places)와
    `search_passages`(`"{장소명} 역사 이야기 볼거리"`, 그 장소, `AGENT_GUIDE_PASSAGES`개)를 **미리** 찾아 프롬프트에 넣는다 (LLM 호출을 줄인다).
 2. LLM 은 `search_passages` 와 웹 검색(장소당 `AGENT_WEB_SEARCH_PER_PLACE`, 내장 검색이 없으면 docent `web_search`·`read_page` 함수 도구)을 쓸 수 있다.
    `AGENT_GUIDE_MAX_STEPS` 번째 호출은 도구 없이 노트 JSON 을 강제한다. JSON 이 아니면 한 번만 다시 요청한다.
@@ -698,5 +702,6 @@ trip 이 단계 3 이벤트(`delay`, `safety_raised`)에서 부른다. 앱은 �
    `한국관광공사 오디오 가이드 · {이야기}` 에 주소 `https://api.visitkorea.or.kr/`(TourAPI, places 가 받은 원천). 등급(tier)은 docent 가 URL 로 정한다.
 5. 출처가 하나도 없거나, `short`·`long` 이 비었거나, JSON 을 받지 못하면 `failed`(`error` 에 이유, LLM 오류는 원문 대신 고정 문구와 코드 `(llm_unavailable)`). **LLM 오류·서비스 오류도 그 장소만 `failed`**
    로 두고 다음 장소로 넘어간다 (같은 장소를 다시 시도하지 않는다).
-- 작업 기록은 agent 프로세스 메모리에만 있다 (서버가 다시 시작되면 사라진다. 노트 status 는 docent 에 남고, `preparing` 으로 남은 노트는 다음 준비 때 다시 만든다).
+- 작업 기록은 agent 프로세스 메모리에만 있다 (서버가 다시 시작되면 사라진다. 노트 status 는 docent 에 남고, `pending`·`preparing` 으로 남은 노트는 다음 준비 때 — 자동 준비 포함 — 다시 만든다).
+- 계획을 지우면 planner 가 `DELETE /agent/plans/{plan_id}` 를 불러 진행 중인 작업을 멈추고 이어서 할 장소를 버린다 (그 계획의 대화도 지운다, §2).
 - 로그: 장소마다 `guide plan=… place=… status=… sec=… web=… sources=… usage=…`, 작업 끝에 합계.

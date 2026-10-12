@@ -127,7 +127,8 @@ class GuidePrepareRequest(Strict):
 
     place_ids: list[str] | None = Field(None, max_length=50, description="이 장소만 (일정에 있어야 한다)")
     force: bool = Field(False, description="true 면 ready 노트도 다시 만든다")
-    auto: bool = Field(False, description="자동 준비 (trip 이 부른다): 노트가 ready·pending·preparing·failed 인 장소는 건너뛰고, "
+    auto: bool = Field(False, description="자동 준비 (trip 이 부른다): 노트가 ready·failed 이거나 지금 준비 중인 장소, "
+                                          "다녀온(done) 항목, 여행 기간 중이면 지난 날의 장소는 건너뛰고, "
                                           "일정에 없는 place_ids 는 무시한다. AGENT_GUIDE_AUTO=false 면 아무것도 하지 않는다")
 
 

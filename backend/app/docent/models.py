@@ -52,6 +52,29 @@ class DocentGuideNote(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class DocentStaleMark(Base):
+    """노트를 다시 만들어야 하는 메모리 변경(interest·style·companion)이 마지막으로 있었던 memory_version (§3.2).
+    scope=user 변경은 plan_id 0, scope=plan 변경은 그 계획. 준비 중에 메모리가 바뀌면, 바뀌기 전 메모리(memory_version)로
+    만든 노트가 ready 로 들어올 때 stale 로 저장하려고 비교한다."""
+
+    __tablename__ = "docent_stale_mark"
+
+    user_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    plan_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=False)  # 0 = user 범위
+    version: Mapped[int] = mapped_column(Integer)
+
+
+class DocentUsage(Base):
+    """사용자별 외부 검색·페이지 읽기 기록 (호출 수 제한용, app/docent/limits.py). 이틀 넘게 지난 기록은 지운다."""
+
+    __tablename__ = "docent_usage"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(64), index=True)
+    kind: Mapped[str] = mapped_column(String(8))  # search | page
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+
+
 class DocentSearchCache(Base):
     """외부 검색·페이지 읽기 결과 캐시 (사용자와 무관, 같은 질의·URL 은 하루)."""
 

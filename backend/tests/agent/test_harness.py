@@ -13,9 +13,9 @@ from sqlalchemy import delete, select
 from app.agent import router as agent_router
 from app.agent.api import get_http
 from app.agent.llm import Finish, TextDelta, ToolCall, get_llm
-from app.agent.models import AgentMessage, AgentSession
+from app.agent.models import AgentMessage, AgentSession, AgentUsage
 from app.db import SessionLocal, init_db
-from app.docent.models import DocentGuideNote, DocentMemory, DocentMemoryVersion
+from app.docent.models import DocentGuideNote, DocentMemory, DocentMemoryVersion, DocentStaleMark
 from app.docent.plans import get_http as docent_http
 from app.main import app
 from app.planner.models import PlannerPlan
@@ -77,8 +77,10 @@ def client():
     def cleanup():
         with SessionLocal.begin() as s:
             s.execute(delete(AgentSession).where(AgentSession.user_id.like("test-agent-%")))
+            # 호출 수 기록: 같은 이름의 테스트 사용자를 한 시간 안에 다시 돌리면 한도 테스트가 이전 기록에 걸린다
+            s.execute(delete(AgentUsage).where(AgentUsage.user_id.like("test-agent-%")))
             s.execute(delete(PlannerPlan).where(PlannerPlan.user_id.like("test-agent-%")))
-            for model in (DocentMemory, DocentMemoryVersion, DocentGuideNote):
+            for model in (DocentMemory, DocentMemoryVersion, DocentGuideNote, DocentStaleMark):
                 s.execute(delete(model).where(model.user_id.like("test-agent-%")))
 
     cleanup()

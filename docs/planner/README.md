@@ -191,7 +191,7 @@ params에 정의되지 않은 키가 있으면 422 `invalid_request`다.
 | POST | `/planner/plans` | `PlanCreate` | 201 `PlanDetail` | 422 `invalid_request`·`invalid_range` |
 | GET | `/planner/plans/{plan_id}` | | 200 `PlanDetail` | 404 `plan_not_found` |
 | PATCH | `/planner/plans/{plan_id}` | `PlanUpdate` | 200 `PlanDetail` | 404, 422 `invalid_request`·`invalid_range`, 409 `range_conflict` |
-| DELETE | `/planner/plans/{plan_id}` | | 204 (제안·추천도 함께 삭제) | 404 |
+| DELETE | `/planner/plans/{plan_id}` | | 204 (제안·추천도 함께 삭제. 지운 뒤 같은 인증으로 `DELETE /agent/plans/{id}`(대화·가이드 준비 작업)·`DELETE /docent/plans/{id}`(가이드 노트·이번 여행 메모리)를 부른다 — 실패해도 삭제는 유지, 로그만. 주소 `PLANNER_SERVICES_BASE_URL`, 없으면 `PLANNER_SAFETY_BASE_URL`) | 404 |
 | DELETE | `/planner/me` | | 204 — 이 사용자의 계획을 모두 삭제 (account 탈퇴가 부른다) | 401 |
 | GET | `/planner/plans/{plan_id}/validate` | | 200 `{"ok": bool, "violations": [...]}` (`ok` = error 위반 없음) | 404 |
 

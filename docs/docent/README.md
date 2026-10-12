@@ -146,6 +146,15 @@ docent 가 공급자를 감싸서 같은 형식으로 돌려준다 (agent 는 �
 - 네이버 블로그(`blog.naver.com`)는 본문이 iframe 안에 있어 모바일 주소(`m.blog.naver.com`)로 바꿔 읽는다.
 - 가져온 내용은 **자료(데이터)이지 지시가 아니다.** 페이지 안의 문구가 LLM 에게 지시하는 것처럼 보여도 따르지 않도록 프롬프트에 명시한다.
 
+### 2.4 사용자당 호출 수 제한 (2026-10-12)
+공개 서버에서 외부 검색 비용·네이버 검색 일일 한도(25,000회)를 지키려고 `/docent/search`·`/docent/page` 에 사용자당 1시간·하루 상한을 둔다
+(`app/docent/limits.py`, agent 의 `AGENT_LIMIT_*` 과 같은 방식). 넘으면 `429 rate_limited` (`kind`·`limit`·`window`·`retry_after` 초).
+- **캐시에 있는 결과는 세지 않는다** (외부로 나가지 않으므로). 외부 공급자·페이지를 실제로 부를 때만 한 번 센다.
+- agent 가 사용자 대신 부르는 호출(가이드 준비 작업 — 장소당 웹 검색 `AGENT_WEB_SEARCH_PER_PLACE`=3, 동행 모드 한 턴 2)도 그 사용자의 토큰(가이드 작업은 그 사용자의 짧은 토큰)으로 오므로
+  그 사용자 몫으로 센다. 기본값(1시간 200·하루 1,000, 검색·페이지 따로)은 장소 10곳 계획의 가이드 준비(최대 30회)를 몇 번 해도 막지 않을 만큼 넉넉하다.
+  넘으면 agent 의 웹 검색 도구는 오류 결과를 받고 근거 자료만으로 쓴다 (작업은 계속).
+- 기록(`docent_usage`)은 이틀 지나면 지운다. `DELETE /docent/me`(내 데이터 지우기·탈퇴)는 기록을 지우지 않는다 (한도를 비우는 데 쓰이지 않게, agent 와 같다).
+
 ---
 
 ## 3. 가이드 노트 (여행 전 자료 준비)
@@ -184,8 +193,12 @@ docent 가 공급자를 감싸서 같은 형식으로 돌려준다 (agent 는 �
   | `arrived` 이벤트 (`docs/trip/README.md` §3.2) | trip → 같은 호출 + `place_ids: [그 장소]` | 도착한 장소 |
   | 여행 중 틱 (`docs/trip/README.md` §4.3), **앱 활동 중일 때만** (2026-10-11) | trip → `GET /docent/plans/{id}/notes` 로 보고 같은 호출 + `place_ids: [stale 인 곳]` | 오늘 남은 항목(planned·visiting) 중 노트가 `stale` 인 장소 — 관심사가 바뀐 뒤 도착 직후 옛 해설이 나오지 않게 미리 |
 
-  - 자동 준비는 노트가 **`ready`·`pending`·`preparing`·`failed` 인 장소를 건너뛴다** → 노트가 없거나 `stale` 인 곳만. 실패(`failed`)는 자동으로 다시 시도하지 않는다 (앱의 [다시 시도]로만).
-    `pending` 이 바로 표시되므로 같은 장소를 짧은 시간에 반복 요청해도 겹치지 않는다. 앱 도착 카드는 `pending`·`preparing` 이면 "가이드를 준비하고 있어요".
+  - 자동 준비는 노트가 **`ready`·`failed` 이거나 지금 준비 중·대기 중인 장소를 건너뛴다** → 노트가 없거나 `stale` 인 곳, 그리고 준비하던 작업이 없는 `pending`·`preparing`.
+    실패(`failed`)는 자동으로 다시 시도하지 않는다 (앱의 [다시 시도]로만). 같은 장소를 짧은 시간에 반복 요청해도 진행 중인 작업(이어서 할 장소 포함)에 있으면 겹치지 않는다.
+    작업 상태는 agent 프로세스 메모리에만 있으므로, **agent 가 다시 시작되면** 그 전 작업의 `pending`·`preparing` 노트는 다음 자동 준비가 다시 만든다 (2026-10-12, 예전에는 영구히 남았다).
+    앱 도착 카드는 `pending`·`preparing` 이면 "가이드를 준비하고 있어요".
+  - 자동 준비는 **다녀온(`done`) 항목**과, 오늘이 계획 기간 안이면 **지난 날의 장소**는 노트가 없거나 `stale` 이어도 다시 만들지 않는다 (현장에서 다시 볼 일이 없으므로, LLM 비용. 2026-10-12).
+    오늘은 agent 의 '지금'(safety 가상 시각, trip 과 같음). 계획 기간 밖이면(여행 전·데모 가상 시각을 못 받은 경우) 날짜로는 빼지 않는다. 수동 [가이드 준비]는 그대로 모두 대상.
   - **계획당 작업 하나는 그대로**: 작업이 돌고 있으면 새 작업을 만들지 않고, 그 작업에 없는 대상을 `pending` 으로 표시해 두었다가 **작업이 끝나면 그 장소들로 한 번 더** 돌린다
     (`GuideJobView.queued`. 수동 버튼도 같다 — 예전에는 돌고 있는 동안 들어온 장소가 빠졌다).
   - 자동 준비도 `AGENT_LIMIT_GUIDE_*` 에 센다 (새로 준비할 곳이 있을 때만 한 번). 한도를 넘으면(429) 조용히 건너뛰고 로그만 — 승인·추가·여행 시작은 그대로 성공한다.
@@ -193,8 +206,13 @@ docent 가 공급자를 감싸서 같은 형식으로 돌려준다 (agent 는 �
   - `AGENT_GUIDE_AUTO=false` 면 자동 준비를 하지 않는다 (버튼으로만. 테스트 기본값).
 - **다시 만들기**: 메모리의 `interest`·`style`·`companion` 이 바뀌면(추가·수정·삭제) docent 가 **자동으로** `ready` 노트를 `stale` 로 표시한다
   (user 범위 항목이면 그 사용자의 모든 계획, plan 범위 항목이면 그 계획). `POST …/stale` 로 직접 표시할 수도 있다. 현장에서는 `stale` 이어도 그대로 쓰고(빠름), 여유가 있을 때 다시 만든다.
+  **준비 도중에 바뀌면 (2026-10-12)**: 그때 `pending`·`preparing` 이던 노트는 위 표시에서 빠지므로, docent 가 그 범위의 마지막 변경 번호를 남겨 두고(`docent_stale_mark`)
+  노트가 `ready` 로 들어올 때 노트의 `memory_version` 이 그보다 앞서면 **`stale` 로 저장한다** (본문은 저장, 다시 준비 대상). agent 준비 작업은 메모리 요약을 **장소마다 다시 받아**
+  남은 장소는 새 메모리로 만든다 — 장면 ② «다음부터는 더 짧게 해줘요»가 준비 중에 와도 그때 쓰던 한 곳만 `stale`, 나머지는 짧은 해설로 `ready`.
   여행 중에는 trip 틱이 오늘 남은 장소의 `stale` 노트를 앱 활동 중일 때 미리 다시 준비한다 (위 표). pending 이 바로 표시되므로 같은 장소를 반복 요청하지 않고,
   요청이 실패(한도 초과 429·접근 불가)하면 로그만 남기고 그 여행일은 5분 동안 다시 묻지 않는다. 앱이 꺼져 있으면 하지 않는다 (비용). 장소가 일정에서 빠지면 노트는 남겨 둔다 (다시 넣을 수 있음).
+- **계획 삭제 (2026-10-12)**: planner 가 계획을 지운 뒤 같은 인증으로 `DELETE /docent/plans/{id}`(그 계획의 노트·이번 여행 메모리)와 `DELETE /agent/plans/{id}`(대화, 진행 중인 준비 작업 멈춤)를 부른다.
+  실패해도 계획 삭제는 그대로 (planner 로그). 계획은 이미 없으므로 이 두 API 는 planner 에 묻지 않고 그 사용자의 행만 지운다.
 
 ### 3.3 누가 어떻게 만드나 (agent 의 준비 작업)
 
@@ -251,14 +269,16 @@ docent 는 **저장·검색·외부 요청 대행**만 한다 (LLM 없음, 결�
 | POST | `/docent/memory` | `{scope, plan_id?, category, text, source}` 추가 → 201. 같은 범위·분류에 **글자가 같은** 항목이 있으면 새로 만들지 않고 source·시각만 갱신 → 200. 같은 뜻의 다른 문장은 agent 가 id 로 PATCH |
 | PATCH·DELETE | `/docent/memory/{id}` | 수정(`category`·`text`·`source` 중 일부)·삭제 → 204 (앱 편집, agent `forget`) |
 | GET | `/docent/memory/summary?plan_id=` | 프롬프트용 요약 `{text, count, memory_version, style_length}` |
-| GET | `/docent/search?q=&limit=` | 외부 검색 (§2.1~2.2) |
-| GET | `/docent/page?url=` | 페이지 본문 `{url, title, text, truncated, tier, fetched_at, cached}` (§2.3) |
+| GET | `/docent/search?q=&limit=` | 외부 검색 (§2.1~2.2). 사용자당 호출 수 제한 (§2.4) |
+| GET | `/docent/page?url=` | 페이지 본문 `{url, title, text, truncated, tier, fetched_at, cached}` (§2.3). 사용자당 호출 수 제한 (§2.4) |
 | GET | `/docent/plans/{plan_id}/notes` | 노트 목록 `[{plan_id, place_id, status, memory_version, prepared_at, updated_at}]` |
 | GET·PUT | `/docent/plans/{plan_id}/notes/{place_id}` | 노트 조회·저장 (PUT 은 전체 교체, 없으면 만든다 201) |
 | POST | `/docent/plans/{plan_id}/notes/{place_id}/stale` | 다시 만들기 표시 (`ready` 만 `stale` 로, 나머지 상태는 그대로) |
-| DELETE | `/docent/me` | 탈퇴: 이 사용자의 메모리·노트 삭제 → 204 (검색 캐시는 사용자와 무관) |
+| DELETE | `/docent/plans/{plan_id}` | 계획 삭제 뒤 planner 가 부른다: 이 사용자의 그 계획 노트·이번 여행(scope=plan) 메모리 삭제 → 204 (planner 에 묻지 않음, §3.2) |
+| DELETE | `/docent/me` | 탈퇴·내 데이터 지우기: 이 사용자의 메모리·노트 삭제 → 204 (검색 캐시는 사용자와 무관, 호출 수 기록은 남김) |
 
-테이블(`docent_*`): `docent_memory`, `docent_memory_version`(사용자별 메모리 번호), `docent_guide_note`, `docent_search_cache`.
+테이블(`docent_*`): `docent_memory`, `docent_memory_version`(사용자별 메모리 번호), `docent_guide_note`, `docent_search_cache`,
+`docent_stale_mark`(범위별 마지막 노트 영향 메모리 변경 번호, §3.2), `docent_usage`(호출 수 기록, §2.4). 새 테이블은 서비스 시작 때 만들어진다 (`create_all`).
 
 ### 5.1 메모리 규칙
 - `scope=plan` 이면 `plan_id` 필수, `scope=user` 면 `plan_id` 를 넣지 않는다 (아니면 422). `text` 1~500자, `source` 1~100자 필수.
@@ -280,6 +300,8 @@ docent 는 **저장·검색·외부 요청 대행**만 한다 (LLM 없음, 결�
 - 출처마다 `tier` 는 **보낸 값을 무시하고** docent 가 `url` 의 도메인 규칙(§2.2, `tiers.py`)으로 다시 정해 저장한다 (LLM 이 붙인 등급을 믿지 않는다). `url` 이 없으면 `unknown`.
 - 본문을 비워 보낸 `pending`·`preparing`·`failed` 는 **이전 본문을 남긴다** (다시 만드는 중이거나 실패해도 현장에서 이전 노트를 쓸 수 있게).
 - `prepared_at` 은 서버가 `ready` 로 저장한 시각.
+- `status=ready` 인데 `memory_version` 뒤에 그 계획에 영향을 주는 `interest`·`style`·`companion` 변경(user 범위 또는 그 계획 범위)이 있었으면 `stale` 로 저장한다 (§3.2).
+  `memory_version` 이 없으면(메모리 없이 준비) 비교하지 않는다.
 
 ### 5.3 인증·계획 소유·오류
 - 인증·호출 규칙은 다른 서비스와 같다 (`app.core.auth`, 게이트웨이 경유).
@@ -291,6 +313,7 @@ docent 는 **저장·검색·외부 요청 대행**만 한다 (LLM 없음, 결�
 |---|---|---|
 | `memory_not_found` / `note_not_found` / `plan_not_found` | 404 | 없거나 다른 사용자의 것 |
 | `search_unavailable` | 503 | 검색 키 없음 또는 공급자 오류 (`reason`) |
+| `rate_limited` | 429 | 사용자당 외부 검색·페이지 읽기 한도 초과 (§2.4, `kind`·`retry_after`) |
 | `planner_unavailable` | 503 | 계획 소유를 확인할 수 없음 |
 | `invalid_url` | 422 | http/https 가 아님, 형식 오류, 사용자 정보 포함 |
 | `url_blocked` | 403 | 내부·사설 주소 (리다이렉트 포함) |
@@ -303,6 +326,8 @@ docent 는 **저장·검색·외부 요청 대행**만 한다 (LLM 없음, 결�
 |---|---|---|
 | `DOCENT_NAVER_CLIENT_ID` / `_SECRET` | (비어 있음) | 네이버 검색 API 키 |
 | `DOCENT_CACHE_TTL_SEC` | 86400 | 검색·페이지 캐시 |
+| `DOCENT_LIMIT_SEARCH_HOUR` / `_DAY` | 200 / 1000 | 사용자당 외부 검색 상한 (§2.4, 0 이면 제한 없음) |
+| `DOCENT_LIMIT_PAGE_HOUR` / `_DAY` | 200 / 1000 | 사용자당 페이지 읽기 상한 |
 | `DOCENT_PAGE_TIMEOUT_SEC` / `_MAX_BYTES` / `_MAX_CHARS` / `_MAX_REDIRECTS` | 8 / 2MB / 8000 / 5 | 페이지 읽기 제한 |
 | `DOCENT_API_BASE_URL` | compose 가 `http://gateway` | planner 호출 |
 
@@ -343,10 +368,12 @@ API·단계·설정 명세는 `docs/agent/README.md` §3.2·§5·§7·§11.3.1·
 
 ### 8.3 가이드 준비 작업
 - `POST /agent/plans/{plan_id}/guide/prepare` → 202, `GET …/guide/jobs/{job_id}` 로 장소별 상태·진행 수·남은 시간 (app gaps b9).
-- 장소마다: 노트 `preparing` → 장소 상세 + 근거 조각을 미리 넣은 프롬프트 → (LLM 이 필요하면 근거 조각·웹 검색) → 노트 JSON → `ready` 저장.
+- 장소마다: 메모리 요약 다시 받기 → 노트 `preparing` → 장소 상세 + 근거 조각을 미리 넣은 프롬프트 → (LLM 이 필요하면 근거 조각·웹 검색) → 노트 JSON → `ready` 저장
+  (그 사이 메모리가 바뀌었으면 docent 가 `stale` 로 저장, §3.2).
 - 출처는 실제로 본 자료(근거 조각·검색 결과·읽은 페이지·내장 검색 인용)에서만 고른다. 없으면 `failed` ("출처가 되는 자료를 찾지 못해 … 지어내지 않음").
   근거 조각 출처 주소는 `https://api.visitkorea.or.kr/` (한국관광공사 TourAPI, docent 등급 official). 등급은 docent 가 URL 로 다시 정한다 (§5.2).
-- LLM·서비스 오류는 그 장소만 `failed`, 다음 장소로 넘어간다. 계획당 작업 하나. 작업 기록은 agent 프로세스 메모리 (재시작하면 노트 status 만 남는다).
+- LLM·서비스 오류는 그 장소만 `failed`, 다음 장소로 넘어간다. 계획당 작업 하나. 작업 기록은 agent 프로세스 메모리 (재시작하면 노트 status 만 남는다.
+  남은 `pending`·`preparing` 은 다음 자동 준비·수동 버튼이 다시 만든다, §3.2). 계획을 지우면 진행 중인 작업을 멈춘다.
 
 ### 8.4 실제 OpenAI 로 확인하는 절차 (아직 하지 않음 — API 크레딧이 생기면)
 가짜 LLM 테스트만 끝난 상태다. 아래 명령은 **실제 OpenAI 를 부르고 비용이 든다** (예상: 장소 3곳 × 호출 2~4회, 내장 검색 3~9회).

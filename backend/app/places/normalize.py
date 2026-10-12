@@ -20,9 +20,11 @@ _INTRO_FIELDS = {
     "open_hours": ["usetime", "usetimeculture", "usetimeleports", "opentime", "opentimefood", "playtime"],
     "rest_date": ["restdate", "restdateculture", "restdateleports", "restdateshopping", "restdatefood"],
     "parking": ["parking", "parkingculture", "parkingleports", "parkingshopping", "parkingfood", "parkinglodging"],
-    "fee": ["usefee", "usefeeleports", "usetimefestival", "parkingfee"],
+    "fee": ["usefee", "usefeeleports", "usetimefestival"],
     "menu": ["firstmenu", "treatmenu"],
 }
+# 주차요금(parkingfee)은 이용요금(fee)이 아니라 주차(parking) 정보 끝에 "주차요금: …" 으로 붙인다
+_PARKING_FEE_FIELD = "parkingfee"
 
 _TAG_RE = re.compile(r"<[^>]+>")
 _BR_RE = re.compile(r"<br\s*/?>", re.I)
@@ -73,6 +75,8 @@ def pick_intro(intro: dict[str, Any]) -> dict[str, str]:
     for key, fields in _INTRO_FIELDS.items():
         values = [clean_text(intro.get(f)) for f in fields]
         result[key] = "\n".join(dict.fromkeys(v for v in values if v))  # 중복 제거, 순서 유지
+    if parking_fee := clean_text(intro.get(_PARKING_FEE_FIELD)):
+        result["parking"] = "\n".join(v for v in (result["parking"], f"주차요금: {parking_fee}") if v)
     return result
 
 

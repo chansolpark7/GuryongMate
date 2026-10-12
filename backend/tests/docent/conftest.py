@@ -8,7 +8,8 @@ from fastapi.testclient import TestClient
 from sqlalchemy import delete
 
 from app.db import SessionLocal, init_db
-from app.docent.models import DocentGuideNote, DocentMemory, DocentMemoryVersion, DocentSearchCache
+from app.docent.models import (DocentGuideNote, DocentMemory, DocentMemoryVersion, DocentSearchCache, DocentStaleMark,
+                               DocentUsage)
 from app.docent.plans import get_http
 from app.main import app
 from app.planner.models import PlannerPlan
@@ -21,7 +22,7 @@ H2 = {"X-User-Id": OTHER}
 
 def _cleanup():
     with SessionLocal.begin() as s:
-        for model in (DocentMemory, DocentMemoryVersion, DocentGuideNote):
+        for model in (DocentMemory, DocentMemoryVersion, DocentGuideNote, DocentStaleMark, DocentUsage):
             s.execute(delete(model).where(model.user_id.like("test-docent-%")))
         s.execute(delete(DocentSearchCache))  # 캐시는 사용자와 무관하고 버려도 되는 데이터
         s.execute(delete(PlannerPlan).where(PlannerPlan.user_id.like("test-docent-%")))

@@ -14,6 +14,13 @@ class DocentSettings(BaseSettings):
     naver_base_url: str = "https://openapi.naver.com"
     search_timeout_sec: float = 8
 
+    # 사용자당 외부 호출 수 제한 (§2.4, app/docent/limits.py). 캐시에 있는 결과는 세지 않는다. 0 이면 제한 없음.
+    # agent 가 사용자 대신 부르는 양(가이드 준비: 장소당 웹 검색 AGENT_WEB_SEARCH_PER_PLACE=3, 대화 한 턴 2)을 막지 않게 넉넉히
+    limit_search_hour: int = 200
+    limit_search_day: int = 1000
+    limit_page_hour: int = 200
+    limit_page_day: int = 1000
+
     # 검색·페이지 결과 캐시 (같은 질의·URL 은 하루)
     cache_ttl_sec: float = 86400
 

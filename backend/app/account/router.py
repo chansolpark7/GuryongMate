@@ -163,16 +163,19 @@ def change_password(body: PasswordChange, db: DbSession, user_id: TokenUser) -> 
 
 
 class DataCleaner:
-    """탈퇴 시 다른 서비스(planner, agent)의 이 사용자 데이터를 지운다. 같은 access 토큰으로 DELETE /<서비스>/me."""
+    """탈퇴 시 다른 서비스의 이 사용자 데이터를 지운다. 같은 access 토큰으로 DELETE /<서비스>/me.
+    planner 계획·일정·제안 / trip 여행 상태·이벤트 / docent 메모리·가이드 노트 / agent 대화 세션
+    (관제 콘솔 계정 초기화 infra/gateway/console/reset.js 의 WIPE 와 같은 순서)."""
 
-    SERVICES = ("planner", "agent")
+    SERVICES = ("planner", "trip", "docent", "agent")
 
-    def __init__(self, base_url: str):
+    def __init__(self, base_url: str, transport: httpx.BaseTransport | None = None):
         self._base = base_url
+        self._transport = transport  # 테스트용
 
     def delete_all(self, authorization: str) -> None:
         try:
-            with httpx.Client(base_url=self._base, timeout=15) as http:
+            with httpx.Client(base_url=self._base, timeout=15, transport=self._transport) as http:
                 for name in self.SERVICES:
                     r = http.delete(f"/{name}/me", headers={"Authorization": authorization})
                     if r.status_code != 204:
