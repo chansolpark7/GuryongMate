@@ -123,3 +123,25 @@ def test_name_match_ignores_spaces():
         assert body["items"][0]["name_match"] is True and "hint" not in body
     finally:
         PLACES.pop()
+
+
+def test_every_tool_spec_has_handler():
+    """LLM 에게 보이는 도구마다 실행 함수(_t_<이름>)가 있다 (2026-10-13 get_place 선언 줄이 지워져 '알 수 없는 도구')."""
+    from app.agent import tools
+    specs = [s for v in vars(tools).values() if isinstance(v, list) for s in v
+             if isinstance(s, dict) and s.get("type") == "function"]
+    specs += [v for v in vars(tools).values() if isinstance(v, dict) and v.get("type") == "function"]
+    names = {s["function"]["name"] for s in specs}
+    assert "get_place" in names
+    assert [n for n in sorted(names) if not hasattr(Toolbox, f"_t_{n}")] == []
+
+
+def test_get_place_returns_detail():
+    class Api(FakeApi):
+        async def get_place(self, place_id):
+            return {"id": place_id, "title": "유림식당", "content_type": "음식점", "area": "구룡포읍",
+                    "open_hours": "11:30~18:00 (준비시간 14:30~16:00) ", "overview": "모리국수"}
+    box = Toolbox(Api(), plan_id=1, draft=Draft(), session_id="s")
+    out = asyncio.run(box.call("get_place", json.dumps({"place_id": "kto-2839194"})))
+    body = json.loads(out.content)
+    assert out.ok and body["title"] == "유림식당" and body["open_hours"] == "11:30~18:00 (준비시간 14:30~16:00)"
