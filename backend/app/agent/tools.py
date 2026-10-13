@@ -567,6 +567,8 @@ class Toolbox:
         far = float("inf")
         items = sorted(items, key=lambda p: far if p.get("distance_m") is None else p["distance_m"])
         return {"items": items, "near_fallback": fallback}
+
+    async def _t_get_place(self, place_id: str) -> ToolOutcome:
         p = await self.api.get_place(place_id)
         keys = ["title", "content_type", "area", "addr", "open_hours", "rest_date", "fee", "menu"]
         out = {"place_id": p["id"], **{k: p[k].strip() if isinstance(p[k], str) else p[k] for k in keys if p.get(k)}}
